@@ -425,6 +425,7 @@ class MyGame(arcade.Window):
 
     def on_mouse_release(self, x, y, button, modifiers):
         """ Called whenever the mouse button is released. """
+        # hi
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.is_shooting = False
 

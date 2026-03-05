@@ -302,6 +302,8 @@ class MyGame(arcade.Window):
             self.player_y = SCREEN_HEIGHT - 1
 
         # --- Enemy Logic (Movement & Shooting) ---
+
+        # hi
         for enemy in self.enemy_list:
             # Decrease enemy health display timer
             if enemy.show_health_timer > 0:

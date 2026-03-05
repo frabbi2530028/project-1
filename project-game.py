@@ -3,23 +3,25 @@ import random
 import math
 
 # --- Constants ---
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 600
-SCREEN_TITLE = "Hero Aircraft Shooter"
+SCREEN_WIDTH = 900
+SCREEN_HEIGHT = 800
+SCREEN_TITLE = "Hero Aircraft Shooter with Boss"
 
 # Constants used to scale our sprites from their original size
 ENEMY_SCALING = 0.5
-BULLET_SCALING = 0.3  # Reduced size to make it look like a small missile/bolt
+BOSS_SCALING = 1.0  # Boss is twice as big as regular enemies
+BULLET_SCALING = 0.3
 ENEMY_BULLET_SCALING = 0.4
 
 # Aircraft movement speed
 PLAYER_MOVEMENT_SPEED = 5
 ENEMY_SPEED = 2
+BOSS_SPEED = 2  # Boss moves slower
 BULLET_SPEED = 10
-ENEMY_BULLET_SPEED = 6
+ENEMY_BULLET_SPEED = 4
 
 # Firing rate (seconds between shots)
-SHOOT_INTERVAL = 0.15
+SHOOT_INTERVAL = 0.05
 
 # How long the health bar is displayed after taking damage (in seconds)
 HEALTH_BAR_DISPLAY_TIME = 1.5
@@ -85,6 +87,43 @@ class ShootingEnemy(Enemy):
         self.health = 5
         self.time_since_last_shot = 0.0
         self.shoot_interval = random.uniform(0.5, 2.0)
+
+
+class BossEnemy(Enemy):
+    """ Boss Enemy class with special attacks """
+
+    def __init__(self, image, scale):
+        super().__init__(image, scale)
+        self.max_health = 30  # Very high health
+        self.health = 30
+
+        # Timers for the two different attack types
+        self.time_since_last_normal_shot = 0.0
+        self.time_since_last_special_shot = 0.0
+
+        # Boss attacks slower but hits much harder
+        self.normal_shoot_interval = 2.0  # 50% damage attack interval
+        self.special_shoot_interval = 5.0  # One-shot attack interval
+
+    def draw_health_bar(self):
+        """ Override health bar to make it bigger for the boss """
+        if self.show_health_timer <= 0:
+            return
+
+        bar_width = 80  # Wider health bar for the boss
+        bar_height = 8
+
+        # Draw the red background
+        draw_custom_rect(self.center_x, self.top + 15, bar_width, bar_height, arcade.color.DARK_RED)
+
+        # Calculate the green foreground width based on health
+        health_ratio = max(self.health / self.max_health, 0)
+        green_width = bar_width * health_ratio
+
+        if green_width > 0:
+            # Shift the green bar so it aligns to the left side
+            green_x = self.center_x - (bar_width / 2) + (green_width / 2)
+            draw_custom_rect(green_x, self.top + 15, green_width, bar_height, arcade.color.GREEN)
 
 
 class MyGame(arcade.Window):
@@ -161,7 +200,7 @@ class MyGame(arcade.Window):
             self.spawn_enemy()
 
     def spawn_enemy(self):
-        """ Create a new enemy aircraft and add it to the game. """
+        """ Create a new regular enemy aircraft and add it to the game. """
         # 30% chance to spawn the new shooting enemy
         if random.random() < 0.3:
             enemy = ShootingEnemy(":resources:images/space_shooter/playerShip1_green.png", ENEMY_SCALING)
@@ -181,27 +220,65 @@ class MyGame(arcade.Window):
             enemy.center_x = random.randrange(SCREEN_WIDTH + 20, SCREEN_WIDTH + 150)
             enemy.center_y = random.randrange(50, SCREEN_HEIGHT - 50)
 
-        self.enemy_list.append(enemy)
-
-    def enemy_shoot(self, enemy):
-        """ Handles shooting logic for the new ShootingEnemy """
-        bullet = arcade.Sprite(":resources:images/space_shooter/laserRed01.png", ENEMY_BULLET_SCALING)
-        bullet.center_x = enemy.center_x
-        bullet.center_y = enemy.center_y
-
-        # Shoot directly at the player
+        # Fix: Immediately set the initial angle so they enter facing the player perfectly
         dy = self.player_y - enemy.center_y
         dx = self.player_x - enemy.center_x
         angle = math.atan2(dy, dx)
+        enemy.angle = math.degrees(angle) - 90
 
-        bullet.change_x = math.cos(angle) * ENEMY_BULLET_SPEED
-        bullet.change_y = math.sin(angle) * ENEMY_BULLET_SPEED
+        self.enemy_list.append(enemy)
+
+    def spawn_boss(self):
+        """ Spawns the Boss Enemy """
+        # Fixed: Changed from 'playerShip2_red.png' to 'playerShip2_orange.png'
+        boss = BossEnemy(":resources:images/space_shooter/playerShip2_orange.png", BOSS_SCALING)
+        boss.center_x = SCREEN_WIDTH / 2
+        boss.center_y = SCREEN_HEIGHT + 100
+
+        # Fix: Immediately set the initial angle to face the player perfectly
+        dy = self.player_y - boss.center_y
+        dx = self.player_x - boss.center_x
+        angle = math.atan2(dy, dx)
+        boss.angle = math.degrees(angle) - 90
+
+        self.enemy_list.append(boss)
+        print("WARNING: Boss Approaching!")
+
+    def fire_enemy_bullet(self, start_x, start_y, target_x, target_y, speed, image, scale, damage):
+        """ Helper function to create enemy and boss bullets with varying damage """
+        bullet = arcade.Sprite(image, scale)
+        bullet.center_x = start_x
+        bullet.center_y = start_y
+
+        # Attach custom damage attribute to this specific bullet
+        bullet.damage = damage
+
+        # Shoot directly at the target (player)
+        dy = target_y - start_y
+        dx = target_x - start_x
+        angle = math.atan2(dy, dx)
+
+        bullet.change_x = math.cos(angle) * speed
+        bullet.change_y = math.sin(angle) * speed
         bullet.angle = math.degrees(angle) - 90  # Visually rotate the bullet
 
         self.enemy_bullet_list.append(bullet)
 
+    def enemy_shoot(self, enemy):
+        """ Handles standard shooting logic for the ShootingEnemy """
+        self.fire_enemy_bullet(
+            start_x=enemy.center_x,
+            start_y=enemy.center_y,
+            target_x=self.player_x,
+            target_y=self.player_y,
+            speed=ENEMY_BULLET_SPEED,
+            image=":resources:images/space_shooter/laserRed01.png",
+            scale=ENEMY_BULLET_SCALING,
+            damage=10  # Standard enemy damage
+        )
+
     def shoot_bullet(self):
-        """ Handles the creation and trajectory of a single bullet """
+        """ Handles the creation and trajectory of a single player bullet """
         bullet = arcade.Sprite(":resources:images/space_shooter/laserBlue01.png", BULLET_SCALING)
 
         # Position the bullet at the tip of the player's triangle
@@ -219,8 +296,6 @@ class MyGame(arcade.Window):
 
     def on_draw(self):
         """ Render the screen. """
-
-        # self.clear() replaces arcade.start_render() in modern versions
         self.clear()
 
         # Draw the Player using your triangle measurements!
@@ -269,6 +344,17 @@ class MyGame(arcade.Window):
         if self.player_show_health_timer > 0:
             self.player_show_health_timer -= delta_time
 
+        # --- Boss Spawning Logic ---
+        # Spawn a boss every 10 points
+        if self.score > 0 and self.score % 10 == 0:
+            # Check if boss is already active so we don't spawn multiples
+            boss_exists = any(isinstance(e, BossEnemy) for e in self.enemy_list)
+            if not boss_exists:
+                self.spawn_boss()
+                # Increment score slightly so we don't trigger this continuously
+                self.score += 1
+                self.score_text.text = f"Score: {self.score}"
+
         # --- Continuous Shooting Logic ---
         self.time_since_last_shot += delta_time
         if self.is_shooting and self.time_since_last_shot >= SHOOT_INTERVAL:
@@ -312,48 +398,89 @@ class MyGame(arcade.Window):
             dx = self.player_x - enemy.center_x
             angle = math.atan2(dy, dx)
 
-            speed = ENEMY_SPEED - 0.5 if isinstance(enemy, ShootingEnemy) else ENEMY_SPEED
+            # Determine speed based on enemy type
+            if isinstance(enemy, BossEnemy):
+                speed = BOSS_SPEED
+            elif isinstance(enemy, ShootingEnemy):
+                speed = ENEMY_SPEED - 0.5
+            else:
+                speed = ENEMY_SPEED
+
             enemy.change_x = math.cos(angle) * speed
             enemy.change_y = math.sin(angle) * speed
             enemy.angle = math.degrees(angle) - 90
 
-            # 2. Shooting Logic for ShootingEnemy
+            # 2. Shooting Logic for Regular ShootingEnemy
             if isinstance(enemy, ShootingEnemy):
                 enemy.time_since_last_shot += delta_time
                 if enemy.time_since_last_shot >= enemy.shoot_interval:
                     self.enemy_shoot(enemy)
                     enemy.time_since_last_shot = 0.0
-                    enemy.shoot_interval = random.uniform(0.5, 2.0)  # Reset interval
+                    enemy.shoot_interval = random.uniform(0.5, 2.0)
 
-            # 3. Cleanup if they somehow get way out of bounds (anti-bug)
+            # 3. Boss Shooting Logic
+            if isinstance(enemy, BossEnemy):
+                enemy.time_since_last_normal_shot += delta_time
+                enemy.time_since_last_special_shot += delta_time
+
+                # Attack 1: 50% Damage Yellow Bullet
+                if enemy.time_since_last_normal_shot >= enemy.normal_shoot_interval:
+                    self.fire_enemy_bullet(
+                        start_x=enemy.center_x, start_y=enemy.center_y,
+                        target_x=self.player_x, target_y=self.player_y,
+                        speed=ENEMY_BULLET_SPEED + 1,
+                        image=":resources:images/space_shooter/laserYellow01.png",
+                        scale=ENEMY_BULLET_SCALING * 1.5,
+                        damage=50  # 50 damage is 50% of player health
+                    )
+                    enemy.time_since_last_normal_shot = 0.0
+
+                # Attack 2: One-Shot Green Laser
+                if enemy.time_since_last_special_shot >= enemy.special_shoot_interval:
+                    self.fire_enemy_bullet(
+                        start_x=enemy.center_x, start_y=enemy.center_y,
+                        target_x=self.player_x, target_y=self.player_y,
+                        speed=ENEMY_BULLET_SPEED + 4,  # Faster
+                        image=":resources:images/space_shooter/laserGreen11.png",
+                        scale=ENEMY_BULLET_SCALING * 2.5,  # Much bigger
+                        damage=100  # 100 damage will instantly kill the player
+                    )
+                    enemy.time_since_last_special_shot = 0.0
+
+            # 4. Cleanup if they somehow get way out of bounds (anti-bug)
             if enemy.center_x < -300 or enemy.center_x > SCREEN_WIDTH + 300 or \
                     enemy.center_y < -300 or enemy.center_y > SCREEN_HEIGHT + 300:
                 enemy.remove_from_sprite_lists()
-                self.spawn_enemy()
+                # Don't respawn boss if it goes out of bounds, spawn regular enemy
+                if not isinstance(enemy, BossEnemy):
+                    self.spawn_enemy()
 
         # --- Collision Logic ---
 
-        # 1. Player getting hit by Enemies
+        # 1. Player getting hit by Enemies directly
         for enemy in self.enemy_list:
-            # Calculate distance between player center and enemy center
             distance = math.hypot(self.player_x - enemy.center_x, self.player_y - enemy.center_y)
-            # If distance is less than their combined radius, it's a hit!
             if distance < self.player_redius + (enemy.width / 2):
-                enemy.remove_from_sprite_lists()
-                self.player_health -= 20  # Player takes damage
-                self.player_show_health_timer = HEALTH_BAR_DISPLAY_TIME  # Show health bar briefly
-                self.spawn_enemy()
+
+                # If player hits boss, player dies immediately. Otherwise, take 20 damage.
+                if isinstance(enemy, BossEnemy):
+                    self.player_health = 0
+                else:
+                    enemy.remove_from_sprite_lists()
+                    self.player_health -= 20
+                    self.spawn_enemy()
+
+                self.player_show_health_timer = HEALTH_BAR_DISPLAY_TIME
 
                 # Simple game over check
                 if self.player_health <= 0:
                     print("Game Over! Restarting...")
-                    self.setup()  # Restart the game automatically
+                    self.setup()
 
         # 2. Bullets hitting Enemies
         for bullet in self.bullet_list:
             hit_list = arcade.check_for_collision_with_list(bullet, self.enemy_list)
 
-            # If bullet hit something, destroy bullet
             if len(hit_list) > 0:
                 bullet.remove_from_sprite_lists()
 
@@ -364,9 +491,16 @@ class MyGame(arcade.Window):
                 # If enemy runs out of health, destroy it
                 if enemy.health <= 0:
                     enemy.remove_from_sprite_lists()
-                    self.score += 1
+
+                    # Award more points for killing boss
+                    if isinstance(enemy, BossEnemy):
+                        self.score += 5
+                        print("Boss Defeated!")
+                    else:
+                        self.score += 1
+                        self.spawn_enemy()
+
                     self.score_text.text = f"Score: {self.score}"
-                    self.spawn_enemy()
 
             # Remove bullets flying off screen
             if bullet.bottom > SCREEN_HEIGHT or bullet.top < 0 or bullet.left < 0 or bullet.right > SCREEN_WIDTH:
@@ -374,17 +508,18 @@ class MyGame(arcade.Window):
 
         # 3. Enemy Bullets hitting Player
         for bullet in self.enemy_bullet_list:
-            # Calculate distance between player and enemy bullet
             distance = math.hypot(self.player_x - bullet.center_x, self.player_y - bullet.center_y)
 
-            # Check collision (using player radius)
             if distance < self.player_redius + (bullet.width / 2):
                 bullet.remove_from_sprite_lists()
-                self.player_health -= 10  # Player takes 10 damage
+
+                # Apply the dynamic damage set on the bullet
+                damage = getattr(bullet, 'damage', 10)  # default to 10 if missing
+                self.player_health -= damage
                 self.player_show_health_timer = HEALTH_BAR_DISPLAY_TIME
 
                 if self.player_health <= 0:
-                    print("Game Over! Restarting...")
+                    print(f"You took {damage} damage! Game Over! Restarting...")
                     self.setup()
 
             # Remove bullets flying off screen

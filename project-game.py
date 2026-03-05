@@ -407,7 +407,6 @@ class MyGame(arcade.Window):
         elif key == arcade.key.D or key == arcade.key.B:
             self.right_pressed = True
 
-
     def on_key_release(self, key, modifiers):
         """ Called when the user releases a key. """
         if key == arcade.key.W:
@@ -439,3 +438,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    #hi

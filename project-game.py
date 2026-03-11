@@ -541,6 +541,8 @@ class GameWindow(arcade.Window):
 # -------------------------------------------------
 
 def main():
+
+
     game = GameWindow()
     game.setup()
     arcade.run()

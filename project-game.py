@@ -1,575 +1,549 @@
 import arcade
 import random
 import math
+from PIL import Image
 
-# --- Constants ---
-SCREEN_WIDTH = 900
-SCREEN_HEIGHT = 800
-SCREEN_TITLE = "Hero Aircraft Shooter with Boss"
+# -------------------------------------------------
+# CONSTANTS
+# -------------------------------------------------
 
-# Constants used to scale our sprites from their original size
-ENEMY_SCALING = 0.5
-BOSS_SCALING = 1.0  # Boss is twice as big as regular enemies
-BULLET_SCALING = 0.3
-ENEMY_BULLET_SCALING = 0.4
+SCREEN_WIDTH        = 800
+SCREEN_HEIGHT       = 600
+SCREEN_TITLE        = "Space Shooter"
 
-# Aircraft movement speed
-PLAYER_MOVEMENT_SPEED = 5
-ENEMY_SPEED = 2
-BOSS_SPEED = 2  # Boss moves slower
-BULLET_SPEED = 10
-ENEMY_BULLET_SPEED = 4
+PLAYER_SPEED        = 5
+ENEMY_SPEED         = 2
+BOSS_SPEED          = 1
 
-# Firing rate (seconds between shots)
-SHOOT_INTERVAL = 0.05
+PLAYER_HEALTH       = 100
+ENEMY_HEALTH        = 30
+BOSS_HEALTH         = 200
 
-# How long the health bar is displayed after taking damage (in seconds)
-HEALTH_BAR_DISPLAY_TIME = 1.5
+BULLET_SPEED        = 10
+ENEMY_BULLET_SPEED  = 7
+
+NORMAL_FIRE_RATE    = 0.25
+AUTO_FIRE_RATE      = 0.08
+
+POWERUP_DURATION    = 10.0
+DROP_CHANCE         = 40
 
 
-def draw_custom_rect(center_x, center_y, width, height, color):
-    """ Draw a rectangle using two triangles to avoid version issues with newer arcade libraries """
-    hw = width / 2
-    hh = height / 2
+# -------------------------------------------------
+# TEXTURE CACHE  — load each image ONCE, reuse forever
+# -------------------------------------------------
 
-    # Triangle 1 (Top-Left, Top-Right, Bottom-Left)
-    arcade.draw_triangle_filled(
-        center_x - hw, center_y + hh,
-        center_x + hw, center_y + hh,
-        center_x - hw, center_y - hh,
-        color
-    )
-    # Triangle 2 (Top-Right, Bottom-Right, Bottom-Left)
-    arcade.draw_triangle_filled(
-        center_x + hw, center_y + hh,
-        center_x + hw, center_y - hh,
-        center_x - hw, center_y - hh,
-        color
-    )
+_texture_cache: dict = {}
 
+def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
+    key = (path, scale)
+    if key in _texture_cache:
+        return _texture_cache[key]
+    img = Image.open(path).convert("RGBA")
+    pixels = img.getdata()
+    img.putdata([
+        (r, g, b, 0) if (r > 200 and g > 200 and b > 200) else (r, g, b, a)
+        for r, g, b, a in pixels
+    ])
+    if scale != 1.0:
+        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+    tex = arcade.Texture(image=img)
+    _texture_cache[key] = tex
+    return tex
+
+
+def solid_texture(size: int, color: tuple) -> arcade.Texture:
+    key = ("solid", size, color)
+    if key in _texture_cache:
+        return _texture_cache[key]
+    tex = arcade.Texture(image=Image.new("RGBA", (size, size), color))
+    _texture_cache[key] = tex
+    return tex
+
+
+# -------------------------------------------------
+# POWERUP
+# -------------------------------------------------
+
+POWERUP_TYPES  = ["health", "shield", "autofire", "speed", "triple"]
+POWERUP_COLORS = {
+    "health":   (0,   255, 80,  220),
+    "shield":   (0,   180, 255, 220),
+    "autofire": (255, 60,  255, 220),
+    "speed":    (255, 220, 0,   220),
+    "triple":   (255, 120, 0,   220),
+}
+POWERUP_LABELS = {
+    "health":   "+HP",
+    "shield":   "SHIELD",
+    "autofire": "AUTO",
+    "speed":    "SPEED",
+    "triple":   "TRIPLE",
+}
+
+class Powerup(arcade.Sprite):
+    def __init__(self, x, y, kind: str):
+        super().__init__()
+        self.texture  = solid_texture(22, POWERUP_COLORS[kind])
+        self.center_x = x
+        self.center_y = y
+        self.kind     = kind
+        self.change_y = -1.5
+
+    def update(self, delta_time=0, *args, **kwargs):
+        self.center_y += self.change_y
+
+
+# -------------------------------------------------
+# PLAYER
+# -------------------------------------------------
+
+class Player(arcade.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.texture  = load_texture_clean("image/player.png", 0.15)
+        self.center_x = SCREEN_WIDTH  // 2
+        self.center_y = SCREEN_HEIGHT // 2
+        self.health   = PLAYER_HEALTH
+
+        self.shield_active   = False;  self.shield_timer   = 0.0
+        self.autofire_active = False;  self.autofire_timer = 0.0
+        self.speed_active    = False;  self.speed_timer    = 0.0
+        self.triple_active   = False;  self.triple_timer   = 0.0
+
+    def get_speed(self):
+        return PLAYER_SPEED * (1.8 if self.speed_active else 1.0)
+
+    def update_powerups(self, delta):
+        for attr in ("shield", "autofire", "speed", "triple"):
+            if getattr(self, f"{attr}_active"):
+                new_t = getattr(self, f"{attr}_timer") - delta
+                if new_t <= 0:
+                    setattr(self, f"{attr}_active", False)
+                    new_t = 0.0
+                setattr(self, f"{attr}_timer", new_t)
+
+    def update(self, delta_time=0, *args, **kwargs):
+        self.center_x += self.change_x
+        self.center_y += self.change_y
+        self.left   = max(self.left,   0)
+        self.right  = min(self.right,  SCREEN_WIDTH)
+        self.bottom = max(self.bottom, 0)
+        self.top    = min(self.top,    SCREEN_HEIGHT)
+
+
+# -------------------------------------------------
+# ENEMIES
+# -------------------------------------------------
 
 class Enemy(arcade.Sprite):
-    """ Custom Enemy class to handle health bars """
+    def __init__(self, x, y):
+        super().__init__()
+        self.texture  = load_texture_clean("image/enemy.png", 0.12)
+        self.center_x = x;  self.center_y = y
+        self.health   = ENEMY_HEALTH
 
-    def __init__(self, image, scale):
-        super().__init__(image, scale)
-        self.max_health = 3
-        self.health = 3
-        self.show_health_timer = 0.0
+class ShootingEnemy(arcade.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.texture     = load_texture_clean("image/shooting_enemy.png", 0.12)
+        self.center_x    = x;  self.center_y = y
+        self.health      = ENEMY_HEALTH
+        self.shoot_timer = 0
 
-    def draw_health_bar(self):
-        """ Draw a health bar above the enemy """
-        if self.show_health_timer <= 0:
-            return
-
-        bar_width = 40
-        bar_height = 5
-
-        # Draw the red background
-        draw_custom_rect(self.center_x, self.top + 10, bar_width, bar_height, arcade.color.RED)
-
-        # Calculate the green foreground width based on health
-        health_ratio = max(self.health / self.max_health, 0)
-        green_width = bar_width * health_ratio
-
-        if green_width > 0:
-            # Shift the green bar so it aligns to the left side
-            green_x = self.center_x - (bar_width / 2) + (green_width / 2)
-            draw_custom_rect(green_x, self.top + 10, green_width, bar_height, arcade.color.GREEN)
+class BossEnemy(arcade.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.texture       = load_texture_clean("image/boss.png", 0.2)
+        self.center_x      = x;  self.center_y = y
+        self.health        = BOSS_HEALTH
+        self.normal_timer  = 0
+        self.special_timer = 0
 
 
-class ShootingEnemy(Enemy):
-    """ A new enemy type that shoots bullets in random directions """
+# -------------------------------------------------
+# BULLETS  — texture assigned from cache, no disk I/O
+# -------------------------------------------------
 
-    def __init__(self, image, scale):
-        super().__init__(image, scale)
-        self.max_health = 5  # Slightly tougher than regular enemies
-        self.health = 5
-        self.time_since_last_shot = 0.0
-        self.shoot_interval = random.uniform(0.5, 2.0)
+class Bullet(arcade.Sprite):
+    def __init__(self, start_x, start_y, angle_rad, speed=BULLET_SPEED):
+        super().__init__()
+        self.texture  = load_texture_clean("image/bullet.png", 0.1)
+        self.center_x = start_x
+        self.center_y = start_y
+        self.change_x = math.cos(angle_rad) * speed
+        self.change_y = math.sin(angle_rad) * speed
+        self.angle    = math.degrees(angle_rad)
 
-
-class BossEnemy(Enemy):
-    """ Boss Enemy class with special attacks """
-
-    def __init__(self, image, scale):
-        super().__init__(image, scale)
-        self.max_health = 30  # Very high health
-        self.health = 30
-
-        # Timers for the two different attack types
-        self.time_since_last_normal_shot = 0.0
-        self.time_since_last_special_shot = 0.0
-
-        # Boss attacks slower but hits much harder
-        self.normal_shoot_interval = 2.0  # 50% damage attack interval
-        self.special_shoot_interval = 5.0  # One-shot attack interval
-
-    def draw_health_bar(self):
-        """ Override health bar to make it bigger for the boss """
-        if self.show_health_timer <= 0:
-            return
-
-        bar_width = 80  # Wider health bar for the boss
-        bar_height = 8
-
-        # Draw the red background
-        draw_custom_rect(self.center_x, self.top + 15, bar_width, bar_height, arcade.color.DARK_RED)
-
-        # Calculate the green foreground width based on health
-        health_ratio = max(self.health / self.max_health, 0)
-        green_width = bar_width * health_ratio
-
-        if green_width > 0:
-            # Shift the green bar so it aligns to the left side
-            green_x = self.center_x - (bar_width / 2) + (green_width / 2)
-            draw_custom_rect(green_x, self.top + 15, green_width, bar_height, arcade.color.GREEN)
+class EnemyBullet(arcade.Sprite):
+    def __init__(self, start_x, start_y, dest_x, dest_y):
+        super().__init__()
+        self.texture  = load_texture_clean("image/enemy_bullet.png", 0.1)
+        self.center_x = start_x;  self.center_y = start_y
+        a = math.atan2(dest_y - start_y, dest_x - start_x)
+        self.change_x = math.cos(a) * ENEMY_BULLET_SPEED
+        self.change_y = math.sin(a) * ENEMY_BULLET_SPEED
+        self.angle    = math.degrees(a)
 
 
-class MyGame(arcade.Window):
-    """
-    Main application class for the game.
-    """
+# -------------------------------------------------
+# GAME WINDOW
+# -------------------------------------------------
+
+class GameWindow(arcade.Window):
 
     def __init__(self):
-        # Call the parent class and set up the window
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        arcade.set_background_color(arcade.color.BLACK)
 
-        # Sprite lists
-        self.enemy_list = None
-        self.bullet_list = None
-        self.enemy_bullet_list = None
+        # Pre-warm texture cache before game starts
+        load_texture_clean("image/player.png",       0.15)
+        load_texture_clean("image/enemy.png",         0.12)
+        load_texture_clean("image/shooting_enemy.png",0.12)
+        load_texture_clean("image/boss.png",          0.2)
+        load_texture_clean("image/bullet.png",        0.1)
+        load_texture_clean("image/enemy_bullet.png",  0.1)
+        for k in POWERUP_TYPES:
+            solid_texture(22, POWERUP_COLORS[k])
 
-        # Player variables based on your math measurements
-        self.player_x = 0
-        self.player_y = 0
-        self.player_angle = 90
-        self.player_redius = 20
+        # Pre-build Text objects (fast GPU text, no per-frame cost)
+        self.txt_score   = arcade.Text("Score: 0",    10, 570, arcade.color.WHITE, 18)
+        self.txt_health  = arcade.Text("Health: 100", 10, 540, arcade.color.WHITE, 18)
+        self.txt_active  = arcade.Text("",            10, 510, arcade.color.YELLOW, 13)
+        self.txt_notif   = arcade.Text("", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+80,
+                                       (255,255,100,255), 28,
+                                       anchor_x="center", bold=True)
+        self.txt_hint    = arcade.Text("WASD=Move  Hold Mouse=Auto-aim & Shoot",
+                                       10, 10, arcade.color.LIGHT_GRAY, 12)
+        self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, SCREEN_HEIGHT//2,
+                                       arcade.color.RED, 50, anchor_x="center")
+        self.txt_score2  = arcade.Text("Score: 0", SCREEN_WIDTH//2, SCREEN_HEIGHT//2-60,
+                                       arcade.color.WHITE, 30, anchor_x="center")
+        self.txt_restart = arcade.Text("Press R to Restart",
+                                       SCREEN_WIDTH//2, SCREEN_HEIGHT//2-120,
+                                       arcade.color.WHITE, 20, anchor_x="center")
 
-        # Player Health
-        self.player_max_health = 100
-        self.player_health = 100
-        self.player_show_health_timer = 0.0
+        self.player = self.player_list = None
+        self.enemies = self.shooting_enemies = self.bosses = None
+        self.bullets = self.enemy_bullets = self.powerups = None
 
-        # Mouse tracking for rotation
-        self.mouse_x = SCREEN_WIDTH / 2
-        self.mouse_y = SCREEN_HEIGHT / 2
+        self.score = 0;  self.game_over = False
+        self.up = self.down = self.left = self.right = False
+        self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0
+        self.mouse_held = False
+        self.mouse_x = SCREEN_WIDTH // 2
+        self.mouse_y = SCREEN_HEIGHT // 2
+        self.fire_timer  = 0.0
+        self.notif_text  = ""
+        self.notif_timer = 0.0
 
-        # Keep track of key presses for smooth movement
-        self.up_pressed = False
-        self.down_pressed = False
-        self.left_pressed = False
-        self.right_pressed = False
-
-        # Continuous shooting tracking
-        self.is_shooting = False
-        self.time_since_last_shot = 0.0
-
-        # Keep track of the score
-        self.score = 0
-        self.score_text = None
-
-        # Set the background color
-        arcade.set_background_color(arcade.color.AMAZON)
+    # -------------------------------------------------
 
     def setup(self):
-        """ Set up the game and initialize the variables. """
+        self.player      = Player()
+        self.player_list = arcade.SpriteList()
+        self.player_list.append(self.player)
 
-        # Create the sprite lists
-        self.enemy_list = arcade.SpriteList()
-        self.bullet_list = arcade.SpriteList()
-        self.enemy_bullet_list = arcade.SpriteList()
+        self.enemies          = arcade.SpriteList()
+        self.shooting_enemies = arcade.SpriteList()
+        self.bosses           = arcade.SpriteList()
+        self.bullets          = arcade.SpriteList()
+        self.enemy_bullets    = arcade.SpriteList()
+        self.powerups         = arcade.SpriteList()
 
-        # Score
-        self.score = 0
-        self.score_text = arcade.Text(f"Score: {self.score}", 10, 10, arcade.color.WHITE, 14, bold=True)
+        self.score = 0;  self.game_over = False
+        self.mouse_held = False;  self.fire_timer = 0.0
+        self.notif_text = "";     self.notif_timer = 0.0
+        self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0
+        self.up = self.down = self.left = self.right = False
 
-        # Set up the player initial state
-        self.player_x = SCREEN_WIDTH / 2
-        self.player_y = 50
-        self.player_angle = 90  # 90 degrees points straight up
-        self.player_health = self.player_max_health
-        self.player_show_health_timer = 0.0
-
-        # Reset shooting variables
-        self.is_shooting = False
-        self.time_since_last_shot = SHOOT_INTERVAL  # Allows firing immediately on first click
-
-        # Spawn a few initial enemies
-        for i in range(5):
-            self.spawn_enemy()
-
-    def spawn_enemy(self):
-        """ Create a new regular enemy aircraft and add it to the game. """
-        # 30% chance to spawn the new shooting enemy
-        if random.random() < 0.3:
-            enemy = ShootingEnemy(":resources:images/space_shooter/playerShip1_green.png", ENEMY_SCALING)
-        else:
-            enemy = Enemy(":resources:images/space_shooter/playerShip3_orange.png", ENEMY_SCALING)
-
-        # Pick a random spawn side: top (front), left, or right
-        side = random.choice(["top", "left", "right"])
-
-        if side == "top":
-            enemy.center_x = random.randrange(50, SCREEN_WIDTH - 50)
-            enemy.center_y = random.randrange(SCREEN_HEIGHT + 20, SCREEN_HEIGHT + 150)
-        elif side == "left":
-            enemy.center_x = random.randrange(-150, -20)
-            enemy.center_y = random.randrange(50, SCREEN_HEIGHT - 50)
-        elif side == "right":
-            enemy.center_x = random.randrange(SCREEN_WIDTH + 20, SCREEN_WIDTH + 150)
-            enemy.center_y = random.randrange(50, SCREEN_HEIGHT - 50)
-
-        # Fix: Immediately set the initial angle so they enter facing the player perfectly
-        dy = self.player_y - enemy.center_y
-        dx = self.player_x - enemy.center_x
-        angle = math.atan2(dy, dx)
-        enemy.angle = math.degrees(angle) - 90
-
-        self.enemy_list.append(enemy)
-
-    def spawn_boss(self):
-        """ Spawns the Boss Enemy """
-        # Fixed: Changed from 'playerShip2_red.png' to 'playerShip2_orange.png'
-        boss = BossEnemy(":resources:images/space_shooter/playerShip2_orange.png", BOSS_SCALING)
-        boss.center_x = SCREEN_WIDTH / 2
-        boss.center_y = SCREEN_HEIGHT + 100
-
-        # Fix: Immediately set the initial angle to face the player perfectly
-        dy = self.player_y - boss.center_y
-        dx = self.player_x - boss.center_x
-        angle = math.atan2(dy, dx)
-        boss.angle = math.degrees(angle) - 90
-
-        self.enemy_list.append(boss)
-        print("WARNING: Boss Approaching!")
-
-    def fire_enemy_bullet(self, start_x, start_y, target_x, target_y, speed, image, scale, damage):
-        """ Helper function to create enemy and boss bullets with varying damage """
-        bullet = arcade.Sprite(image, scale)
-        bullet.center_x = start_x
-        bullet.center_y = start_y
-
-        # Attach custom damage attribute to this specific bullet
-        bullet.damage = damage
-
-        # Shoot directly at the target (player)
-        dy = target_y - start_y
-        dx = target_x - start_x
-        angle = math.atan2(dy, dx)
-
-        bullet.change_x = math.cos(angle) * speed
-        bullet.change_y = math.sin(angle) * speed
-        bullet.angle = math.degrees(angle) - 90  # Visually rotate the bullet
-
-        self.enemy_bullet_list.append(bullet)
-
-    def enemy_shoot(self, enemy):
-        """ Handles standard shooting logic for the ShootingEnemy """
-        self.fire_enemy_bullet(
-            start_x=enemy.center_x,
-            start_y=enemy.center_y,
-            target_x=self.player_x,
-            target_y=self.player_y,
-            speed=ENEMY_BULLET_SPEED,
-            image=":resources:images/space_shooter/laserRed01.png",
-            scale=ENEMY_BULLET_SCALING,
-            damage=10  # Standard enemy damage
-        )
-
-    def shoot_bullet(self):
-        """ Handles the creation and trajectory of a single player bullet """
-        bullet = arcade.Sprite(":resources:images/space_shooter/laserBlue01.png", BULLET_SCALING)
-
-        # Position the bullet at the tip of the player's triangle
-        bullet.center_x = self.player_x + math.cos(math.radians(self.player_angle)) * self.player_redius * 1.5
-        bullet.center_y = self.player_y + math.sin(math.radians(self.player_angle)) * self.player_redius * 1.5
-
-        # Send the bullet exactly in the direction the triangle is pointing
-        bullet.change_x = math.cos(math.radians(self.player_angle)) * BULLET_SPEED
-        bullet.change_y = math.sin(math.radians(self.player_angle)) * BULLET_SPEED
-
-        # Visually rotate the bullet sprite to match trajectory (-90 because standard sprite points up)
-        bullet.angle = self.player_angle - 90
-
-        self.bullet_list.append(bullet)
+    # -------------------------------------------------
 
     def on_draw(self):
-        """ Render the screen. """
         self.clear()
 
-        # Draw the Player using your triangle measurements!
-        arcade.draw_triangle_filled(
-            self.player_x + math.cos(math.radians(self.player_angle)) * self.player_redius * 1.5,
-            self.player_y + math.sin(math.radians(self.player_angle)) * self.player_redius * 1.5,
-            self.player_x + math.cos(math.radians(self.player_angle + 150)) * self.player_redius,
-            self.player_y + math.sin(math.radians(self.player_angle + 150)) * self.player_redius,
-            self.player_x + math.cos(math.radians(self.player_angle - 150)) * self.player_redius,
-            self.player_y + math.sin(math.radians(self.player_angle - 150)) * self.player_redius,
-            arcade.color.WHITE
-        )
+        if self.game_over:
+            self.txt_score2.text = f"Score: {self.score}"
+            self.txt_over.draw();  self.txt_score2.draw();  self.txt_restart.draw()
+            return
 
-        # Draw Player Health Bar under the player ONLY if timer > 0
-        if self.player_show_health_timer > 0:
-            p_bar_width = 50
-            p_bar_height = 8
-            draw_custom_rect(self.player_x, self.player_y - 30, p_bar_width, p_bar_height, arcade.color.RED)
+        self.powerups.draw()
+        self.player_list.draw()
+        self.enemies.draw()
+        self.shooting_enemies.draw()
+        self.bosses.draw()
+        self.bullets.draw()
+        self.enemy_bullets.draw()
 
-            health_ratio = max(self.player_health / self.player_max_health, 0)
-            p_green_width = p_bar_width * health_ratio
-            if p_green_width > 0:
-                p_green_x = self.player_x - (p_bar_width / 2) + (p_green_width / 2)
-                draw_custom_rect(p_green_x, self.player_y - 30, p_green_width, p_bar_height, arcade.color.GREEN)
+        # Shield ring
+        if self.player.shield_active:
+            arcade.draw_circle_outline(
+                self.player.center_x, self.player.center_y,
+                40, arcade.color.CYAN, 3)
 
-        # Draw all the sprites
-        self.enemy_list.draw()
-        self.bullet_list.draw()
-        self.enemy_bullet_list.draw()
+        # Powerup labels on pickups
+        for p in self.powerups:
+            arcade.draw_text(POWERUP_LABELS[p.kind],
+                p.center_x, p.center_y - 8,
+                arcade.color.WHITE, 9, anchor_x="center")
 
-        # Draw enemy health bars
-        for enemy in self.enemy_list:
-            enemy.draw_health_bar()
+        # HUD (Text objects — fast)
+        self.txt_score.text  = f"Score: {self.score}"
+        self.txt_health.text = f"Health: {self.player.health}"
 
-        # Draw our score on the screen
-        self.score_text.draw()
+        active = []
+        if self.player.shield_active:   active.append(f"SHIELD {self.player.shield_timer:.0f}s")
+        if self.player.autofire_active: active.append(f"AUTO {self.player.autofire_timer:.0f}s")
+        if self.player.speed_active:    active.append(f"SPEED {self.player.speed_timer:.0f}s")
+        if self.player.triple_active:   active.append(f"TRIPLE {self.player.triple_timer:.0f}s")
+        self.txt_active.text = ("Active: " + "  |  ".join(active)) if active else ""
+
+        self.txt_score.draw()
+        self.txt_health.draw()
+        if active: self.txt_active.draw()
+
+        if self.notif_timer > 0:
+            alpha = min(255, int(self.notif_timer * 200))
+            self.txt_notif.text  = self.notif_text
+            self.txt_notif.color = (255, 255, 100, alpha)
+            self.txt_notif.draw()
+
+        self.txt_hint.draw()
+
+    # -------------------------------------------------
 
     def on_update(self, delta_time):
-        """ Movement and game logic """
+        if self.game_over:
+            return
 
-        self.bullet_list.update()
-        self.enemy_list.update()
-        self.enemy_bullet_list.update()
+        p   = self.player
+        spd = p.get_speed()
+        p.change_x = 0;  p.change_y = 0
+        if self.up:    p.change_y =  spd
+        if self.down:  p.change_y = -spd
+        if self.left:  p.change_x = -spd
+        if self.right: p.change_x =  spd
+        # Normalize diagonal so speed stays consistent
+        if p.change_x != 0 and p.change_y != 0:
+            p.change_x *= 0.7071
+            p.change_y *= 0.7071
 
-        # Decrease player health display timer
-        if self.player_show_health_timer > 0:
-            self.player_show_health_timer -= delta_time
+        p.update()
+        p.update_powerups(delta_time)
 
-        # --- Boss Spawning Logic ---
-        # Spawn a boss every 10 points
-        if self.score > 0 and self.score % 10 == 0:
-            # Check if boss is already active so we don't spawn multiples
-            boss_exists = any(isinstance(e, BossEnemy) for e in self.enemy_list)
-            if not boss_exists:
-                self.spawn_boss()
-                # Increment score slightly so we don't trigger this continuously
-                self.score += 1
-                self.score_text.text = f"Score: {self.score}"
+        # Firing — always targets nearest enemy when mouse held or autofire active
+        if p.autofire_active or self.mouse_held:
+            rate = AUTO_FIRE_RATE if p.autofire_active else NORMAL_FIRE_RATE
+            self.fire_timer += delta_time
+            if self.fire_timer >= rate:
+                target = self._nearest_enemy()
+                if target:
+                    self._shoot_toward(target.center_x, target.center_y)
+                self.fire_timer = 0.0
 
-        # --- Continuous Shooting Logic ---
-        self.time_since_last_shot += delta_time
-        if self.is_shooting and self.time_since_last_shot >= SHOOT_INTERVAL:
-            self.shoot_bullet()
-            self.time_since_last_shot = 0.0
+        self.bullets.update()
+        self.enemy_bullets.update()
+        self.powerups.update()
 
-        # --- Player Rotation Logic (Aim at Mouse) ---
-        dx = self.mouse_x - self.player_x
-        dy = self.mouse_y - self.player_y
-        self.player_angle = math.degrees(math.atan2(dy, dx))
+        # Cull off-screen objects
+        for b in list(self.bullets):
+            if b.right < 0 or b.left > SCREEN_WIDTH or b.top < 0 or b.bottom > SCREEN_HEIGHT:
+                b.remove_from_sprite_lists()
+        for b in list(self.enemy_bullets):
+            if b.right < 0 or b.left > SCREEN_WIDTH or b.top < 0 or b.bottom > SCREEN_HEIGHT:
+                b.remove_from_sprite_lists()
+        for pu in list(self.powerups):
+            if pu.top < 0:
+                pu.remove_from_sprite_lists()
 
-        # --- Player Movement Logic (WASD/B Navigation) ---
-        if self.up_pressed:
-            self.player_y += PLAYER_MOVEMENT_SPEED
-        if self.down_pressed:
-            self.player_y -= PLAYER_MOVEMENT_SPEED
-        if self.left_pressed:
-            self.player_x -= PLAYER_MOVEMENT_SPEED
-        if self.right_pressed:
-            self.player_x += PLAYER_MOVEMENT_SPEED
+        # Spawn
+        self.enemy_spawn += delta_time
+        if self.enemy_spawn > 1:
+            self.spawn_enemy();  self.enemy_spawn = 0
 
-        # --- Manage Boundaries for the Player ---
-        if self.player_x < 0:
-            self.player_x = 0
-        elif self.player_x > SCREEN_WIDTH - 1:
-            self.player_x = SCREEN_WIDTH - 1
+        self.shooting_spawn += delta_time
+        if self.shooting_spawn > 3:
+            self.spawn_shooting_enemy();  self.shooting_spawn = 0
 
-        if self.player_y < 0:
-            self.player_y = 0
-        elif self.player_y > SCREEN_HEIGHT - 1:
-            self.player_y = SCREEN_HEIGHT - 1
+        self.boss_spawn += delta_time
+        if self.boss_spawn > 20:
+            self.spawn_boss();  self.boss_spawn = 0
 
-        # --- Enemy Logic (Movement & Shooting) ---
-        for enemy in self.enemy_list:
-            # Decrease enemy health display timer
-            if enemy.show_health_timer > 0:
-                enemy.show_health_timer -= delta_time
+        if self.notif_timer > 0:
+            self.notif_timer -= delta_time
 
-            # 1. Constantly aim and move towards the player
-            dy = self.player_y - enemy.center_y
-            dx = self.player_x - enemy.center_x
-            angle = math.atan2(dy, dx)
+        self.update_enemies(delta_time)
+        self.check_collisions()
 
-            # Determine speed based on enemy type
-            if isinstance(enemy, BossEnemy):
-                speed = BOSS_SPEED
-            elif isinstance(enemy, ShootingEnemy):
-                speed = ENEMY_SPEED - 0.5
-            else:
-                speed = ENEMY_SPEED
+    # -------------------------------------------------
 
-            enemy.change_x = math.cos(angle) * speed
-            enemy.change_y = math.sin(angle) * speed
-            enemy.angle = math.degrees(angle) - 90
+    def _nearest_enemy(self):
+        all_e = list(self.enemies) + list(self.shooting_enemies) + list(self.bosses)
+        if not all_e:
+            return None
+        px, py = self.player.center_x, self.player.center_y
+        return min(all_e, key=lambda e: math.hypot(e.center_x - px, e.center_y - py))
 
-            # 2. Shooting Logic for Regular ShootingEnemy
-            if isinstance(enemy, ShootingEnemy):
-                enemy.time_since_last_shot += delta_time
-                if enemy.time_since_last_shot >= enemy.shoot_interval:
-                    self.enemy_shoot(enemy)
-                    enemy.time_since_last_shot = 0.0
-                    enemy.shoot_interval = random.uniform(0.5, 2.0)
+    def _shoot_toward(self, tx, ty):
+        px, py     = self.player.center_x, self.player.center_y
+        base_angle = math.atan2(ty - py, tx - px)
+        offsets    = [-0.18, 0.0, 0.18] if self.player.triple_active else [0.0]
+        for off in offsets:
+            self.bullets.append(Bullet(px, py, base_angle + off))
 
-            # 3. Boss Shooting Logic
-            if isinstance(enemy, BossEnemy):
-                enemy.time_since_last_normal_shot += delta_time
-                enemy.time_since_last_special_shot += delta_time
+    # -------------------------------------------------
 
-                # Attack 1: 50% Damage Yellow Bullet
-                if enemy.time_since_last_normal_shot >= enemy.normal_shoot_interval:
-                    self.fire_enemy_bullet(
-                        start_x=enemy.center_x, start_y=enemy.center_y,
-                        target_x=self.player_x, target_y=self.player_y,
-                        speed=ENEMY_BULLET_SPEED + 1,
-                        image=":resources:images/space_shooter/laserYellow01.png",
-                        scale=ENEMY_BULLET_SCALING * 1.5,
-                        damage=50  # 50 damage is 50% of player health
-                    )
-                    enemy.time_since_last_normal_shot = 0.0
+    def update_enemies(self, delta):
+        for enemy in self.enemies:
+            a = math.atan2(self.player.center_y - enemy.center_y,
+                           self.player.center_x - enemy.center_x)
+            enemy.change_x = math.cos(a) * ENEMY_SPEED
+            enemy.change_y = math.sin(a) * ENEMY_SPEED
+            enemy.update()
 
-                # Attack 2: One-Shot Green Laser
-                if enemy.time_since_last_special_shot >= enemy.special_shoot_interval:
-                    self.fire_enemy_bullet(
-                        start_x=enemy.center_x, start_y=enemy.center_y,
-                        target_x=self.player_x, target_y=self.player_y,
-                        speed=ENEMY_BULLET_SPEED + 4,  # Faster
-                        image=":resources:images/space_shooter/laserGreen11.png",
-                        scale=ENEMY_BULLET_SCALING * 2.5,  # Much bigger
-                        damage=100  # 100 damage will instantly kill the player
-                    )
-                    enemy.time_since_last_special_shot = 0.0
+        for enemy in self.shooting_enemies:
+            a = math.atan2(self.player.center_y - enemy.center_y,
+                           self.player.center_x - enemy.center_x)
+            enemy.change_x = math.cos(a) * ENEMY_SPEED
+            enemy.change_y = math.sin(a) * ENEMY_SPEED
+            enemy.update()
+            enemy.shoot_timer += delta
+            if enemy.shoot_timer > 1:
+                self.enemy_bullets.append(EnemyBullet(
+                    enemy.center_x, enemy.center_y,
+                    self.player.center_x, self.player.center_y))
+                enemy.shoot_timer = 0
 
-            # 4. Cleanup if they somehow get way out of bounds (anti-bug)
-            if enemy.center_x < -300 or enemy.center_x > SCREEN_WIDTH + 300 or \
-                    enemy.center_y < -300 or enemy.center_y > SCREEN_HEIGHT + 300:
-                enemy.remove_from_sprite_lists()
-                # Don't respawn boss if it goes out of bounds, spawn regular enemy
-                if not isinstance(enemy, BossEnemy):
-                    self.spawn_enemy()
+        for boss in self.bosses:
+            a = math.atan2(self.player.center_y - boss.center_y,
+                           self.player.center_x - boss.center_x)
+            boss.change_x = math.cos(a) * BOSS_SPEED
+            boss.change_y = math.sin(a) * BOSS_SPEED
+            boss.update()
+            boss.normal_timer += delta
+            if boss.normal_timer > 2:
+                self.enemy_bullets.append(EnemyBullet(
+                    boss.center_x, boss.center_y,
+                    self.player.center_x, self.player.center_y))
+                boss.normal_timer = 0
 
-        # --- Collision Logic ---
+    # -------------------------------------------------
 
-        # 1. Player getting hit by Enemies directly
-        for enemy in self.enemy_list:
-            distance = math.hypot(self.player_x - enemy.center_x, self.player_y - enemy.center_y)
-            if distance < self.player_redius + (enemy.width / 2):
+    def check_collisions(self):
+        p = self.player
 
-                # If player hits boss, player dies immediately. Otherwise, take 20 damage.
-                if isinstance(enemy, BossEnemy):
-                    self.player_health = 0
-                else:
-                    enemy.remove_from_sprite_lists()
-                    self.player_health -= 20
-                    self.spawn_enemy()
-
-                self.player_show_health_timer = HEALTH_BAR_DISPLAY_TIME
-
-                # Simple game over check
-                if self.player_health <= 0:
-                    print("Game Over! Restarting...")
-                    self.setup()
-
-        # 2. Bullets hitting Enemies
-        for bullet in self.bullet_list:
-            hit_list = arcade.check_for_collision_with_list(bullet, self.enemy_list)
-
-            if len(hit_list) > 0:
+        for bullet in list(self.bullets):
+            hits = arcade.check_for_collision_with_lists(
+                bullet, [self.enemies, self.shooting_enemies, self.bosses])
+            for enemy in hits:
+                enemy.health -= 20
                 bullet.remove_from_sprite_lists()
-
-            for enemy in hit_list:
-                enemy.health -= 1  # Reduce enemy health
-                enemy.show_health_timer = HEALTH_BAR_DISPLAY_TIME  # Show health bar briefly
-
-                # If enemy runs out of health, destroy it
                 if enemy.health <= 0:
+                    self.score += 50 if isinstance(enemy, BossEnemy) else 10
+                    self._try_drop_powerup(enemy.center_x, enemy.center_y,
+                                           isinstance(enemy, BossEnemy))
                     enemy.remove_from_sprite_lists()
+                break
 
-                    # Award more points for killing boss
-                    if isinstance(enemy, BossEnemy):
-                        self.score += 5
-                        print("Boss Defeated!")
-                    else:
-                        self.score += 1
-                        self.spawn_enemy()
+        for b in list(self.enemy_bullets):
+            if arcade.check_for_collision(b, p):
+                b.remove_from_sprite_lists()
+                if not p.shield_active:
+                    p.health -= 10
 
-                    self.score_text.text = f"Score: {self.score}"
+        for e in arcade.check_for_collision_with_lists(
+                p, [self.enemies, self.shooting_enemies, self.bosses]):
+            if not p.shield_active:
+                p.health -= 1
 
-            # Remove bullets flying off screen
-            if bullet.bottom > SCREEN_HEIGHT or bullet.top < 0 or bullet.left < 0 or bullet.right > SCREEN_WIDTH:
-                bullet.remove_from_sprite_lists()
+        for pu in list(self.powerups):
+            if arcade.check_for_collision(pu, p):
+                self._apply_powerup(pu.kind)
+                pu.remove_from_sprite_lists()
 
-        # 3. Enemy Bullets hitting Player
-        for bullet in self.enemy_bullet_list:
-            distance = math.hypot(self.player_x - bullet.center_x, self.player_y - bullet.center_y)
+        if p.health <= 0:
+            self.game_over = True
 
-            if distance < self.player_redius + (bullet.width / 2):
-                bullet.remove_from_sprite_lists()
+    # -------------------------------------------------
 
-                # Apply the dynamic damage set on the bullet
-                damage = getattr(bullet, 'damage', 10)  # default to 10 if missing
-                self.player_health -= damage
-                self.player_show_health_timer = HEALTH_BAR_DISPLAY_TIME
+    def _try_drop_powerup(self, x, y, boss=False):
+        if random.randint(1, 100) <= (100 if boss else DROP_CHANCE):
+            self.powerups.append(Powerup(x, y, random.choice(POWERUP_TYPES)))
 
-                if self.player_health <= 0:
-                    print(f"You took {damage} damage! Game Over! Restarting...")
-                    self.setup()
+    def _apply_powerup(self, kind):
+        p = self.player
+        self.notif_text  = {"health": "+30 HEALTH!", "shield": "SHIELD ON!",
+                             "autofire": "AUTO-FIRE!", "speed": "SPEED BOOST!",
+                             "triple": "TRIPLE SHOT!"}[kind]
+        self.notif_timer = 1.5
+        if kind == "health":
+            p.health = min(PLAYER_HEALTH, p.health + 30)
+        elif kind == "shield":
+            p.shield_active = True;   p.shield_timer   = POWERUP_DURATION
+        elif kind == "autofire":
+            p.autofire_active = True; p.autofire_timer = POWERUP_DURATION
+        elif kind == "speed":
+            p.speed_active = True;    p.speed_timer    = POWERUP_DURATION
+        elif kind == "triple":
+            p.triple_active = True;   p.triple_timer   = POWERUP_DURATION
 
-            # Remove bullets flying off screen
-            elif bullet.bottom > SCREEN_HEIGHT or bullet.top < 0 or bullet.left < 0 or bullet.right > SCREEN_WIDTH:
-                bullet.remove_from_sprite_lists()
+    # -------------------------------------------------
+
+    def spawn_enemy(self):
+        side = random.choice(["top", "bottom", "left", "right"])
+        if side == "top":      x, y = random.randint(0, SCREEN_WIDTH), SCREEN_HEIGHT + 20
+        elif side == "bottom": x, y = random.randint(0, SCREEN_WIDTH), -20
+        elif side == "left":   x, y = -20, random.randint(0, SCREEN_HEIGHT)
+        else:                  x, y = SCREEN_WIDTH + 20, random.randint(0, SCREEN_HEIGHT)
+        self.enemies.append(Enemy(x, y))
+
+    def spawn_shooting_enemy(self):
+        self.shooting_enemies.append(
+            ShootingEnemy(random.randint(0, SCREEN_WIDTH), SCREEN_HEIGHT + 20))
+
+    def spawn_boss(self):
+        self.bosses.append(BossEnemy(SCREEN_WIDTH // 2, SCREEN_HEIGHT + 50))
+
+    # -------------------------------------------------
 
     def on_mouse_motion(self, x, y, dx, dy):
-        """ Called whenever the mouse moves. """
-        self.mouse_x = x
-        self.mouse_y = y
-
-    def on_key_press(self, key, modifiers):
-        """ Called whenever a key is pressed. """
-        if key == arcade.key.W:
-            self.up_pressed = True
-        elif key == arcade.key.S:
-            self.down_pressed = True
-        elif key == arcade.key.A:
-            self.left_pressed = True
-        elif key == arcade.key.D or key == arcade.key.B:
-            self.right_pressed = True
-
-    def on_key_release(self, key, modifiers):
-        """ Called when the user releases a key. """
-        if key == arcade.key.W:
-            self.up_pressed = False
-        elif key == arcade.key.S:
-            self.down_pressed = False
-        elif key == arcade.key.A:
-            self.left_pressed = False
-        elif key == arcade.key.D or key == arcade.key.B:
-            self.right_pressed = False
+        self.mouse_x = x;  self.mouse_y = y
 
     def on_mouse_press(self, x, y, button, modifiers):
-        """ Called whenever the mouse button is clicked. """
-        if button == arcade.MOUSE_BUTTON_LEFT:
-            self.is_shooting = True
+        if self.game_over: return
+        self.mouse_held = True
+        self.mouse_x = x;  self.mouse_y = y
+        # Fire immediately at nearest enemy on click
+        target = self._nearest_enemy()
+        if target:
+            self._shoot_toward(target.center_x, target.center_y)
+        self.fire_timer = 0.0
 
     def on_mouse_release(self, x, y, button, modifiers):
-        """ Called whenever the mouse button is released. """
-        if button == arcade.MOUSE_BUTTON_LEFT:
-            self.is_shooting = False
+        self.mouse_held = False
 
+    def on_key_press(self, key, modifiers):
+        if key == arcade.key.W: self.up    = True
+        if key == arcade.key.S: self.down  = True
+        if key == arcade.key.A: self.left  = True
+        if key == arcade.key.D: self.right = True
+        if key == arcade.key.R and self.game_over: self.setup()
+
+    def on_key_release(self, key, modifiers):
+        if key == arcade.key.W: self.up    = False
+        if key == arcade.key.S: self.down  = False
+        if key == arcade.key.A: self.left  = False
+        if key == arcade.key.D: self.right = False
+
+
+# -------------------------------------------------
+# MAIN
+# -------------------------------------------------
 
 def main():
-    """ Main function to run the game """
-    window = MyGame()
-    window.setup()
+    game = GameWindow()
+    game.setup()
     arcade.run()
-
 
 if __name__ == "__main__":
     main()

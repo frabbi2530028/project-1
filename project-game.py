@@ -197,12 +197,12 @@ class GameWindow(arcade.Window):
         arcade.set_background_color(arcade.color.BLACK)
 
         # Pre-warm texture cache before game starts
-        load_texture_clean("image/player.png",       0.15)
-        load_texture_clean("image/enemy.png",         0.12)
-        load_texture_clean("image/shooting_enemy.png",0.12)
-        load_texture_clean("image/boss.png",          0.2)
-        load_texture_clean("image/bullet.png",        0.1)
-        load_texture_clean("image/enemy_bullet.png",  0.1)
+        load_texture_clean("image/player.png",        0.15)
+        load_texture_clean("image/enemy.png",          0.12)
+        load_texture_clean("image/shooting_enemy.png", 0.12)
+        load_texture_clean("image/boss.png",           0.2)
+        load_texture_clean("image/bullet.png",         0.1)
+        load_texture_clean("image/enemy_bullet.png",   0.1)
         for k in POWERUP_TYPES:
             solid_texture(22, POWERUP_COLORS[k])
 
@@ -213,7 +213,7 @@ class GameWindow(arcade.Window):
         self.txt_notif   = arcade.Text("", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+80,
                                        (255,255,100,255), 28,
                                        anchor_x="center", bold=True)
-        self.txt_hint    = arcade.Text("WASD=Move  Hold Mouse=Auto-aim & Shoot",
+        self.txt_hint    = arcade.Text("WASD=Move  Hold Mouse=Shoot  AUTO powerup=Auto-aim",
                                        10, 10, arcade.color.LIGHT_GRAY, 12)
         self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, SCREEN_HEIGHT//2,
                                        arcade.color.RED, 50, anchor_x="center")
@@ -231,7 +231,7 @@ class GameWindow(arcade.Window):
         self.up = self.down = self.left = self.right = False
         self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0
         self.mouse_held = False
-        self.mouse_x = SCREEN_WIDTH // 2
+        self.mouse_x = SCREEN_WIDTH  // 2
         self.mouse_y = SCREEN_HEIGHT // 2
         self.fire_timer  = 0.0
         self.notif_text  = ""
@@ -331,14 +331,26 @@ class GameWindow(arcade.Window):
         p.update()
         p.update_powerups(delta_time)
 
-        # Firing — always targets nearest enemy when mouse held or autofire active
-        if p.autofire_active or self.mouse_held:
+        # -----------------------------------------------
+        # FIRING LOGIC
+        #
+        # FIX: Bullets now travel in a straight line toward
+        #      the mouse cursor.  Auto-aim (nearest enemy)
+        #      only activates when the AUTO-FIRE powerup is
+        #      active — it was never the default behaviour.
+        # -----------------------------------------------
+        if self.mouse_held or p.autofire_active:
             rate = AUTO_FIRE_RATE if p.autofire_active else NORMAL_FIRE_RATE
             self.fire_timer += delta_time
             if self.fire_timer >= rate:
-                target = self._nearest_enemy()
-                if target:
-                    self._shoot_toward(target.center_x, target.center_y)
+                if p.autofire_active:
+                    # AUTO powerup: aim at nearest enemy
+                    target = self._nearest_enemy()
+                    if target:
+                        self._shoot_toward(target.center_x, target.center_y)
+                else:
+                    # Normal hold-mouse: shoot straight toward the cursor
+                    self._shoot_toward(self.mouse_x, self.mouse_y)
                 self.fire_timer = 0.0
 
         self.bullets.update()
@@ -488,18 +500,23 @@ class GameWindow(arcade.Window):
             p.triple_active = True;   p.triple_timer   = POWERUP_DURATION
 
     # -------------------------------------------------
+    # SPAWN FUNCTIONS
+    #
+    # FIX: All enemy types now spawn exclusively from the
+    #      TOP edge of the screen, so they always descend
+    #      toward the player from above — no more enemies
+    #      appearing from the sides or bottom.
+    # -------------------------------------------------
 
     def spawn_enemy(self):
-        side = random.choice(["top", "bottom", "left", "right"])
-        if side == "top":      x, y = random.randint(0, SCREEN_WIDTH), SCREEN_HEIGHT + 20
-        elif side == "bottom": x, y = random.randint(0, SCREEN_WIDTH), -20
-        elif side == "left":   x, y = -20, random.randint(0, SCREEN_HEIGHT)
-        else:                  x, y = SCREEN_WIDTH + 20, random.randint(0, SCREEN_HEIGHT)
+        x = random.randint(0, SCREEN_WIDTH)
+        y = SCREEN_HEIGHT + 20          # always from the top
         self.enemies.append(Enemy(x, y))
 
     def spawn_shooting_enemy(self):
-        self.shooting_enemies.append(
-            ShootingEnemy(random.randint(0, SCREEN_WIDTH), SCREEN_HEIGHT + 20))
+        x = random.randint(0, SCREEN_WIDTH)
+        y = SCREEN_HEIGHT + 20          # already correct — kept consistent
+        self.shooting_enemies.append(ShootingEnemy(x, y))
 
     def spawn_boss(self):
         self.bosses.append(BossEnemy(SCREEN_WIDTH // 2, SCREEN_HEIGHT + 50))
@@ -513,10 +530,8 @@ class GameWindow(arcade.Window):
         if self.game_over: return
         self.mouse_held = True
         self.mouse_x = x;  self.mouse_y = y
-        # Fire immediately at nearest enemy on click
-        target = self._nearest_enemy()
-        if target:
-            self._shoot_toward(target.center_x, target.center_y)
+        # FIX: fire immediately straight toward the cursor on click
+        self._shoot_toward(x, y)
         self.fire_timer = 0.0
 
     def on_mouse_release(self, x, y, button, modifiers):
@@ -541,8 +556,6 @@ class GameWindow(arcade.Window):
 # -------------------------------------------------
 
 def main():
-
-
     game = GameWindow()
     game.setup()
     arcade.run()

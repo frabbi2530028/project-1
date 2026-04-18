@@ -48,6 +48,59 @@ POWERUP_KEYS = {
 }
 
 # ─────────────────────────────────────────────────────
+#  DIFFICULTY PRESETS
+# ─────────────────────────────────────────────────────
+
+DIFFICULTY_PRESETS = {
+    "easy": {
+        "label":               "EASY",
+        "color":               (55, 220, 100),
+        # enemies
+        "enemy_speed_mult":    0.62,      # much slower
+        "enemy_fire_rate":     2.4,       # seconds between shots (higher = rarer)
+        "spawn_interval_mult": 2.0,       # spawn timer multiplier (higher = fewer spawns)
+        "max_regular_enemies": 7,         # hard cap of basic+shooting on screen
+        # boss
+        "boss_health_mult":    0.75,
+        "boss_speed_mult":     0.70,
+        "boss_normal_rate":    2.2,       # seconds between regular boss shots
+        "boss_special_rate":   6.5,       # seconds between spread attacks
+        "boss_spread_count":   3,         # bullets in spread
+        "boss_spread_speed":   1.0,       # multiplier on bullet speed
+    },
+    "medium": {
+        "label":               "MEDIUM",
+        "color":               (255, 205, 40),
+        "enemy_speed_mult":    1.0,
+        "enemy_fire_rate":     1.1,
+        "spawn_interval_mult": 1.0,
+        "max_regular_enemies": 16,
+        "boss_health_mult":    1.0,
+        "boss_speed_mult":     1.0,
+        "boss_normal_rate":    1.45,
+        "boss_special_rate":   4.8,
+        "boss_spread_count":   5,
+        "boss_spread_speed":   1.0,
+    },
+    "hard": {
+        "label":               "HARD",
+        "color":               (255, 55, 55),
+        "enemy_speed_mult":    1.48,      # extra speed boost
+        "enemy_fire_rate":     0.50,      # fires very fast
+        "spawn_interval_mult": 0.60,      # spawns flood in
+        "max_regular_enemies": 999,       # no cap
+        "boss_health_mult":    1.90,      # much more health
+        "boss_speed_mult":     1.38,      # extra boss speed boost
+        "boss_normal_rate":    0.72,      # rapid regular shots
+        "boss_special_rate":   2.6,       # frequent spreads
+        "boss_spread_count":   5,         # exactly 5 bullets per spread (as requested)
+        "boss_spread_speed":   1.25,      # faster spread bullets
+    },
+}
+
+DIFFICULTY_ORDER = ["easy", "medium", "hard"]
+
+# ─────────────────────────────────────────────────────
 #  GAME STATES
 # ─────────────────────────────────────────────────────
 
@@ -387,10 +440,12 @@ class GameWindow(arcade.Window):
 
         # ── UI/menu state ─────────────────────────────
         self.game_state    = STATE_MENU
-        self.menu_theme    = "dark"
-        self.selected_ship = 0
-        self._menu_btns:  dict = {}
-        self._ship_cards: dict = {}
+        self.menu_theme         = "dark"
+        self.selected_ship      = 0
+        self.selected_difficulty = "medium"   # default
+        self._menu_btns:  dict  = {}
+        self._ship_cards: dict  = {}
+        self._diff_btns:  dict  = {}
 
         # ── HUD text objects ──────────────────────────
         h = SCREEN_HEIGHT
@@ -441,6 +496,8 @@ class GameWindow(arcade.Window):
         self.combo       = 0
         self.combo_timer = 0.0
         self._fullscreen = False
+        self.boss_on_screen = False
+        self._dpreset = DIFFICULTY_PRESETS[self.selected_difficulty]
 
         self._build_starfield()
 
@@ -496,6 +553,10 @@ class GameWindow(arcade.Window):
         self.time_alive   = 0.0
         self.combo        = 0;  self.combo_timer = 0.0
         self.particles    = []
+        self.boss_on_screen = False   # lockout flag: True while any boss lives
+
+        # Cache the active preset so AI code can read it cheaply
+        self._dpreset = DIFFICULTY_PRESETS[self.selected_difficulty]
 
         self.game_state = STATE_PLAYING
         self.set_mouse_visible(False)
@@ -606,7 +667,7 @@ class GameWindow(arcade.Window):
 
         # ── Panel ────────────────────────────────────
         pw = min(int(w*0.80), 650)
-        ph = min(int(h*0.90), 512 if is_pause else 475)
+        ph = min(int(h*0.92), 560 if is_pause else 525)
         pl = (w-pw)//2;  pr = pl+pw
         pb = (h-ph)//2;  ptop = pb+ph
 
@@ -726,10 +787,59 @@ class GameWindow(arcade.Window):
 
         # ── Buttons ──────────────────────────────────
         self._menu_btns = {}
-        btn_top = cy0 - 18
+        self._diff_btns = {}
+        btn_top = cy0 - 12
+
+        # ── Difficulty selector ──────────────────────
+        arcade.draw_text("SELECT DIFFICULTY", w//2, btn_top-2,
+                         T["text"], 12, anchor_x="center", bold=True)
+
+        dw, dh = 118, 38
+        dgap   = 10
+        dtotal = dw*3 + dgap*2
+        dx0    = (w - dtotal)//2
+        diff_by = btn_top - dh - 20   # bottom y of difficulty buttons
+
+        for di, dkey in enumerate(DIFFICULTY_ORDER):
+            preset = DIFFICULTY_PRESETS[dkey]
+            dleft  = dx0 + di*(dw+dgap)
+            dright = dleft + dw
+            dtop   = diff_by + dh
+            sel_d  = (dkey == self.selected_difficulty)
+            hov_d  = self._is_hovering(dleft, dright, diff_by, dtop)
+
+            dc     = preset["color"]
+            if sel_d:
+                fill   = (*dc, 210)
+                border = (*dc, 255)
+                bthk   = 3
+                tcolor = (255, 255, 255)
+            elif hov_d:
+                fill   = (*dc[:3], 80)
+                border = (*dc, 200)
+                bthk   = 2
+                tcolor = (255, 255, 255)
+            else:
+                fill   = (*dc[:3], 30)
+                border = (*dc[:3], 110)
+                bthk   = 1
+                tcolor = (*dc[:3], 200)
+
+            arcade.draw_lrbt_rectangle_filled(dleft, dright, diff_by, dtop, fill)
+            arcade.draw_lrbt_rectangle_outline(dleft, dright, diff_by, dtop, border, bthk)
+            if sel_d:
+                pulse = 0.5+0.5*math.sin(t*4.0)
+                arcade.draw_lrbt_rectangle_outline(
+                    dleft-3, dright+3, diff_by-3, dtop+3, (*dc, int(50+45*pulse)), 2)
+            arcade.draw_text(preset["label"], dleft+dw//2, diff_by+dh//2,
+                             tcolor, 14, anchor_x="center", anchor_y="center", bold=True)
+
+            self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
+
+        play_y = diff_by - 14   # play button sits below difficulty row
 
         bw, bh = 230, 50
-        bx = w//2-bw//2;  by = btn_top-bh
+        bx = w//2-bw//2;  by = play_y - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
         _draw_btn(bx, bw, by, bh,
                   T["btn_hover"] if hov_p else T["btn_fill"],
@@ -841,6 +951,19 @@ class GameWindow(arcade.Window):
 
         self.txt_timer.text  = f"TIME {self.time_alive:05.1f}s"
         self.txt_timer.color = hd;  self.txt_timer.draw()
+
+        # difficulty badge (top-right, below timer)
+        dp = self._dpreset
+        dc = dp["color"]
+        arcade.draw_text(dp["label"], w-18, h-68,
+                         (*dc, 210), 11, anchor_x="right", bold=True)
+
+        # boss lockout indicator
+        if self.boss_on_screen:
+            pulse = int(180 + 75*math.sin(self.bg_time*5))
+            arcade.draw_text("⚠ BOSS FIGHT — LOCKDOWN",
+                             w//2, 36, (255, 80, 80, pulse), 13,
+                             anchor_x="center", bold=True)
 
         active = []
         if p.shield_active:   active.append(f"SHIELD {p.shield_timer:.0f}s")
@@ -1009,24 +1132,38 @@ class GameWindow(arcade.Window):
         for pu in list(self.powerups):
             if pu.top < -10: pu.remove_from_sprite_lists()
 
-        # spawning
-        ei = max(0.10, 1.0 -0.58*min(difficulty,1)-0.16*max(0,difficulty-1)-0.08*max(0,difficulty-2))
-        si = max(0.45, 3.0 -2.30*min(difficulty,1)-0.40*max(0,difficulty-1))
-        bi = max(7.0,  22.0-9.0 *min(difficulty,1)-3.0 *max(0,difficulty-1))
-        eb = 1+int(difficulty*1.8);  sb = 1+int(difficulty*0.9)
+        dp  = self._dpreset                 # shorthand for active difficulty preset
+        sim = dp["spawn_interval_mult"]     # slowdown/speedup factor for spawn timers
 
-        self.enemy_spawn += delta
-        if self.enemy_spawn >= ei:
-            for _ in range(eb): self.spawn_enemy(difficulty)
-            self.enemy_spawn = 0.0
+        # ── Boss lockout: while any boss lives, freeze all other spawns ──────
+        self.boss_on_screen = len(self.bosses) > 0
 
-        self.shooting_spawn += delta
-        if self.shooting_spawn >= si:
-            for _ in range(sb): self.spawn_shooting_enemy(difficulty)
-            self.shooting_spawn = 0.0
+        # base intervals (time-scaled) then multiplied by difficulty preset
+        ei = max(0.10, (1.0 -0.58*min(difficulty,1)-0.16*max(0,difficulty-1)
+                        -0.08*max(0,difficulty-2)) * sim)
+        si = max(0.45, (3.0 -2.30*min(difficulty,1)-0.40*max(0,difficulty-1)) * sim)
+        bi = max(6.0,  (22.0-9.0 *min(difficulty,1)-3.0 *max(0,difficulty-1)) * sim)
+
+        # batch sizes — medium caps at max_regular_enemies
+        reg_on_screen = len(self.enemies)+len(self.shooting_enemies)
+        eb = max(1, min(1+int(difficulty*1.8),
+                        dp["max_regular_enemies"] - reg_on_screen))
+        sb = max(1, min(1+int(difficulty*0.9),
+                        dp["max_regular_enemies"] - reg_on_screen))
+
+        if not self.boss_on_screen:
+            self.enemy_spawn += delta
+            if self.enemy_spawn >= ei and reg_on_screen < dp["max_regular_enemies"]:
+                for _ in range(eb): self.spawn_enemy(difficulty)
+                self.enemy_spawn = 0.0
+
+            self.shooting_spawn += delta
+            if self.shooting_spawn >= si and reg_on_screen < dp["max_regular_enemies"]:
+                for _ in range(sb): self.spawn_shooting_enemy(difficulty)
+                self.shooting_spawn = 0.0
 
         self.boss_spawn += delta
-        if self.boss_spawn >= bi:
+        if self.boss_spawn >= bi and not self.boss_on_screen:
             self.spawn_boss(difficulty);  self.boss_spawn = 0.0
 
         self.update_enemies(delta, difficulty)
@@ -1052,41 +1189,61 @@ class GameWindow(arcade.Window):
             self._spawn_muzzle(px,py,ang)
 
     def update_enemies(self, delta, difficulty):
-        p = self.player
+        p  = self.player
+        dp = self._dpreset          # active difficulty preset
+
+        # ── Basic chasers ─────────────────────────────
         for e in self.enemies:
             a   = math.atan2(p.center_y-e.center_y, p.center_x-e.center_x)
-            spd = ENEMY_SPEED*(1.0+0.22*difficulty)
-            e.center_x += math.cos(a)*spd*delta;  e.center_y += math.sin(a)*spd*delta
+            spd = ENEMY_SPEED * (1.0+0.22*difficulty) * dp["enemy_speed_mult"]
+            e.center_x += math.cos(a)*spd*delta
+            e.center_y += math.sin(a)*spd*delta
             e.angle = math.degrees(a)-90
 
+        # ── Shooting enemies ─────────────────────────
         for e in self.shooting_enemies:
             a   = math.atan2(p.center_y-e.center_y, p.center_x-e.center_x)
-            spd = ENEMY_SPEED*(0.9+0.22*difficulty)
-            e.center_x += math.cos(a)*spd*delta;  e.center_y += math.sin(a)*spd*delta
+            spd = ENEMY_SPEED * (0.9+0.22*difficulty) * dp["enemy_speed_mult"]
+            e.center_x += math.cos(a)*spd*delta
+            e.center_y += math.sin(a)*spd*delta
             e.angle = math.degrees(a)-90
             e.shoot_timer += delta
-            if e.shoot_timer >= max(0.30, 1.1-0.30*difficulty):
-                self.enemy_bullets.append(EnemyBullet(e.center_x,e.center_y,p.center_x,p.center_y))
+            # preset fire_rate overrides the time-based formula
+            if e.shoot_timer >= dp["enemy_fire_rate"]:
+                self.enemy_bullets.append(
+                    EnemyBullet(e.center_x, e.center_y, p.center_x, p.center_y))
                 e.shoot_timer = 0.0
 
+        # ── Boss ────────────────────────────────────
         for boss in self.bosses:
             a   = math.atan2(p.center_y-boss.center_y, p.center_x-boss.center_x)
-            spd = BOSS_SPEED*(0.95+0.15*difficulty)
-            boss.center_x += math.cos(a)*spd*delta;  boss.center_y += math.sin(a)*spd*delta
+            spd = BOSS_SPEED * (0.95+0.15*difficulty) * dp["boss_speed_mult"]
+            boss.center_x += math.cos(a)*spd*delta
+            boss.center_y += math.sin(a)*spd*delta
             boss.angle = math.degrees(a)-90
-            boss.normal_timer += delta;  boss.special_timer += delta
-            if boss.normal_timer >= max(0.6,1.45-0.28*difficulty):
-                self.enemy_bullets.append(EnemyBullet(boss.center_x,boss.center_y,p.center_x,p.center_y))
+
+            boss.normal_timer  += delta
+            boss.special_timer += delta
+
+            # regular single shot
+            if boss.normal_timer >= dp["boss_normal_rate"]:
+                self.enemy_bullets.append(
+                    EnemyBullet(boss.center_x, boss.center_y, p.center_x, p.center_y))
                 boss.normal_timer = 0.0
-            if boss.special_timer >= max(2.0,4.8-0.9*difficulty):
-                base = math.atan2(p.center_y-boss.center_y, p.center_x-boss.center_x)
-                nn   = 5+int(difficulty)
-                for i in range(-(nn//2), nn//2+1):
+
+            # spread attack — always exactly dp["boss_spread_count"] bullets
+            if boss.special_timer >= dp["boss_special_rate"]:
+                base  = math.atan2(p.center_y-boss.center_y, p.center_x-boss.center_x)
+                nn    = dp["boss_spread_count"]
+                step  = 0.26
+                half  = nn // 2
+                for i in range(-half, half+1):
                     self.enemy_bullets.append(EnemyBullet(
                         boss.center_x, boss.center_y,
-                        angle_rad=base+i*0.26,
-                        speed=ENEMY_BULLET_SPEED*(1+0.05*difficulty)))
-                self._burst(boss.center_x,boss.center_y,16,(255,100,100),60,170,2,3.8,.15,.35)
+                        angle_rad = base + i*step,
+                        speed     = ENEMY_BULLET_SPEED * dp["boss_spread_speed"]))
+                self._burst(boss.center_x, boss.center_y,
+                            16, (255,100,100), 60, 170, 2, 3.8, .15, .35)
                 boss.special_timer = 0.0
 
     # ──────────────────────────────────────────────────
@@ -1214,10 +1371,12 @@ class GameWindow(arcade.Window):
             ShootingEnemy(random.randint(50,self.width-50), self.height+30, hp))
 
     def spawn_boss(self, difficulty=0.0):
-        hp = int(BOSS_HEALTH*(1+0.45*difficulty))
+        dp = self._dpreset
+        hp = int(BOSS_HEALTH * (1 + 0.45*difficulty) * dp["boss_health_mult"])
         self.bosses.append(BossEnemy(random.randint(140,self.width-140), self.height+55, hp))
-        self.notif_text  = "BOSS INCOMING!"
-        self.notif_color = (255,120,120);  self.notif_timer = 1.6
+        dlabel = dp["label"]
+        self.notif_text  = f"BOSS INCOMING!  [{dlabel}]"
+        self.notif_color = (255,120,120);  self.notif_timer = 1.8
 
     # ══════════════════════════════════════════════════
     #  INPUT
@@ -1231,6 +1390,13 @@ class GameWindow(arcade.Window):
             return
 
         if self.game_state in (STATE_MENU, STATE_PAUSED):
+            # difficulty button click
+            for dkey, rect in self._diff_btns.items():
+                l, r, b, t = rect
+                if l<=x<=r and b<=y<=t:
+                    self.selected_difficulty = dkey
+                    self._dpreset = DIFFICULTY_PRESETS[dkey]
+                    return
             # ship card selection
             for i, rect in self._ship_cards.items():
                 l, r, b, t = rect

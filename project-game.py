@@ -39,6 +39,10 @@ CONTACT_DAMAGE_COOLDOWN = 0.35
 # Maximum stored units per power-up type
 MAX_POWERUP_STORAGE = 10
 
+# Auto-trigger thresholds
+AUTO_FIRE_ENEMY_THRESHOLD = 5          # enemies on screen to trigger autofire
+AUTO_SHIELD_HEALTH_RATIO  = 0.50       # health fraction to trigger shield
+
 # Key bindings: 1=speed  2=shield  3=autofire  4=triple
 POWERUP_KEYS = {
     arcade.key.KEY_1: "speed",
@@ -46,6 +50,10 @@ POWERUP_KEYS = {
     arcade.key.KEY_3: "autofire",
     arcade.key.KEY_4: "triple",
 }
+
+# Play-button geometry (used for pause overlay)
+PLAY_BTN_W  = 180
+PLAY_BTN_H  = 52
 
 # -------------------------------------------------
 # TEXTURE CACHE
@@ -266,25 +274,35 @@ class GameWindow(arcade.Window):
         for k in POWERUP_TYPES:
             solid_texture(22, POWERUP_COLORS[k])
 
-        self.txt_score   = arcade.Text("SCORE 0", 24, SCREEN_HEIGHT-38,  arcade.color.WHITE, 18, bold=True)
-        self.txt_health  = arcade.Text("HP 100",  24, SCREEN_HEIGHT-64,  arcade.color.WHITE, 15)
-        self.txt_active  = arcade.Text("",        24, SCREEN_HEIGHT-88,  arcade.color.YELLOW, 12)
-        self.txt_inv     = arcade.Text("",        24, SCREEN_HEIGHT-106, (200, 200, 200), 11)
-        self.txt_notif   = arcade.Text("", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+78,
-                                        (255,255,110,255), 28, anchor_x="center", bold=True)
+        # ---- HUD texts (positions fixed in on_resize / _reposition_hud) ----
+        # Score sits at the very top of the panel
+        self.txt_score   = arcade.Text("SCORE 0", 24, SCREEN_HEIGHT - 32,  arcade.color.WHITE, 18, bold=True)
+        # HP label rendered just above the bar; bar is h-52 → h-66
+        self.txt_health  = arcade.Text("HP 100",  24, SCREEN_HEIGHT - 50,  arcade.color.WHITE, 13)
+        self.txt_active  = arcade.Text("",        24, SCREEN_HEIGHT - 84,  arcade.color.YELLOW, 12)
+        self.txt_inv     = arcade.Text("",        24, SCREEN_HEIGHT - 102, (200, 200, 200), 11)
+        self.txt_notif   = arcade.Text("", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 78,
+                                        (255, 255, 110, 255), 28, anchor_x="center", bold=True)
         self.txt_hint    = arcade.Text(
-            "WASD Move  LMB Shoot  [1]Speed [2]Shield [3]Auto [4]Triple  F11 Fullscreen  R Restart",
+            "WASD Move  LMB Shoot  [1]Speed [2]Shield [3]Auto [4]Triple  "
+            "H Health-bar  F11 Fullscreen  R Restart  ESC Pause",
             18, 12, (170, 188, 225), 11)
-        self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+10,
-                                        (255,90,90), 52, anchor_x="center")
-        self.txt_score2  = arcade.Text("SCORE 0",   SCREEN_WIDTH//2, SCREEN_HEIGHT//2-48,
+        self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 10,
+                                        (255, 90, 90), 52, anchor_x="center")
+        self.txt_score2  = arcade.Text("SCORE 0",   SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 48,
                                         arcade.color.WHITE, 28, anchor_x="center")
-        self.txt_restart = arcade.Text("Press R to Restart", SCREEN_WIDTH//2, SCREEN_HEIGHT//2-102,
+        self.txt_restart = arcade.Text("Press R to Restart", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 102,
                                         arcade.color.WHITE, 19, anchor_x="center")
-        self.txt_combo   = arcade.Text("", SCREEN_WIDTH-18, SCREEN_HEIGHT-28,
-                                        (255,220,95), 18, anchor_x="right", bold=True)
-        self.txt_timer   = arcade.Text("", SCREEN_WIDTH-18, SCREEN_HEIGHT-52,
-                                        (180,210,255), 14, anchor_x="right")
+        self.txt_combo   = arcade.Text("", SCREEN_WIDTH - 18, SCREEN_HEIGHT - 28,
+                                        (255, 220, 95), 18, anchor_x="right", bold=True)
+        self.txt_timer   = arcade.Text("", SCREEN_WIDTH - 18, SCREEN_HEIGHT - 52,
+                                        (180, 210, 255), 14, anchor_x="right")
+
+        # Pause overlay texts
+        self.txt_paused   = arcade.Text("PAUSED", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 54,
+                                         (255, 255, 255), 48, anchor_x="center", bold=True)
+        self.txt_play_btn = arcade.Text("▶  RESUME", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 4,
+                                         (255, 255, 255), 22, anchor_x="center", bold=True)
 
         self.player = self.player_list = None
         self.enemies = self.shooting_enemies = self.bosses = None
@@ -292,6 +310,8 @@ class GameWindow(arcade.Window):
 
         self.score       = 0
         self.game_over   = False
+        self.paused      = False          # ← NEW
+        self.show_health = True           # ← NEW: toggle with H key
         self.up = self.down = self.left_key = self.right_key = False
         self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0.0
         self.mouse_held  = False
@@ -312,21 +332,33 @@ class GameWindow(arcade.Window):
         self._fullscreen = False
 
     # --------------------------------------------------
+    # Helper: keep all HUD positions consistent
+    # --------------------------------------------------
 
-    def on_resize(self, width, height):
-        super().on_resize(width, height)
-        w, h = width, height
-        self.txt_score.x   = 24;       self.txt_score.y   = h - 38
-        self.txt_health.x  = 24;       self.txt_health.y  = h - 64
-        self.txt_active.x  = 24;       self.txt_active.y  = h - 88
-        self.txt_inv.x     = 24;       self.txt_inv.y     = h - 106
+    def _reposition_hud(self):
+        w, h = self.width, self.height
+        # Top panel texts
+        self.txt_score.x   = 24;       self.txt_score.y   = h - 32
+        self.txt_health.x  = 24;       self.txt_health.y  = h - 50   # above HP bar (bar = h-52→h-66)
+        self.txt_active.x  = 24;       self.txt_active.y  = h - 84
+        self.txt_inv.x     = 24;       self.txt_inv.y     = h - 102
+        # Notification + hints
         self.txt_notif.x   = w // 2;   self.txt_notif.y   = h // 2 + 78
         self.txt_hint.x    = 18;       self.txt_hint.y    = 12
+        # Game-over screen
         self.txt_over.x    = w // 2;   self.txt_over.y    = h // 2 + 10
         self.txt_score2.x  = w // 2;   self.txt_score2.y  = h // 2 - 48
         self.txt_restart.x = w // 2;   self.txt_restart.y = h // 2 - 102
+        # Corner info
         self.txt_combo.x   = w - 18;   self.txt_combo.y   = h - 28
         self.txt_timer.x   = w - 18;   self.txt_timer.y   = h - 52
+        # Pause overlay
+        self.txt_paused.x  = w // 2;   self.txt_paused.y  = h // 2 + 54
+        self.txt_play_btn.x = w // 2;  self.txt_play_btn.y = h // 2 - 4
+
+    def on_resize(self, width, height):
+        super().on_resize(width, height)
+        self._reposition_hud()
         if self.stars:
             self._build_starfield()
 
@@ -348,6 +380,8 @@ class GameWindow(arcade.Window):
 
         self.score       = 0
         self.game_over   = False
+        self.paused      = False
+        self.show_health = True
         self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0.0
         self.mouse_held  = False
         self.fire_timer  = 0.0
@@ -402,8 +436,8 @@ class GameWindow(arcade.Window):
             offset = random.uniform(-0.25, 0.25)
             spd    = random.uniform(120, 280)
             self._add_particle(
-                x=x + math.cos(angle_rad)*random.uniform(6,14),
-                y=y + math.sin(angle_rad)*random.uniform(6,14),
+                x=x + math.cos(angle_rad)*random.uniform(6, 14),
+                y=y + math.sin(angle_rad)*random.uniform(6, 14),
                 vx=math.cos(angle_rad+offset)*spd,
                 vy=math.sin(angle_rad+offset)*spd,
                 size=random.uniform(1.4, 2.4), life=random.uniform(0.08, 0.18),
@@ -415,29 +449,29 @@ class GameWindow(arcade.Window):
         w, h = self.width, self.height
         arcade.draw_lrbt_rectangle_filled(0, w, 0, h, BG_COLOR)
         pulse = (math.sin(self.bg_time * 0.7) + 1.0) * 0.5
-        arcade.draw_circle_filled(w*0.19, h*0.83, 250+20*pulse,           (40,  85,190, 42))
-        arcade.draw_circle_filled(w*0.84, h*0.28, 280+30*(1.0-pulse),     (150, 45,170, 34))
-        arcade.draw_circle_filled(w*0.53, h*1.07, 280,                    (30, 160,200, 18))
+        arcade.draw_circle_filled(w*0.19, h*0.83, 250+20*pulse,           (40,  85, 190, 42))
+        arcade.draw_circle_filled(w*0.84, h*0.28, 280+30*(1.0-pulse),     (150, 45, 170, 34))
+        arcade.draw_circle_filled(w*0.53, h*1.07, 280,                    (30, 160, 200, 18))
         offset = (self.bg_time * 14.0) % 28.0
         for y in range(-30, h+30, 28):
             yy = y + offset
-            arcade.draw_line(0, yy, w, yy-18, (30,46,78,26), 1)
+            arcade.draw_line(0, yy, w, yy-18, (30, 46, 78, 26), 1)
         for star in self.stars:
             twinkle = 0.55 + 0.45*math.sin(self.bg_time*star["twinkle"]+star["phase"])
             alpha   = max(20, min(255, int(star["alpha"]*twinkle)))
-            arcade.draw_circle_filled(star["x"], star["y"], star["size"], (205,228,255,alpha))
+            arcade.draw_circle_filled(star["x"], star["y"], star["size"], (205, 228, 255, alpha))
 
     def _draw_entity_glows(self):
         p = self.player
-        base_color = (255,230,90,82) if p.speed_active else (95,200,255,68)
+        base_color = (255, 230, 90, 82) if p.speed_active else (95, 200, 255, 68)
         arcade.draw_circle_filled(p.center_x, p.center_y, 34, base_color)
         for e in self.enemies:
-            arcade.draw_circle_filled(e.center_x, e.center_y, 24, (255,92,92,45))
+            arcade.draw_circle_filled(e.center_x, e.center_y, 24, (255, 92, 92, 45))
         for e in self.shooting_enemies:
-            arcade.draw_circle_filled(e.center_x, e.center_y, 26, (255,130,90,55))
+            arcade.draw_circle_filled(e.center_x, e.center_y, 26, (255, 130, 90, 55))
         for b in self.bosses:
             r = 54 + 8*math.sin(self.bg_time*2.5)
-            arcade.draw_circle_filled(b.center_x, b.center_y, r, (255,70,70,55))
+            arcade.draw_circle_filled(b.center_x, b.center_y, r, (255, 70, 70, 55))
 
     def _draw_particles(self):
         for pt in self.particles:
@@ -445,7 +479,7 @@ class GameWindow(arcade.Window):
             a   = int(255 * lr)
             r   = max(0.5, pt["size"]*(0.45+0.55*lr))
             c   = pt["color"]
-            arcade.draw_circle_filled(pt["x"], pt["y"], r, (c[0],c[1],c[2],a))
+            arcade.draw_circle_filled(pt["x"], pt["y"], r, (c[0], c[1], c[2], a))
 
     def _draw_enemy_health_bars(self):
         for sl in [self.enemies, self.shooting_enemies, self.bosses]:
@@ -457,35 +491,67 @@ class GameWindow(arcade.Window):
                 right  = e.center_x + e.width*0.45
                 top    = e.top + 8
                 bottom = top - 5
-                arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, (35,25,25,220))
+                arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, (35, 25, 25, 220))
                 arcade.draw_lrbt_rectangle_filled(left, left+(right-left)*ratio,
-                                                   bottom, top, (255,100,90,235))
+                                                   bottom, top, (255, 100, 90, 235))
+
+    # --------------------------------------------------
+    # HUD  –  fixed layout so score and health bar never overlap
+    #
+    #   Panel:   y  h-10  →  h-118
+    #   Score:   y  h-32   (size 18 bold, ~18 px tall → occupies h-32 to h-14)
+    #   HP label y  h-50   (size 13, sits just above the bar)
+    #   HP bar:  lrbt  24…270,  h-66 → h-52  (14 px tall, 16 px gap below score)
+    #   Active:  y  h-84
+    #   Inv:     y  h-102
+    # --------------------------------------------------
 
     def _draw_hud(self):
         w, h = self.width, self.height
         p    = self.player
 
-        # Panel
-        arcade.draw_lrbt_rectangle_filled(12, 400, h-120, h-10, (9,18,42,176))
-        arcade.draw_lrbt_rectangle_outline(12, 400, h-120, h-10, (95,125,185,180), 2)
+        # Panel background
+        arcade.draw_lrbt_rectangle_filled(12, 400, h - 118, h - 10, (9, 18, 42, 176))
+        arcade.draw_lrbt_rectangle_outline(12, 400, h - 118, h - 10, (95, 125, 185, 180), 2)
 
-        # HP bar
-        hr = max(0.0, p.health / p.max_health)
-        hc = (95,230,120) if hr > 0.45 else (255,180,80) if hr > 0.2 else (255,90,90)
-        arcade.draw_lrbt_rectangle_filled(24, 270, h-78, h-58, (28,35,55,220))
-        arcade.draw_lrbt_rectangle_filled(24, 24+246*hr, h-78, h-58, hc)
+        # Score
+        self.txt_score.text = f"SCORE {self.score}"
+        self.txt_score.draw()
 
-        self.txt_score.text  = f"SCORE {self.score}"
-        self.txt_health.text = f"HP {int(max(0, p.health))}"
-        self.txt_timer.text  = f"TIME {self.time_alive:05.1f}s"
+        # HP bar + label (only when show_health is True)
+        if self.show_health:
+            hr = max(0.0, p.health / p.max_health)
+            hc = (95, 230, 120) if hr > 0.45 else (255, 180, 80) if hr > 0.2 else (255, 90, 90)
+            bar_bottom = h - 66
+            bar_top    = h - 52
+            # Trough
+            arcade.draw_lrbt_rectangle_filled(24, 270, bar_bottom, bar_top, (28, 35, 55, 220))
+            # Fill
+            arcade.draw_lrbt_rectangle_filled(24, 24 + 246 * hr, bar_bottom, bar_top, hc)
+            # Border
+            arcade.draw_lrbt_rectangle_outline(24, 270, bar_bottom, bar_top, (95, 125, 185, 140), 1)
+            # Label (drawn just above the bar so it never touches the score)
+            self.txt_health.text = f"HP  {int(max(0, p.health))} / {p.max_health}"
+            self.txt_health.draw()
+        else:
+            # Tiny indicator so the player knows the bar is hidden
+            arcade.draw_text("HP hidden  [H]", 24, h - 66, (140, 160, 200, 160), 11)
 
+        # Timer (top-right corner)
+        self.txt_timer.text = f"TIME {self.time_alive:05.1f}s"
+        self.txt_timer.draw()
+
+        # Active power-ups
         active = []
         if p.shield_active:   active.append(f"SHIELD {p.shield_timer:.0f}s")
         if p.autofire_active: active.append(f"AUTO {p.autofire_timer:.0f}s")
         if p.speed_active:    active.append(f"SPEED {p.speed_timer:.0f}s")
         if p.triple_active:   active.append(f"TRIPLE {p.triple_timer:.0f}s")
         self.txt_active.text = ("ACTIVE: " + "   ".join(active)) if active else ""
+        if active:
+            self.txt_active.draw()
 
+        # Inventory
         inv = p.inventory
         self.txt_inv.text = (
             f"[1]SPD:{inv['speed']}/{MAX_POWERUP_STORAGE}  "
@@ -493,18 +559,14 @@ class GameWindow(arcade.Window):
             f"[3]AUT:{inv['autofire']}/{MAX_POWERUP_STORAGE}  "
             f"[4]TRP:{inv['triple']}/{MAX_POWERUP_STORAGE}"
         )
-
-        self.txt_score.draw()
-        self.txt_health.draw()
-        self.txt_timer.draw()
         self.txt_inv.draw()
-        if active:
-            self.txt_active.draw()
 
+        # Combo
         if self.combo > 1 and self.combo_timer > 0:
             self.txt_combo.text = f"x{self.combo} COMBO"
             self.txt_combo.draw()
 
+        # Notification
         if self.notif_timer > 0:
             alpha = min(255, int(self.notif_timer * 280))
             self.txt_notif.text  = self.notif_text
@@ -516,11 +578,44 @@ class GameWindow(arcade.Window):
 
     def _draw_crosshair(self):
         x, y = self.mouse_x, self.mouse_y
-        arcade.draw_circle_outline(x, y, 13, (130,220,255,185), 2)
-        arcade.draw_line(x-20,y, x-8, y,  (130,220,255,185), 2)
-        arcade.draw_line(x+8, y, x+20,y,  (130,220,255,185), 2)
-        arcade.draw_line(x,y-20, x,y-8,   (130,220,255,185), 2)
-        arcade.draw_line(x,y+8,  x,y+20,  (130,220,255,185), 2)
+        arcade.draw_circle_outline(x, y, 13, (130, 220, 255, 185), 2)
+        arcade.draw_line(x-20, y,  x-8,  y,  (130, 220, 255, 185), 2)
+        arcade.draw_line(x+8,  y,  x+20, y,  (130, 220, 255, 185), 2)
+        arcade.draw_line(x,  y-20, x,  y-8,  (130, 220, 255, 185), 2)
+        arcade.draw_line(x,  y+8,  x,  y+20, (130, 220, 255, 185), 2)
+
+    # --------------------------------------------------
+    # Pause overlay with clickable Play button
+    # --------------------------------------------------
+
+    def _draw_pause_overlay(self):
+        w, h = self.width, self.height
+        # Dark vignette
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3, 6, 18, 175))
+
+        # "PAUSED" title
+        self.txt_paused.draw()
+
+        # Play button
+        bx = w // 2
+        by = h // 2 - 4
+        bw = PLAY_BTN_W // 2
+        bh = PLAY_BTN_H // 2
+        arcade.draw_lrbt_rectangle_filled(bx - bw, bx + bw, by - bh, by + bh, (30, 80, 160, 230))
+        arcade.draw_lrbt_rectangle_outline(bx - bw, bx + bw, by - bh, by + bh, (120, 190, 255, 240), 2)
+        self.txt_play_btn.draw()
+
+        # Sub-hint
+        arcade.draw_text("or press ESC again to resume", w // 2, h // 2 - bh - 24,
+                         (170, 190, 225, 200), 13, anchor_x="center")
+
+    def _play_btn_rect(self):
+        """Return (left, right, bottom, top) of the Play button in screen coords."""
+        bx = self.width  // 2
+        by = self.height // 2 - 4
+        bw = PLAY_BTN_W // 2
+        bh = PLAY_BTN_H // 2
+        return bx - bw, bx + bw, by - bh, by + bh
 
     # --------------------------------------------------
 
@@ -539,18 +634,18 @@ class GameWindow(arcade.Window):
         self.enemy_bullets.draw()
 
         for b in self.bullets:
-            arcade.draw_circle_filled(b.center_x, b.center_y, 6, (255,200,110,55))
+            arcade.draw_circle_filled(b.center_x, b.center_y, 6, (255, 200, 110, 55))
         for b in self.enemy_bullets:
-            arcade.draw_circle_filled(b.center_x, b.center_y, 7, (255, 85, 85,55))
+            arcade.draw_circle_filled(b.center_x, b.center_y, 7, (255, 85, 85, 55))
 
         if self.player.shield_active:
             ring_r = 38 + 2.5*math.sin(self.bg_time*9.0)
             arcade.draw_circle_outline(self.player.center_x, self.player.center_y,
-                                        ring_r, (90,235,255,230), 3)
+                                        ring_r, (90, 235, 255, 230), 3)
 
         for pu in self.powerups:
             arcade.draw_text(POWERUP_LABELS[pu.kind],
-                             pu.center_x, pu.center_y-8,
+                             pu.center_x, pu.center_y - 8,
                              arcade.color.WHITE, 9, anchor_x="center")
 
         self._draw_enemy_health_bars()
@@ -558,16 +653,20 @@ class GameWindow(arcade.Window):
         self._draw_hud()
 
         if self.damage_flash > 0:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (255,65,65, int(170*self.damage_flash)))
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (255, 65, 65, int(170 * self.damage_flash)))
 
         self._draw_crosshair()
 
         if self.game_over:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3,6,18,165))
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3, 6, 18, 165))
             self.txt_score2.text = f"SCORE {self.score}"
             self.txt_over.draw()
             self.txt_score2.draw()
             self.txt_restart.draw()
+
+        # Pause overlay drawn last so it sits on top of everything
+        if self.paused and not self.game_over:
+            self._draw_pause_overlay()
 
     # --------------------------------------------------
 
@@ -594,11 +693,45 @@ class GameWindow(arcade.Window):
         self.particles = alive
 
     # --------------------------------------------------
+    # Auto-trigger helpers
+    # --------------------------------------------------
+
+    def _check_auto_triggers(self):
+        """
+        1) If >AUTO_FIRE_ENEMY_THRESHOLD enemies are on screen and autofire is
+           stored (and not already active), consume one charge and activate.
+        2) If player health <= 50 % and shield is stored (and not already active),
+           consume one charge and activate.
+        """
+        p = self.player
+        enemy_count = len(self.enemies) + len(self.shooting_enemies) + len(self.bosses)
+
+        if (not p.autofire_active
+                and enemy_count > AUTO_FIRE_ENEMY_THRESHOLD
+                and p.inventory.get("autofire", 0) > 0):
+            p.inventory["autofire"] -= 1
+            self._activate_powerup("autofire")
+            # Override notification to make it clear it was auto-triggered
+            self.notif_text  = f"AUTO-FIRE TRIGGERED  ({enemy_count} enemies)"
+            self.notif_color = (255, 130, 255)
+            self.notif_timer = 1.6
+
+        if (not p.shield_active
+                and (p.health / p.max_health) <= AUTO_SHIELD_HEALTH_RATIO
+                and p.inventory.get("shield", 0) > 0):
+            p.inventory["shield"] -= 1
+            self._activate_powerup("shield")
+            self.notif_text  = "SHIELD AUTO-ACTIVATED  (low HP)"
+            self.notif_color = (90, 220, 255)
+            self.notif_timer = 1.6
+
+    # --------------------------------------------------
 
     def on_update(self, delta_time):
         delta = min(0.05, delta_time)
         self.bg_time += delta
 
+        # Starfield + particles keep moving even when paused (cosmetic only)
         self._update_starfield(delta)
         self._update_particles(delta)
 
@@ -613,13 +746,14 @@ class GameWindow(arcade.Window):
         elif self.combo > 0:
             self.combo = 0
 
-        if self.game_over:
+        # ── Early exit if paused or game over ──
+        if self.paused or self.game_over:
             return
 
         self.time_alive += delta
         p = self.player
 
-        # ---- difficulty: keeps climbing; soft cap at 3.0 (~4.5 min) ----
+        # ---- difficulty ----
         difficulty = min(3.0, self.time_alive / 90.0)
 
         # ---- player movement ----
@@ -640,11 +774,11 @@ class GameWindow(arcade.Window):
             ang = math.atan2(-p.change_y, -p.change_x) + random.uniform(-0.5, 0.5)
             spd = random.uniform(80, 160)
             self._add_particle(
-                x=p.center_x+random.uniform(-4,4),
-                y=p.center_y-8+random.uniform(-3,3),
+                x=p.center_x+random.uniform(-4, 4),
+                y=p.center_y-8+random.uniform(-3, 3),
                 vx=math.cos(ang)*spd, vy=math.sin(ang)*spd,
-                size=random.uniform(1.4,2.8), life=random.uniform(0.12,0.24),
-                color=(120,205,255), drag=0.9)
+                size=random.uniform(1.4, 2.8), life=random.uniform(0.12, 0.24),
+                color=(120, 205, 255), drag=0.9)
 
         # Firing
         firing = self.mouse_held or p.autofire_active
@@ -676,14 +810,11 @@ class GameWindow(arcade.Window):
             if pu.top < -10:
                 pu.remove_from_sprite_lists()
 
-        # ---- spawn intervals (scale with difficulty) ----
-        # d=0→1: enemy 1.0→0.42, shooting 3.0→0.7, boss 22→13
-        # d=1→2: even faster; d=2→3: swarming
+        # ---- spawn intervals ----
         enemy_interval    = max(0.10, 1.0  - 0.58*min(difficulty,1) - 0.16*max(0,difficulty-1) - 0.08*max(0,difficulty-2))
         shooting_interval = max(0.45, 3.0  - 2.30*min(difficulty,1) - 0.40*max(0,difficulty-1))
         boss_interval     = max(7.0,  22.0 - 9.0 *min(difficulty,1) - 3.0 *max(0,difficulty-1))
 
-        # batch size increases too
         enemy_batch    = 1 + int(difficulty * 1.8)
         shooting_batch = 1 + int(difficulty * 0.9)
 
@@ -706,6 +837,9 @@ class GameWindow(arcade.Window):
 
         self.update_enemies(delta, difficulty)
         self.check_collisions()
+
+        # ---- auto-trigger power-ups ----
+        self._check_auto_triggers()
 
     # --------------------------------------------------
 
@@ -773,7 +907,7 @@ class GameWindow(arcade.Window):
                         boss.center_x, boss.center_y,
                         angle_rad=base+i*step,
                         speed=ENEMY_BULLET_SPEED*(1.0+0.05*difficulty)))
-                self._burst(boss.center_x, boss.center_y, 16, (255,100,100), 60,170, 2.0,3.8, 0.15,0.35)
+                self._burst(boss.center_x, boss.center_y, 16, (255,100,100), 60, 170, 2.0, 3.8, 0.15, 0.35)
                 boss.special_timer = 0.0
 
     # --------------------------------------------------
@@ -788,7 +922,7 @@ class GameWindow(arcade.Window):
                 continue
             enemy = hits[0]
             enemy.health -= 20
-            self._burst(bullet.center_x, bullet.center_y, 6,(255,220,140),70,190,1.2,2.2,0.08,0.2)
+            self._burst(bullet.center_x, bullet.center_y, 6, (255,220,140), 70, 190, 1.2, 2.2, 0.08, 0.2)
             bullet.remove_from_sprite_lists()
             if enemy.health <= 0:
                 is_boss     = isinstance(enemy, BossEnemy)
@@ -796,9 +930,9 @@ class GameWindow(arcade.Window):
                 self.combo += 1; self.combo_timer = 2.0
                 self._try_drop_powerup(enemy.center_x, enemy.center_y, is_boss)
                 if is_boss:
-                    self._burst(enemy.center_x, enemy.center_y, 64,(255,100,80),70,320,2.3,4.8,0.25,0.65)
+                    self._burst(enemy.center_x, enemy.center_y, 64, (255,100,80), 70, 320, 2.3, 4.8, 0.25, 0.65)
                 else:
-                    self._burst(enemy.center_x, enemy.center_y, 24,(255,145,90),55,240,1.7,3.5,0.2,0.45)
+                    self._burst(enemy.center_x, enemy.center_y, 24, (255,145,90), 55, 240, 1.7, 3.5, 0.2, 0.45)
                 enemy.remove_from_sprite_lists()
 
         for b in list(self.enemy_bullets):
@@ -807,38 +941,37 @@ class GameWindow(arcade.Window):
             hx, hy = b.center_x, b.center_y
             b.remove_from_sprite_lists()
             if p.shield_active:
-                self._burst(hx,hy,10,(110,230,255),80,220,1.2,2.8,0.1,0.24)
+                self._burst(hx, hy, 10, (110,230,255), 80, 220, 1.2, 2.8, 0.1, 0.24)
             else:
                 p.health -= 10; self.combo = 0
                 self.damage_flash = max(self.damage_flash, 0.95)
-                self._burst(hx,hy,18,(255,95,95),90,260,1.6,3.4,0.15,0.32)
+                self._burst(hx, hy, 18, (255,95,95), 90, 260, 1.6, 3.4, 0.15, 0.32)
 
         touching = arcade.check_for_collision_with_lists(
             p, [self.enemies, self.shooting_enemies, self.bosses])
         if touching and self.contact_damage_timer <= 0:
             self.contact_damage_timer = CONTACT_DAMAGE_COOLDOWN
             if p.shield_active:
-                self._burst(p.center_x,p.center_y,14,(100,230,255),70,180,1.6,3.2,0.1,0.24)
+                self._burst(p.center_x, p.center_y, 14, (100,230,255), 70, 180, 1.6, 3.2, 0.1, 0.24)
             else:
                 p.health -= CONTACT_DAMAGE; self.combo = 0
                 self.damage_flash = max(self.damage_flash, 1.0)
-                self._burst(p.center_x,p.center_y,24,(255,80,80),90,260,1.8,4.0,0.16,0.36)
+                self._burst(p.center_x, p.center_y, 24, (255,80,80), 90, 260, 1.8, 4.0, 0.16, 0.36)
 
         for pu in list(self.powerups):
             if arcade.check_for_collision(pu, p):
                 self._collect_powerup(pu.kind)
                 c = POWERUP_COLORS[pu.kind]
-                self._burst(pu.center_x,pu.center_y,20,(c[0],c[1],c[2]),70,240,1.4,3.0,0.12,0.32)
+                self._burst(pu.center_x, pu.center_y, 20, (c[0],c[1],c[2]), 70, 240, 1.4, 3.0, 0.12, 0.32)
                 pu.remove_from_sprite_lists()
 
         if p.health <= 0 and not self.game_over:
             self.game_over  = True; self.mouse_held = False
-            self._burst(p.center_x,p.center_y,85,(255,75,75),80,360,2.0,5.0,0.25,0.75)
+            self._burst(p.center_x, p.center_y, 85, (255,75,75), 80, 360, 2.0, 5.0, 0.25, 0.75)
 
     # --------------------------------------------------
 
     def _collect_powerup(self, kind: str):
-        """Store power-up in inventory; apply immediately if slot is full or kind==health."""
         p = self.player
         if kind == "health":
             p.health = min(PLAYER_HEALTH, p.health + 30)
@@ -852,15 +985,14 @@ class GameWindow(arcade.Window):
             self.notif_color = _notif_color(kind)
             self.notif_timer = 1.0
         else:
-            # Storage full → activate immediately
             self._activate_powerup(kind, immediate=True)
 
     def _activate_powerup(self, kind: str, immediate: bool = False):
         p = self.player
-        msgs = {"shield":("SHIELD ONLINE!",(110,230,255)),
-                "autofire":("AUTO-FIRE!",(255,130,255)),
-                "speed":("SPEED BOOST!",(255,220,120)),
-                "triple":("TRIPLE SHOT!",(255,180,120))}
+        msgs = {"shield":   ("SHIELD ONLINE!",  (110, 230, 255)),
+                "autofire": ("AUTO-FIRE!",       (255, 130, 255)),
+                "speed":    ("SPEED BOOST!",     (255, 220, 120)),
+                "triple":   ("TRIPLE SHOT!",     (255, 180, 120))}
         text, color = msgs[kind]
         self.notif_text  = ("STORAGE FULL – " + text) if immediate else text
         self.notif_color = color
@@ -869,7 +1001,7 @@ class GameWindow(arcade.Window):
         setattr(p, f"{kind}_timer",  POWERUP_DURATION)
 
     def _try_drop_powerup(self, x, y, boss=False):
-        if random.randint(1,100) <= (100 if boss else DROP_CHANCE):
+        if random.randint(1, 100) <= (100 if boss else DROP_CHANCE):
             self.powerups.append(Powerup(x, y, random.choice(POWERUP_TYPES)))
 
     # --------------------------------------------------
@@ -896,6 +1028,15 @@ class GameWindow(arcade.Window):
         self.mouse_x = x; self.mouse_y = y
 
     def on_mouse_press(self, x, y, button, modifiers):
+        # While paused: clicking the Play button resumes the game
+        if self.paused and not self.game_over:
+            if button == arcade.MOUSE_BUTTON_LEFT:
+                l, r, b, t = self._play_btn_rect()
+                if l <= x <= r and b <= y <= t:
+                    self.paused = False
+                    self.set_mouse_visible(False)
+            return
+
         if self.game_over or button != arcade.MOUSE_BUTTON_LEFT:
             return
         self.mouse_held = True; self.mouse_x = x; self.mouse_y = y
@@ -906,14 +1047,24 @@ class GameWindow(arcade.Window):
             self.mouse_held = False
 
     def on_key_press(self, key, modifiers):
-        if   key == arcade.key.W:    self.up        = True
-        elif key == arcade.key.S:    self.down      = True
-        elif key == arcade.key.A:    self.left_key  = True
-        elif key == arcade.key.D:    self.right_key = True
-        elif key == arcade.key.R and self.game_over: self.setup()
-        elif key == arcade.key.ESCAPE: self.close()
-        elif key == arcade.key.F11:  self._toggle_fullscreen()
-        elif key in POWERUP_KEYS:    self._use_stored_powerup(POWERUP_KEYS[key])
+        if   key == arcade.key.W:     self.up        = True
+        elif key == arcade.key.S:     self.down      = True
+        elif key == arcade.key.A:     self.left_key  = True
+        elif key == arcade.key.D:     self.right_key = True
+        elif key == arcade.key.R and self.game_over:
+            self.setup()
+        elif key == arcade.key.ESCAPE:
+            # Toggle pause (no effect on game-over screen)
+            if not self.game_over:
+                self.paused = not self.paused
+                # Show cursor while paused so the Play button is clickable
+                self.set_mouse_visible(self.paused)
+        elif key == arcade.key.H and not self.game_over:
+            self.show_health = not self.show_health
+        elif key == arcade.key.F11:
+            self._toggle_fullscreen()
+        elif key in POWERUP_KEYS:
+            self._use_stored_powerup(POWERUP_KEYS[key])
 
     def on_key_release(self, key, modifiers):
         if   key == arcade.key.W: self.up        = False
@@ -930,7 +1081,7 @@ class GameWindow(arcade.Window):
             self.set_size(SCREEN_WIDTH, SCREEN_HEIGHT)
 
     def _use_stored_powerup(self, kind: str):
-        if self.game_over:
+        if self.game_over or self.paused:
             return
         p = self.player
         if p.inventory.get(kind, 0) <= 0:
@@ -947,9 +1098,11 @@ class GameWindow(arcade.Window):
 # -------------------------------------------------
 
 def _notif_color(kind: str) -> tuple:
-    return {"speed":(255,220,120),"shield":(110,230,255),
-            "autofire":(255,130,255),"triple":(255,180,120),
-            "health":(130,255,130)}.get(kind, (255,255,255))
+    return {"speed":   (255, 220, 120),
+            "shield":  (110, 230, 255),
+            "autofire":(255, 130, 255),
+            "triple":  (255, 180, 120),
+            "health":  (130, 255, 130)}.get(kind, (255, 255, 255))
 
 
 # -------------------------------------------------

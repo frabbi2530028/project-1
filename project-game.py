@@ -3,9 +3,9 @@ import random
 import math
 from PIL import Image
 
-# -------------------------------------------------
-# CONSTANTS
-# -------------------------------------------------
+# ─────────────────────────────────────────────────────
+#  CONSTANTS
+# ─────────────────────────────────────────────────────
 
 SCREEN_WIDTH  = 800
 SCREEN_HEIGHT = 600
@@ -31,19 +31,15 @@ AUTO_FIRE_RATE      = 0.075
 POWERUP_DURATION    = 10.0
 DROP_CHANCE         = 40
 
-STAR_COUNT          = 120
+STAR_COUNT          = 145
 MAX_PARTICLES       = 700
 CONTACT_DAMAGE      = 14
 CONTACT_DAMAGE_COOLDOWN = 0.35
 
-# Maximum stored units per power-up type
 MAX_POWERUP_STORAGE = 10
+AUTO_FIRE_ENEMY_THRESHOLD = 5
+AUTO_SHIELD_HEALTH_RATIO  = 0.50
 
-# Auto-trigger thresholds
-AUTO_FIRE_ENEMY_THRESHOLD = 5          # enemies on screen to trigger autofire
-AUTO_SHIELD_HEALTH_RATIO  = 0.50       # health fraction to trigger shield
-
-# Key bindings: 1=speed  2=shield  3=autofire  4=triple
 POWERUP_KEYS = {
     arcade.key.KEY_1: "speed",
     arcade.key.KEY_2: "shield",
@@ -51,13 +47,133 @@ POWERUP_KEYS = {
     arcade.key.KEY_4: "triple",
 }
 
-# Play-button geometry (used for pause overlay)
-PLAY_BTN_W  = 180
-PLAY_BTN_H  = 52
+# ─────────────────────────────────────────────────────
+#  GAME STATES
+# ─────────────────────────────────────────────────────
 
-# -------------------------------------------------
-# TEXTURE CACHE
-# -------------------------------------------------
+STATE_MENU     = "menu"
+STATE_PLAYING  = "playing"
+STATE_PAUSED   = "paused"
+STATE_GAMEOVER = "gameover"
+
+# ─────────────────────────────────────────────────────
+#  UI THEMES
+# ─────────────────────────────────────────────────────
+
+THEMES = {
+    "dark": {
+        "bg":              (6, 9, 24),
+        "panel_fill":      (7, 15, 44, 220),
+        "panel_border":    (70, 112, 205, 218),
+        "panel_inner":     (70, 112, 205, 40),
+        "title":           (90, 205, 255),
+        "title_shadow":    (25, 85, 185, 110),
+        "subtitle":        (125, 162, 222),
+        "text":            (200, 220, 255),
+        "text_dim":        (115, 140, 192),
+        "btn_fill":        (16, 50, 135, 238),
+        "btn_border":      (80, 162, 255, 252),
+        "btn_hover":       (38, 88, 195, 248),
+        "btn_text":        (255, 255, 255),
+        "btn_text_dim":    (180, 205, 245),
+        "card_fill":       (9, 19, 52, 228),
+        "card_border":     (52, 92, 170, 192),
+        "card_sel_fill":   (20, 65, 168, 250),
+        "card_sel_border": (80, 192, 255, 255),
+        "card_hover_fill": (14, 35, 90, 235),
+        "locked_fill":     (14, 16, 38, 190),
+        "locked_border":   (38, 44, 74, 158),
+        "locked_text":     (70, 82, 120),
+        "accent":          (90, 198, 255),
+        "divider":         (70, 112, 205, 88),
+        "stat_filled":     (90, 198, 255),
+        "stat_empty":      (30, 45, 85),
+        "selected_badge":  (90, 198, 255),
+        "toggle_text":     (150, 190, 255),
+        "hud_panel":       (8, 16, 42, 178),
+        "hud_border":      (90, 122, 188, 182),
+        "hud_text":        (210, 228, 255),
+        "hud_text_dim":    (165, 185, 225),
+    },
+    "light": {
+        "bg":              (192, 212, 248),
+        "panel_fill":      (236, 243, 255, 228),
+        "panel_border":    (100, 145, 228, 228),
+        "panel_inner":     (100, 145, 228, 35),
+        "title":           (14, 50, 142),
+        "title_shadow":    (90, 148, 240, 85),
+        "subtitle":        (62, 98, 162),
+        "text":            (14, 34, 86),
+        "text_dim":        (68, 98, 155),
+        "btn_fill":        (46, 112, 225, 240),
+        "btn_border":      (20, 74, 180, 250),
+        "btn_hover":       (35, 98, 212, 250),
+        "btn_text":        (255, 255, 255),
+        "btn_text_dim":    (215, 230, 255),
+        "card_fill":       (222, 234, 255, 235),
+        "card_border":     (106, 152, 228, 208),
+        "card_sel_fill":   (46, 118, 232, 250),
+        "card_sel_border": (20, 80, 198, 255),
+        "card_hover_fill": (210, 225, 252, 240),
+        "locked_fill":     (206, 214, 232, 205),
+        "locked_border":   (148, 162, 200, 165),
+        "locked_text":     (132, 148, 186),
+        "accent":          (28, 90, 218),
+        "divider":         (100, 145, 228, 82),
+        "stat_filled":     (28, 90, 218),
+        "stat_empty":      (185, 200, 230),
+        "selected_badge":  (28, 90, 218),
+        "toggle_text":     (255, 255, 255),
+        "hud_panel":       (228, 238, 255, 188),
+        "hud_border":      (95, 138, 210, 182),
+        "hud_text":        (14, 34, 86),
+        "hud_text_dim":    (68, 98, 155),
+    },
+}
+
+# ─────────────────────────────────────────────────────
+#  SHIP ROSTER
+# ─────────────────────────────────────────────────────
+
+SHIPS = [
+    {
+        "name":      "NEON FURY",
+        "tagline":   "Balanced fighter",
+        "stat_spd":  3, "stat_atk": 3, "stat_def": 3,
+        "color":     (90, 198, 255),
+        "available": True,
+        "texture":   "image/player.png",
+        "tex_scale": 0.22,
+        "spd_mult":  1.0,
+        "hp_mult":   1.0,
+    },
+    {
+        "name":      "PHANTOM",
+        "tagline":   "Swift & elusive",
+        "stat_spd":  5, "stat_atk": 2, "stat_def": 1,
+        "color":     (192, 120, 255),
+        "available": False,
+        "texture":   None,
+        "tex_scale": 0.22,
+        "spd_mult":  1.45,
+        "hp_mult":   0.65,
+    },
+    {
+        "name":      "TITAN",
+        "tagline":   "Heavy destroyer",
+        "stat_spd":  1, "stat_atk": 5, "stat_def": 5,
+        "color":     (255, 155, 70),
+        "available": False,
+        "texture":   None,
+        "tex_scale": 0.22,
+        "spd_mult":  0.68,
+        "hp_mult":   1.65,
+    },
+]
+
+# ─────────────────────────────────────────────────────
+#  TEXTURE CACHE
+# ─────────────────────────────────────────────────────
 
 _texture_cache: dict = {}
 
@@ -67,15 +183,13 @@ def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
     if key in _texture_cache:
         return _texture_cache[key]
     img = Image.open(path).convert("RGBA")
-    pixels = img.getdata()
-    img.putdata(
-        [
-            (r, g, b, 0) if (r > 200 and g > 200 and b > 200) else (r, g, b, a)
-            for r, g, b, a in pixels
-        ]
-    )
+    img.putdata([
+        (r, g, b, 0) if (r > 200 and g > 200 and b > 200) else (r, g, b, a)
+        for r, g, b, a in img.getdata()
+    ])
     if scale != 1.0:
-        img = img.resize((int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+        img = img.resize(
+            (int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
     tex = arcade.Texture(image=img)
     _texture_cache[key] = tex
     return tex
@@ -90,9 +204,9 @@ def solid_texture(size: int, color: tuple) -> arcade.Texture:
     return tex
 
 
-# -------------------------------------------------
-# POWERUPS
-# -------------------------------------------------
+# ─────────────────────────────────────────────────────
+#  POWERUPS
+# ─────────────────────────────────────────────────────
 
 POWERUP_TYPES  = ["health", "shield", "autofire", "speed", "triple"]
 POWERUP_COLORS = {
@@ -103,11 +217,8 @@ POWERUP_COLORS = {
     "triple":   (255, 130, 0,   220),
 }
 POWERUP_LABELS = {
-    "health":   "+HP",
-    "shield":   "SHIELD",
-    "autofire": "AUTO",
-    "speed":    "SPEED",
-    "triple":   "TRIPLE",
+    "health":  "+HP",  "shield": "SHIELD", "autofire": "AUTO",
+    "speed":   "SPEED", "triple": "TRIPLE",
 }
 
 
@@ -115,8 +226,7 @@ class Powerup(arcade.Sprite):
     def __init__(self, x, y, kind: str):
         super().__init__()
         self.texture      = solid_texture(22, POWERUP_COLORS[kind])
-        self.center_x     = x
-        self.center_y     = y
+        self.center_x     = x;  self.center_y = y
         self.kind         = kind
         self.change_y     = -POWERUP_FALL_SPEED
         self.wobble_phase = random.uniform(0.0, math.tau)
@@ -127,9 +237,9 @@ class Powerup(arcade.Sprite):
         self.center_x     += math.sin(self.wobble_phase) * 18.0 * delta_time
 
 
-# -------------------------------------------------
-# PLAYER
-# -------------------------------------------------
+# ─────────────────────────────────────────────────────
+#  PLAYER   (boundary clamping moved to GameWindow)
+# ─────────────────────────────────────────────────────
 
 
 class Player(arcade.Sprite):
@@ -140,16 +250,13 @@ class Player(arcade.Sprite):
         self.center_y   = SCREEN_HEIGHT // 2
         self.health     = PLAYER_HEALTH
         self.max_health = PLAYER_HEALTH
-        self.change_x   = 0.0
-        self.change_y   = 0.0
+        self.change_x   = 0.0;  self.change_y = 0.0
 
-        # Active power-up flags + timers
         self.shield_active   = False;  self.shield_timer   = 0.0
         self.autofire_active = False;  self.autofire_timer = 0.0
         self.speed_active    = False;  self.speed_timer    = 0.0
         self.triple_active   = False;  self.triple_timer   = 0.0
 
-        # Inventory (consumable, activated by key 1-4)
         self.inventory = {"speed": 0, "shield": 0, "autofire": 0, "triple": 0}
 
     def get_speed(self):
@@ -160,43 +267,34 @@ class Player(arcade.Sprite):
             if getattr(self, f"{attr}_active"):
                 new_t = getattr(self, f"{attr}_timer") - delta
                 if new_t <= 0:
-                    setattr(self, f"{attr}_active", False)
-                    new_t = 0.0
+                    setattr(self, f"{attr}_active", False);  new_t = 0.0
                 setattr(self, f"{attr}_timer", new_t)
 
     def update(self, delta_time=1/60, *args, **kwargs):
         self.center_x += self.change_x * delta_time
         self.center_y += self.change_y * delta_time
-        self.left   = max(self.left,   0)
-        self.right  = min(self.right,  SCREEN_WIDTH)
-        self.bottom = max(self.bottom, 0)
-        self.top    = min(self.top,    SCREEN_HEIGHT)
-        self.angle  = max(-20, min(20, -self.change_x * 0.06))
+        self.angle = max(-20, min(20, -self.change_x * 0.06))
 
 
-# -------------------------------------------------
-# ENEMIES
-# -------------------------------------------------
+# ─────────────────────────────────────────────────────
+#  ENEMIES
+# ─────────────────────────────────────────────────────
 
 
 class Enemy(arcade.Sprite):
     def __init__(self, x, y, health=ENEMY_HEALTH):
         super().__init__()
         self.texture    = load_texture_clean("image/enemy.png", 0.12)
-        self.center_x   = x
-        self.center_y   = y
-        self.health     = health
-        self.max_health = health
+        self.center_x   = x;  self.center_y   = y
+        self.health     = health;  self.max_health = health
 
 
 class ShootingEnemy(arcade.Sprite):
     def __init__(self, x, y, health=ENEMY_HEALTH):
         super().__init__()
         self.texture     = load_texture_clean("image/shooting_enemy.png", 0.12)
-        self.center_x    = x
-        self.center_y    = y
-        self.health      = health
-        self.max_health  = health
+        self.center_x    = x;  self.center_y  = y
+        self.health      = health;  self.max_health = health
         self.shoot_timer = 0.0
 
 
@@ -204,25 +302,21 @@ class BossEnemy(arcade.Sprite):
     def __init__(self, x, y, health=BOSS_HEALTH):
         super().__init__()
         self.texture       = load_texture_clean("image/boss.png", 0.2)
-        self.center_x      = x
-        self.center_y      = y
-        self.health        = health
-        self.max_health    = health
-        self.normal_timer  = 0.0
-        self.special_timer = 0.0
+        self.center_x      = x;  self.center_y  = y
+        self.health        = health;  self.max_health = health
+        self.normal_timer  = 0.0;  self.special_timer = 0.0
 
 
-# -------------------------------------------------
-# BULLETS
-# -------------------------------------------------
+# ─────────────────────────────────────────────────────
+#  BULLETS
+# ─────────────────────────────────────────────────────
 
 
 class Bullet(arcade.Sprite):
-    def __init__(self, start_x, start_y, angle_rad, speed=BULLET_SPEED):
+    def __init__(self, sx, sy, angle_rad, speed=BULLET_SPEED):
         super().__init__()
         self.texture  = load_texture_clean("image/bullet.png", 0.1)
-        self.center_x = start_x
-        self.center_y = start_y
+        self.center_x = sx;  self.center_y = sy
         self.change_x = math.cos(angle_rad) * speed
         self.change_y = math.sin(angle_rad) * speed
         self.angle    = math.degrees(angle_rad)
@@ -235,14 +329,13 @@ class Bullet(arcade.Sprite):
 
 
 class EnemyBullet(arcade.Sprite):
-    def __init__(self, start_x, start_y, dest_x=None, dest_y=None,
+    def __init__(self, sx, sy, dest_x=None, dest_y=None,
                  angle_rad=None, speed=ENEMY_BULLET_SPEED):
         super().__init__()
         self.texture  = load_texture_clean("image/enemy_bullet.png", 0.1)
-        self.center_x = start_x
-        self.center_y = start_y
+        self.center_x = sx;  self.center_y = sy
         if angle_rad is None:
-            angle_rad = math.atan2(dest_y - start_y, dest_x - start_x)
+            angle_rad = math.atan2(dest_y - sy, dest_x - sx)
         self.change_x = math.cos(angle_rad) * speed
         self.change_y = math.sin(angle_rad) * speed
         self.angle    = math.degrees(angle_rad)
@@ -254,64 +347,82 @@ class EnemyBullet(arcade.Sprite):
         self.life     -= delta_time
 
 
-# -------------------------------------------------
-# GAME WINDOW
-# -------------------------------------------------
+# ═════════════════════════════════════════════════════
+#  GAME WINDOW
+# ═════════════════════════════════════════════════════
+
+
+def _draw_btn(x, w, y, h, fill, border, text_color, label, font_size):
+    arcade.draw_lrbt_rectangle_filled(x, x + w, y, y + h, fill)
+    arcade.draw_lrbt_rectangle_outline(x, x + w, y, y + h, border, 2)
+    arcade.draw_text(label, x + w // 2, y + h // 2, text_color, font_size,
+                     anchor_x="center", anchor_y="center", bold=True)
+
+
+def _notif_color(kind: str) -> tuple:
+    return {"speed":(255,220,120),"shield":(110,230,255),
+            "autofire":(255,130,255),"triple":(255,180,120),
+            "health":(130,255,130)}.get(kind,(255,255,255))
 
 
 class GameWindow(arcade.Window):
+
+    # ──────────────────────────────────────────────────
+    #  INIT
+    # ──────────────────────────────────────────────────
+
     def __init__(self):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE, resizable=True)
         arcade.set_background_color(BG_COLOR)
-        self.set_mouse_visible(False)
+        self.set_mouse_visible(True)
 
-        load_texture_clean("image/player.png",        0.15)
-        load_texture_clean("image/enemy.png",          0.12)
-        load_texture_clean("image/shooting_enemy.png", 0.12)
-        load_texture_clean("image/boss.png",           0.2)
-        load_texture_clean("image/bullet.png",         0.1)
-        load_texture_clean("image/enemy_bullet.png",   0.1)
+        # pre-warm textures
+        for path, sc in [("image/player.png", 0.15), ("image/player.png", 0.22),
+                          ("image/enemy.png", 0.12), ("image/shooting_enemy.png", 0.12),
+                          ("image/boss.png", 0.2), ("image/bullet.png", 0.1),
+                          ("image/enemy_bullet.png", 0.1)]:
+            load_texture_clean(path, sc)
         for k in POWERUP_TYPES:
             solid_texture(22, POWERUP_COLORS[k])
 
-        # ---- HUD texts (positions fixed in on_resize / _reposition_hud) ----
-        # Score sits at the very top of the panel
-        self.txt_score   = arcade.Text("SCORE 0", 24, SCREEN_HEIGHT - 32,  arcade.color.WHITE, 18, bold=True)
-        # HP label rendered just above the bar; bar is h-52 → h-66
-        self.txt_health  = arcade.Text("HP 100",  24, SCREEN_HEIGHT - 50,  arcade.color.WHITE, 13)
-        self.txt_active  = arcade.Text("",        24, SCREEN_HEIGHT - 84,  arcade.color.YELLOW, 12)
-        self.txt_inv     = arcade.Text("",        24, SCREEN_HEIGHT - 102, (200, 200, 200), 11)
-        self.txt_notif   = arcade.Text("", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 78,
-                                        (255, 255, 110, 255), 28, anchor_x="center", bold=True)
+        # ── UI/menu state ─────────────────────────────
+        self.game_state    = STATE_MENU
+        self.menu_theme    = "dark"
+        self.selected_ship = 0
+        self._menu_btns:  dict = {}
+        self._ship_cards: dict = {}
+
+        # ── HUD text objects ──────────────────────────
+        h = SCREEN_HEIGHT
+        self.txt_score   = arcade.Text("SCORE 0", 24, h-32,  arcade.color.WHITE, 18, bold=True)
+        self.txt_health  = arcade.Text("HP 100",  24, h-50,  arcade.color.WHITE, 13)
+        self.txt_active  = arcade.Text("",        24, h-84,  arcade.color.YELLOW, 12)
+        self.txt_inv     = arcade.Text("",        24, h-102, (200,200,200), 11)
+        self.txt_notif   = arcade.Text("", SCREEN_WIDTH//2, h//2+78,
+                                        (255,255,110,255), 28, anchor_x="center", bold=True)
         self.txt_hint    = arcade.Text(
-            "WASD Move  LMB Shoot  [1]Speed [2]Shield [3]Auto [4]Triple  "
-            "H Health-bar  F11 Fullscreen  R Restart  ESC Pause",
-            18, 12, (170, 188, 225), 11)
-        self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 10,
-                                        (255, 90, 90), 52, anchor_x="center")
-        self.txt_score2  = arcade.Text("SCORE 0",   SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 48,
+            "WASD Move   LMB Shoot   [1]Speed [2]Shield [3]Auto [4]Triple   "
+            "H HUD   F11 Fullscreen   R Restart   ESC Menu",
+            18, 12, (155, 175, 215), 11)
+        self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, h//2+10,
+                                        (255,90,90), 52, anchor_x="center")
+        self.txt_score2  = arcade.Text("SCORE 0",   SCREEN_WIDTH//2, h//2-48,
                                         arcade.color.WHITE, 28, anchor_x="center")
-        self.txt_restart = arcade.Text("Press R to Restart", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 102,
+        self.txt_restart = arcade.Text("Press R to Restart", SCREEN_WIDTH//2, h//2-102,
                                         arcade.color.WHITE, 19, anchor_x="center")
-        self.txt_combo   = arcade.Text("", SCREEN_WIDTH - 18, SCREEN_HEIGHT - 28,
-                                        (255, 220, 95), 18, anchor_x="right", bold=True)
-        self.txt_timer   = arcade.Text("", SCREEN_WIDTH - 18, SCREEN_HEIGHT - 52,
-                                        (180, 210, 255), 14, anchor_x="right")
+        self.txt_combo   = arcade.Text("", SCREEN_WIDTH-18, h-28,
+                                        (255,220,95), 18, anchor_x="right", bold=True)
+        self.txt_timer   = arcade.Text("", SCREEN_WIDTH-18, h-52,
+                                        (180,210,255), 14, anchor_x="right")
 
-        # Pause overlay texts
-        self.txt_paused   = arcade.Text("PAUSED", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 54,
-                                         (255, 255, 255), 48, anchor_x="center", bold=True)
-        self.txt_play_btn = arcade.Text("▶  RESUME", SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 4,
-                                         (255, 255, 255), 22, anchor_x="center", bold=True)
-
+        # ── Game object handles ───────────────────────
         self.player = self.player_list = None
         self.enemies = self.shooting_enemies = self.bosses = None
         self.bullets = self.enemy_bullets = self.powerups = None
 
+        # ── Runtime vars ─────────────────────────────
         self.score       = 0
-        self.game_over   = False
-        self.paused      = False          # ← NEW
-        self.show_health = True           # ← NEW: toggle with H key
+        self.show_hud    = True
         self.up = self.down = self.left_key = self.right_key = False
         self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0.0
         self.mouse_held  = False
@@ -322,8 +433,8 @@ class GameWindow(arcade.Window):
         self.notif_timer = 0.0
         self.notif_color = (255, 255, 110)
         self.bg_time     = 0.0
-        self.stars       = []
-        self.particles   = []
+        self.stars: list  = []
+        self.particles: list = []
         self.damage_flash         = 0.0
         self.contact_damage_timer = 0.0
         self.time_alive  = 0.0
@@ -331,45 +442,41 @@ class GameWindow(arcade.Window):
         self.combo_timer = 0.0
         self._fullscreen = False
 
-    # --------------------------------------------------
-    # Helper: keep all HUD positions consistent
-    # --------------------------------------------------
+        self._build_starfield()
 
-    def _reposition_hud(self):
-        w, h = self.width, self.height
-        # Top panel texts
-        self.txt_score.x   = 24;       self.txt_score.y   = h - 32
-        self.txt_health.x  = 24;       self.txt_health.y  = h - 50   # above HP bar (bar = h-52→h-66)
-        self.txt_active.x  = 24;       self.txt_active.y  = h - 84
-        self.txt_inv.x     = 24;       self.txt_inv.y     = h - 102
-        # Notification + hints
-        self.txt_notif.x   = w // 2;   self.txt_notif.y   = h // 2 + 78
-        self.txt_hint.x    = 18;       self.txt_hint.y    = 12
-        # Game-over screen
-        self.txt_over.x    = w // 2;   self.txt_over.y    = h // 2 + 10
-        self.txt_score2.x  = w // 2;   self.txt_score2.y  = h // 2 - 48
-        self.txt_restart.x = w // 2;   self.txt_restart.y = h // 2 - 102
-        # Corner info
-        self.txt_combo.x   = w - 18;   self.txt_combo.y   = h - 28
-        self.txt_timer.x   = w - 18;   self.txt_timer.y   = h - 52
-        # Pause overlay
-        self.txt_paused.x  = w // 2;   self.txt_paused.y  = h // 2 + 54
-        self.txt_play_btn.x = w // 2;  self.txt_play_btn.y = h // 2 - 4
+    # ──────────────────────────────────────────────────
+    #  RESIZE
+    # ──────────────────────────────────────────────────
 
     def on_resize(self, width, height):
         super().on_resize(width, height)
-        self._reposition_hud()
-        if self.stars:
-            self._build_starfield()
+        w, h = width, height
+        self.txt_score.x   = 24;     self.txt_score.y   = h-32
+        self.txt_health.x  = 24;     self.txt_health.y  = h-50
+        self.txt_active.x  = 24;     self.txt_active.y  = h-84
+        self.txt_inv.x     = 24;     self.txt_inv.y     = h-102
+        self.txt_notif.x   = w//2;   self.txt_notif.y   = h//2+78
+        self.txt_hint.x    = 18;     self.txt_hint.y    = 12
+        self.txt_over.x    = w//2;   self.txt_over.y    = h//2+10
+        self.txt_score2.x  = w//2;   self.txt_score2.y  = h//2-48
+        self.txt_restart.x = w//2;   self.txt_restart.y = h//2-102
+        self.txt_combo.x   = w-18;   self.txt_combo.y   = h-28
+        self.txt_timer.x   = w-18;   self.txt_timer.y   = h-52
+        self._build_starfield()
 
-    # --------------------------------------------------
+    # ──────────────────────────────────────────────────
+    #  SETUP  (resets and starts a game)
+    # ──────────────────────────────────────────────────
 
     def setup(self):
-        self.player = Player()
-        self.player_list = arcade.SpriteList()
+        ship = SHIPS[self.selected_ship]
+        self.player           = Player()
+        self.player.center_x  = self.width  // 2
+        self.player.center_y  = self.height // 2
+        self.player.max_health = int(PLAYER_HEALTH * ship["hp_mult"])
+        self.player.health     = self.player.max_health
+        self.player_list       = arcade.SpriteList()
         self.player_list.append(self.player)
-        self.player.center_x = self.width  // 2
-        self.player.center_y = self.height // 2
 
         self.enemies          = arcade.SpriteList()
         self.shooting_enemies = arcade.SpriteList()
@@ -379,25 +486,23 @@ class GameWindow(arcade.Window):
         self.powerups         = arcade.SpriteList()
 
         self.score       = 0
-        self.game_over   = False
-        self.paused      = False
-        self.show_health = True
+        self.show_hud    = True
         self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0.0
-        self.mouse_held  = False
-        self.fire_timer  = 0.0
-        self.notif_text  = ""
-        self.notif_timer = 0.0
-        self.notif_color = (255, 255, 110)
+        self.mouse_held  = False;  self.fire_timer = 0.0
+        self.notif_text  = "";  self.notif_timer = 0.0
+        self.notif_color = (255,255,110)
         self.up = self.down = self.left_key = self.right_key = False
-        self.damage_flash         = 0.0
-        self.contact_damage_timer = 0.0
-        self.time_alive  = 0.0
-        self.combo       = 0
-        self.combo_timer = 0.0
-        self._build_starfield()
-        self.particles = []
+        self.damage_flash = 0.0;  self.contact_damage_timer = 0.0
+        self.time_alive   = 0.0
+        self.combo        = 0;  self.combo_timer = 0.0
+        self.particles    = []
 
-    # --------------------------------------------------
+        self.game_state = STATE_PLAYING
+        self.set_mouse_visible(False)
+
+    # ──────────────────────────────────────────────────
+    #  STARFIELD / PARTICLES
+    # ──────────────────────────────────────────────────
 
     def _build_starfield(self):
         w, h = self.width, self.height
@@ -405,382 +510,479 @@ class GameWindow(arcade.Window):
         for _ in range(STAR_COUNT):
             layer = random.randint(1, 3)
             self.stars.append({
-                "x": random.uniform(0, w),  "y": random.uniform(0, h),
-                "size":    random.uniform(0.8, 2.3) * (0.85 + layer * 0.2),
-                "speed":   random.uniform(18, 52) * layer,
+                "x": random.uniform(0, w), "y": random.uniform(0, h),
+                "size":    random.uniform(0.8, 2.3)*(0.85+layer*0.2),
+                "speed":   random.uniform(18, 52)*layer,
                 "alpha":   random.randint(80, 220),
-                "phase":   random.uniform(0.0, math.tau),
+                "phase":   random.uniform(0, math.tau),
                 "twinkle": random.uniform(1.2, 3.4),
             })
 
     def _add_particle(self, x, y, vx, vy, size, life, color, drag):
         if len(self.particles) >= MAX_PARTICLES:
             return
-        self.particles.append({"x": x, "y": y, "vx": vx, "vy": vy,
-                                "size": size, "life": life, "max_life": life,
-                                "color": color, "drag": drag})
+        self.particles.append({"x":x,"y":y,"vx":vx,"vy":vy,
+                                "size":size,"life":life,"max_life":life,
+                                "color":color,"drag":drag})
 
-    def _burst(self, x, y, count, color, speed_min, speed_max,
-               size_min=1.5, size_max=3.6, life_min=0.2, life_max=0.5, drag=0.93):
-        for _ in range(count):
-            angle = random.uniform(0.0, math.tau)
-            speed = random.uniform(speed_min, speed_max)
-            self._add_particle(x=x, y=y,
-                                vx=math.cos(angle)*speed, vy=math.sin(angle)*speed,
-                                size=random.uniform(size_min, size_max),
-                                life=random.uniform(life_min, life_max),
-                                color=color, drag=drag)
+    def _burst(self, x, y, n, color, smin, smax,
+               zmin=1.5, zmax=3.6, lmin=0.2, lmax=0.5, drag=0.93):
+        for _ in range(n):
+            a = random.uniform(0, math.tau);  s = random.uniform(smin, smax)
+            self._add_particle(x, y, math.cos(a)*s, math.sin(a)*s,
+                                random.uniform(zmin,zmax), random.uniform(lmin,lmax),
+                                color, drag)
 
-    def _spawn_muzzle(self, x, y, angle_rad):
+    def _spawn_muzzle(self, x, y, ar):
         for _ in range(4):
-            offset = random.uniform(-0.25, 0.25)
-            spd    = random.uniform(120, 280)
+            off = random.uniform(-0.25, 0.25);  spd = random.uniform(120, 280)
             self._add_particle(
-                x=x + math.cos(angle_rad)*random.uniform(6, 14),
-                y=y + math.sin(angle_rad)*random.uniform(6, 14),
-                vx=math.cos(angle_rad+offset)*spd,
-                vy=math.sin(angle_rad+offset)*spd,
-                size=random.uniform(1.4, 2.4), life=random.uniform(0.08, 0.18),
-                color=(255, 220, 120), drag=0.88)
+                x+math.cos(ar)*random.uniform(6,14), y+math.sin(ar)*random.uniform(6,14),
+                math.cos(ar+off)*spd, math.sin(ar+off)*spd,
+                random.uniform(1.4,2.4), random.uniform(0.08,0.18), (255,220,120), 0.88)
 
-    # --------------------------------------------------
+    def _update_starfield(self, delta):
+        w, h = self.width, self.height
+        flow = 1.0+min(0.9, self.time_alive/80.0)
+        for s in self.stars:
+            s["y"] -= s["speed"]*flow*delta
+            if s["y"] < -6:
+                s["y"] = h+random.uniform(4,60);  s["x"] = random.uniform(0,w)
 
-    def _draw_background(self):
+    def _update_particles(self, delta):
+        alive = []
+        for pt in self.particles:
+            pt["life"] -= delta
+            if pt["life"] <= 0: continue
+            pt["x"] += pt["vx"]*delta;  pt["y"] += pt["vy"]*delta
+            pt["vx"] *= pt["drag"];     pt["vy"] *= pt["drag"]
+            alive.append(pt)
+        self.particles = alive
+
+    # ══════════════════════════════════════════════════
+    #  MENU DRAWING
+    # ══════════════════════════════════════════════════
+
+    def _is_hovering(self, l, r, b, t):
+        return l <= self.mouse_x <= r and b <= self.mouse_y <= t
+
+    def _draw_stat_pips(self, cx, y, value, max_v, c_on, c_off):
+        spacing = 14;  total = spacing*(max_v-1);  sx = cx - total//2
+        for i in range(max_v):
+            arcade.draw_circle_filled(sx+i*spacing, y, 5, c_on if i < value else c_off)
+
+    def _draw_menu(self):
+        T  = THEMES[self.menu_theme]
+        w, h = self.width, self.height
+        t  = self.bg_time
+        is_pause = (self.game_state == STATE_PAUSED)
+
+        # ── Background ───────────────────────────────
+        if is_pause:
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 5, 16, 170))
+        else:
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, T["bg"])
+            if self.menu_theme == "dark":
+                p = (math.sin(t*0.65)+1)*0.5
+                arcade.draw_circle_filled(w*0.13,h*0.88,228+18*p,     (38,80,185,42))
+                arcade.draw_circle_filled(w*0.87,h*0.20,265+28*(1-p), (145,40,165,36))
+                arcade.draw_circle_filled(w*0.52,h*1.06,268,           (28,155,195,20))
+                off = (t*14)%28
+                for yi in range(-30, h+30, 28):
+                    arcade.draw_line(0,yi+off,w,yi+off-18,(28,44,76,24),1)
+                for s in self.stars:
+                    tw = 0.55+0.45*math.sin(t*s["twinkle"]+s["phase"])
+                    al = max(20,min(255,int(s["alpha"]*tw)))
+                    arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
+            else:
+                for i in range(7):
+                    ang = t*0.28+i*math.tau/7
+                    rx = w*0.5+math.cos(ang)*w*0.40
+                    ry = h*0.5+math.sin(ang*0.62)*h*0.36
+                    arcade.draw_circle_filled(rx,ry,88+22*math.sin(t*0.9+i),(255,255,255,24))
+                off = (t*12)%26
+                for yi in range(-30,h+30,26):
+                    arcade.draw_line(0,yi+off,w,yi+off-14,(155,182,228,20),1)
+
+        # ── Panel ────────────────────────────────────
+        pw = min(int(w*0.80), 650)
+        ph = min(int(h*0.90), 512 if is_pause else 475)
+        pl = (w-pw)//2;  pr = pl+pw
+        pb = (h-ph)//2;  ptop = pb+ph
+
+        arcade.draw_lrbt_rectangle_filled(pl+7,pr+7,pb-7,ptop-7,(0,0,0,70))
+        arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop, T["panel_fill"])
+        arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop, T["panel_border"], 2)
+        arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5, T["panel_inner"], 1)
+
+        # corner accents
+        ac = T["panel_border"];  sz = 24
+        for (ax,ay,dx,dy) in [(pl,pb,-1,-1),(pr,pb,1,-1),(pl,ptop,-1,1),(pr,ptop,1,1)]:
+            arcade.draw_line(ax,ay,ax+dx*sz,ay,          ac,2)
+            arcade.draw_line(ax,ay,ax,      ay+dy*sz,    ac,2)
+
+        # ── Title ────────────────────────────────────
+        title = "PAUSED" if is_pause else "NEON  DRIFT"
+        ty    = ptop - 52
+        arcade.draw_text(title, w//2+3, ty-3, T["title_shadow"], 42,
+                         anchor_x="center", bold=True)
+        arcade.draw_text(title, w//2,   ty,   T["title"],        42,
+                         anchor_x="center", bold=True)
+        sub = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
+        arcade.draw_text(sub, w//2, ty-30, T["subtitle"], 12, anchor_x="center")
+
+        div_y = ptop - 97
+        arcade.draw_line(pl+22, div_y, pr-22, div_y, T["divider"], 1)
+        arcade.draw_text("SELECT YOUR SHIP", w//2, div_y-22,
+                         T["text"], 13, anchor_x="center", bold=True)
+
+        # ── Ship cards ───────────────────────────────
+        n  = len(SHIPS)
+        cw, ch = 158, 172
+        gap    = 16
+        total_cw = cw*n+gap*(n-1)
+        cx0  = (w-total_cw)//2
+        cy0  = div_y - 54 - ch        # card bottom y
+
+        self._ship_cards = {}
+        for i, ship in enumerate(SHIPS):
+            cl  = cx0+i*(cw+gap);  cr = cl+cw
+            cb  = cy0;             ct = cy0+ch
+            sel = (i == self.selected_ship)
+            avl = ship["available"]
+            hov = self._is_hovering(cl,cr,cb,ct)
+
+            if not avl:
+                fill = T["locked_fill"];  bord = T["locked_border"];  bthk = 1
+            elif sel:
+                fill = T["card_sel_fill"]; bord = T["card_sel_border"]; bthk = 3
+            elif hov:
+                fill = T["card_hover_fill"]; bord = T["card_border"]; bthk = 2
+            else:
+                fill = T["card_fill"]; bord = T["card_border"]; bthk = 1
+
+            arcade.draw_lrbt_rectangle_filled(cl,cr,cb,ct, fill)
+            arcade.draw_lrbt_rectangle_outline(cl,cr,cb,ct, bord, bthk)
+
+            # selection pulse
+            if sel and avl:
+                pulse = 0.5+0.5*math.sin(t*4.5)
+                g = ship["color"]
+                arcade.draw_lrbt_rectangle_outline(
+                    cl-3,cr+3,cb-3,ct+3, (*g,int(55+50*pulse)), 2)
+
+            # ship preview
+            pcx = cl+cw//2
+            pcy = ct - int(ch*0.52)//2 - 8
+
+            if avl and ship["texture"]:
+                tex  = load_texture_clean(ship["texture"], ship["tex_scale"])
+                draw_y = pcy + (math.sin(t*2.8)*4 if sel else 0)
+                # draw_texture_rect works across arcade versions; fall back to SpriteList if needed
+                try:
+                    arcade.draw_texture_rect(
+                        tex,
+                        arcade.XYWH(pcx, draw_y, tex.width, tex.height)
+                    )
+                except Exception:
+                    _sl = arcade.SpriteList()
+                    _sp = arcade.Sprite()
+                    _sp.texture  = tex
+                    _sp.center_x = pcx
+                    _sp.center_y = draw_y
+                    _sl.append(_sp)
+                    _sl.draw()
+                arcade.draw_circle_filled(pcx, pcy, 30,
+                                          (*ship["color"], 35+int(20*math.sin(t*3))))
+            else:
+                arcade.draw_circle_outline(pcx,pcy,28, T["locked_border"],2)
+                arcade.draw_text("?", pcx, pcy, T["locked_text"], 28,
+                                 anchor_x="center", anchor_y="center", bold=True)
+
+            name_y = cb+int(ch*0.41)
+            nc = T["locked_text"] if not avl else \
+                 (T["card_sel_border"] if sel else T["text"])
+            arcade.draw_text(ship["name"], pcx, name_y, nc, 11,
+                             anchor_x="center", bold=True)
+
+            if avl:
+                arcade.draw_text(ship["tagline"], pcx, name_y-17,
+                                 T["text_dim"], 9, anchor_x="center")
+                sy = name_y-36
+                for j,(lbl,val) in enumerate([("SPD",ship["stat_spd"]),
+                                               ("ATK",ship["stat_atk"]),
+                                               ("DEF",ship["stat_def"])]):
+                    ry = sy-j*18
+                    arcade.draw_text(lbl, cl+18, ry, T["text_dim"], 8, anchor_y="center")
+                    self._draw_stat_pips(cl+80, ry, val, 5, T["stat_filled"], T["stat_empty"])
+                if sel:
+                    arcade.draw_text("SELECTED", pcx, cb+9,
+                                     T["selected_badge"], 9, anchor_x="center", bold=True)
+            else:
+                arcade.draw_text("COMING SOON", pcx, name_y-20,
+                                 T["locked_text"], 9, anchor_x="center")
+
+            self._ship_cards[i] = (cl, cr, cb, ct)
+
+        # ── Buttons ──────────────────────────────────
+        self._menu_btns = {}
+        btn_top = cy0 - 18
+
+        bw, bh = 230, 50
+        bx = w//2-bw//2;  by = btn_top-bh
+        hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
+        _draw_btn(bx, bw, by, bh,
+                  T["btn_hover"] if hov_p else T["btn_fill"],
+                  T["btn_border"], T["btn_text"],
+                  "[ RESUME ]" if is_pause else "[ PLAY GAME ]", 20)
+        self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
+
+        if is_pause:
+            qw, qh = 196, 40
+            qx = w//2-qw//2;  qy = by-qh-10
+            hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
+            _draw_btn(qx, qw, qy, qh,
+                      T["btn_hover"] if hov_q else (*T["btn_fill"][:3], 145),
+                      (*T["btn_border"][:3], 152), T["btn_text_dim"],
+                      "QUIT TO MENU", 14)
+            self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
+
+        # theme toggle — always at bottom
+        tw, th2 = 190, 32
+        tx = w//2-tw//2;  ty2 = pb+16
+        hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
+        _draw_btn(tx, tw, ty2, th2,
+                  T["btn_hover"] if hov_t else (*T["btn_fill"][:3], 145),
+                  (*T["btn_border"][:3], 158),
+                  T["toggle_text"],
+                  "[ DARK MODE ]" if self.menu_theme=="dark" else "[ LIGHT MODE ]",
+                  12)
+        self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
+
+    # ══════════════════════════════════════════════════
+    #  GAME-WORLD DRAW HELPERS
+    # ══════════════════════════════════════════════════
+
+    def _draw_bg_space(self):
         w, h = self.width, self.height
         arcade.draw_lrbt_rectangle_filled(0, w, 0, h, BG_COLOR)
-        pulse = (math.sin(self.bg_time * 0.7) + 1.0) * 0.5
-        arcade.draw_circle_filled(w*0.19, h*0.83, 250+20*pulse,           (40,  85, 190, 42))
-        arcade.draw_circle_filled(w*0.84, h*0.28, 280+30*(1.0-pulse),     (150, 45, 170, 34))
-        arcade.draw_circle_filled(w*0.53, h*1.07, 280,                    (30, 160, 200, 18))
-        offset = (self.bg_time * 14.0) % 28.0
+        pulse = (math.sin(self.bg_time*0.7)+1)*0.5
+        arcade.draw_circle_filled(w*0.19,h*0.83,250+20*pulse,     (40, 85,190,42))
+        arcade.draw_circle_filled(w*0.84,h*0.28,280+30*(1-pulse), (150,45,170,34))
+        arcade.draw_circle_filled(w*0.53,h*1.07,280,               (30,160,200,18))
+        off = (self.bg_time*14)%28
         for y in range(-30, h+30, 28):
-            yy = y + offset
-            arcade.draw_line(0, yy, w, yy-18, (30, 46, 78, 26), 1)
-        for star in self.stars:
-            twinkle = 0.55 + 0.45*math.sin(self.bg_time*star["twinkle"]+star["phase"])
-            alpha   = max(20, min(255, int(star["alpha"]*twinkle)))
-            arcade.draw_circle_filled(star["x"], star["y"], star["size"], (205, 228, 255, alpha))
+            arcade.draw_line(0,y+off,w,y+off-18,(30,46,78,26),1)
+        for s in self.stars:
+            tw = 0.55+0.45*math.sin(self.bg_time*s["twinkle"]+s["phase"])
+            al = max(20,min(255,int(s["alpha"]*tw)))
+            arcade.draw_circle_filled(s["x"],s["y"],s["size"],(205,228,255,al))
 
     def _draw_entity_glows(self):
         p = self.player
-        base_color = (255, 230, 90, 82) if p.speed_active else (95, 200, 255, 68)
-        arcade.draw_circle_filled(p.center_x, p.center_y, 34, base_color)
+        c = (255,230,90,82) if p.speed_active else (95,200,255,68)
+        arcade.draw_circle_filled(p.center_x, p.center_y, 34, c)
         for e in self.enemies:
-            arcade.draw_circle_filled(e.center_x, e.center_y, 24, (255, 92, 92, 45))
+            arcade.draw_circle_filled(e.center_x,e.center_y,24,(255,92,92,45))
         for e in self.shooting_enemies:
-            arcade.draw_circle_filled(e.center_x, e.center_y, 26, (255, 130, 90, 55))
+            arcade.draw_circle_filled(e.center_x,e.center_y,26,(255,130,90,55))
         for b in self.bosses:
-            r = 54 + 8*math.sin(self.bg_time*2.5)
-            arcade.draw_circle_filled(b.center_x, b.center_y, r, (255, 70, 70, 55))
+            r = 54+8*math.sin(self.bg_time*2.5)
+            arcade.draw_circle_filled(b.center_x,b.center_y,r,(255,70,70,55))
 
     def _draw_particles(self):
         for pt in self.particles:
-            lr  = pt["life"] / pt["max_life"]
-            a   = int(255 * lr)
-            r   = max(0.5, pt["size"]*(0.45+0.55*lr))
-            c   = pt["color"]
-            arcade.draw_circle_filled(pt["x"], pt["y"], r, (c[0], c[1], c[2], a))
+            lr = pt["life"]/pt["max_life"]
+            r  = max(0.5, pt["size"]*(0.45+0.55*lr))
+            c  = pt["color"]
+            arcade.draw_circle_filled(pt["x"],pt["y"],r,(c[0],c[1],c[2],int(255*lr)))
 
     def _draw_enemy_health_bars(self):
         for sl in [self.enemies, self.shooting_enemies, self.bosses]:
             for e in sl:
-                if e.health >= e.max_health:
-                    continue
-                ratio  = max(0.0, e.health / e.max_health)
-                left   = e.center_x - e.width*0.45
-                right  = e.center_x + e.width*0.45
-                top    = e.top + 8
-                bottom = top - 5
-                arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, (35, 25, 25, 220))
-                arcade.draw_lrbt_rectangle_filled(left, left+(right-left)*ratio,
-                                                   bottom, top, (255, 100, 90, 235))
+                if e.health >= e.max_health: continue
+                ratio = max(0.0, e.health/e.max_health)
+                l = e.center_x-e.width*0.45;  r = e.center_x+e.width*0.45
+                tb = e.top+8;  bb = tb-5
+                arcade.draw_lrbt_rectangle_filled(l,r,bb,tb,(35,25,25,220))
+                arcade.draw_lrbt_rectangle_filled(l,l+(r-l)*ratio,bb,tb,(255,100,90,235))
 
-    # --------------------------------------------------
-    # HUD  –  fixed layout so score and health bar never overlap
-    #
-    #   Panel:   y  h-10  →  h-118
-    #   Score:   y  h-32   (size 18 bold, ~18 px tall → occupies h-32 to h-14)
-    #   HP label y  h-50   (size 13, sits just above the bar)
-    #   HP bar:  lrbt  24…270,  h-66 → h-52  (14 px tall, 16 px gap below score)
-    #   Active:  y  h-84
-    #   Inv:     y  h-102
-    # --------------------------------------------------
+    # ──────────────────────────────────────────────────
+    #  HUD  (H hides the ENTIRE panel)
+    # ──────────────────────────────────────────────────
 
     def _draw_hud(self):
         w, h = self.width, self.height
-        p    = self.player
+        p = self.player
 
-        # Panel background
-        arcade.draw_lrbt_rectangle_filled(12, 400, h - 118, h - 10, (9, 18, 42, 176))
-        arcade.draw_lrbt_rectangle_outline(12, 400, h - 118, h - 10, (95, 125, 185, 180), 2)
+        if not self.show_hud:
+            arcade.draw_text("[H] show HUD", 14, h-22, (128,148,192,115), 10)
+            return
 
-        # Score
-        self.txt_score.text = f"SCORE {self.score}"
-        self.txt_score.draw()
+        T  = THEMES[self.menu_theme]
+        hp = T["hud_panel"];  hb = T["hud_border"]
+        ht = T["hud_text"];   hd = T["hud_text_dim"]
 
-        # HP bar + label (only when show_health is True)
-        if self.show_health:
-            hr = max(0.0, p.health / p.max_health)
-            hc = (95, 230, 120) if hr > 0.45 else (255, 180, 80) if hr > 0.2 else (255, 90, 90)
-            bar_bottom = h - 66
-            bar_top    = h - 52
-            # Trough
-            arcade.draw_lrbt_rectangle_filled(24, 270, bar_bottom, bar_top, (28, 35, 55, 220))
-            # Fill
-            arcade.draw_lrbt_rectangle_filled(24, 24 + 246 * hr, bar_bottom, bar_top, hc)
-            # Border
-            arcade.draw_lrbt_rectangle_outline(24, 270, bar_bottom, bar_top, (95, 125, 185, 140), 1)
-            # Label (drawn just above the bar so it never touches the score)
-            self.txt_health.text = f"HP  {int(max(0, p.health))} / {p.max_health}"
-            self.txt_health.draw()
-        else:
-            # Tiny indicator so the player knows the bar is hidden
-            arcade.draw_text("HP hidden  [H]", 24, h - 66, (140, 160, 200, 160), 11)
+        arcade.draw_lrbt_rectangle_filled(12, 400, h-118, h-10, hp)
+        arcade.draw_lrbt_rectangle_outline(12, 400, h-118, h-10, hb, 2)
 
-        # Timer (top-right corner)
-        self.txt_timer.text = f"TIME {self.time_alive:05.1f}s"
-        self.txt_timer.draw()
+        # score
+        self.txt_score.text  = f"SCORE {self.score}"
+        self.txt_score.color = ht;  self.txt_score.draw()
 
-        # Active power-ups
+        # hp bar  (sits between h-66 and h-52, clearly below score at h-32)
+        hr = max(0.0, p.health/p.max_health)
+        hc = (95,230,120) if hr>0.45 else (255,180,80) if hr>0.2 else (255,90,90)
+        arcade.draw_lrbt_rectangle_filled(24, 270, h-66, h-52, (28,35,55,220))
+        arcade.draw_lrbt_rectangle_filled(24, 24+246*hr, h-66, h-52, hc)
+        arcade.draw_lrbt_rectangle_outline(24, 270, h-66, h-52, (*hb[:3],118), 1)
+        self.txt_health.text  = f"HP  {int(max(0,p.health))} / {p.max_health}"
+        self.txt_health.color = ht;  self.txt_health.draw()
+
+        self.txt_timer.text  = f"TIME {self.time_alive:05.1f}s"
+        self.txt_timer.color = hd;  self.txt_timer.draw()
+
         active = []
         if p.shield_active:   active.append(f"SHIELD {p.shield_timer:.0f}s")
         if p.autofire_active: active.append(f"AUTO {p.autofire_timer:.0f}s")
         if p.speed_active:    active.append(f"SPEED {p.speed_timer:.0f}s")
         if p.triple_active:   active.append(f"TRIPLE {p.triple_timer:.0f}s")
-        self.txt_active.text = ("ACTIVE: " + "   ".join(active)) if active else ""
-        if active:
-            self.txt_active.draw()
+        self.txt_active.text  = ("ACTIVE: "+"   ".join(active)) if active else ""
+        self.txt_active.color = (255,230,100)
+        if active: self.txt_active.draw()
 
-        # Inventory
         inv = p.inventory
         self.txt_inv.text = (
             f"[1]SPD:{inv['speed']}/{MAX_POWERUP_STORAGE}  "
             f"[2]SHD:{inv['shield']}/{MAX_POWERUP_STORAGE}  "
             f"[3]AUT:{inv['autofire']}/{MAX_POWERUP_STORAGE}  "
-            f"[4]TRP:{inv['triple']}/{MAX_POWERUP_STORAGE}"
-        )
-        self.txt_inv.draw()
+            f"[4]TRP:{inv['triple']}/{MAX_POWERUP_STORAGE}")
+        self.txt_inv.color = hd;  self.txt_inv.draw()
 
-        # Combo
         if self.combo > 1 and self.combo_timer > 0:
             self.txt_combo.text = f"x{self.combo} COMBO"
             self.txt_combo.draw()
 
-        # Notification
         if self.notif_timer > 0:
-            alpha = min(255, int(self.notif_timer * 280))
-            self.txt_notif.text  = self.notif_text
+            alpha = min(255, int(self.notif_timer*280))
             c = self.notif_color
-            self.txt_notif.color = (c[0], c[1], c[2], alpha)
+            self.txt_notif.text  = self.notif_text
+            self.txt_notif.color = (c[0],c[1],c[2],alpha)
             self.txt_notif.draw()
 
         self.txt_hint.draw()
 
     def _draw_crosshair(self):
         x, y = self.mouse_x, self.mouse_y
-        arcade.draw_circle_outline(x, y, 13, (130, 220, 255, 185), 2)
-        arcade.draw_line(x-20, y,  x-8,  y,  (130, 220, 255, 185), 2)
-        arcade.draw_line(x+8,  y,  x+20, y,  (130, 220, 255, 185), 2)
-        arcade.draw_line(x,  y-20, x,  y-8,  (130, 220, 255, 185), 2)
-        arcade.draw_line(x,  y+8,  x,  y+20, (130, 220, 255, 185), 2)
+        arcade.draw_circle_outline(x,y,13,(130,220,255,185),2)
+        for x1,y1,x2,y2 in [(x-20,y,x-8,y),(x+8,y,x+20,y),
+                              (x,y-20,x,y-8),(x,y+8,x,y+20)]:
+            arcade.draw_line(x1,y1,x2,y2,(130,220,255,185),2)
 
-    # --------------------------------------------------
-    # Pause overlay with clickable Play button
-    # --------------------------------------------------
-
-    def _draw_pause_overlay(self):
-        w, h = self.width, self.height
-        # Dark vignette
-        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3, 6, 18, 175))
-
-        # "PAUSED" title
-        self.txt_paused.draw()
-
-        # Play button
-        bx = w // 2
-        by = h // 2 - 4
-        bw = PLAY_BTN_W // 2
-        bh = PLAY_BTN_H // 2
-        arcade.draw_lrbt_rectangle_filled(bx - bw, bx + bw, by - bh, by + bh, (30, 80, 160, 230))
-        arcade.draw_lrbt_rectangle_outline(bx - bw, bx + bw, by - bh, by + bh, (120, 190, 255, 240), 2)
-        self.txt_play_btn.draw()
-
-        # Sub-hint
-        arcade.draw_text("or press ESC again to resume", w // 2, h // 2 - bh - 24,
-                         (170, 190, 225, 200), 13, anchor_x="center")
-
-    def _play_btn_rect(self):
-        """Return (left, right, bottom, top) of the Play button in screen coords."""
-        bx = self.width  // 2
-        by = self.height // 2 - 4
-        bw = PLAY_BTN_W // 2
-        bh = PLAY_BTN_H // 2
-        return bx - bw, bx + bw, by - bh, by + bh
-
-    # --------------------------------------------------
+    # ══════════════════════════════════════════════════
+    #  ON DRAW
+    # ══════════════════════════════════════════════════
 
     def on_draw(self):
         w, h = self.width, self.height
         self.clear()
-        self._draw_background()
-        if not self.game_over:
-            self._draw_entity_glows()
+
+        if self.game_state == STATE_MENU:
+            self._draw_menu()
+            return
+
+        # Playing / paused / gameover — always draw the world
+        self._draw_bg_space()
+        self._draw_entity_glows()
         self.powerups.draw()
         self.player_list.draw()
-        self.enemies.draw()
-        self.shooting_enemies.draw()
-        self.bosses.draw()
-        self.bullets.draw()
-        self.enemy_bullets.draw()
+        self.enemies.draw();  self.shooting_enemies.draw();  self.bosses.draw()
+        self.bullets.draw();  self.enemy_bullets.draw()
 
         for b in self.bullets:
-            arcade.draw_circle_filled(b.center_x, b.center_y, 6, (255, 200, 110, 55))
+            arcade.draw_circle_filled(b.center_x,b.center_y,6,(255,200,110,55))
         for b in self.enemy_bullets:
-            arcade.draw_circle_filled(b.center_x, b.center_y, 7, (255, 85, 85, 55))
+            arcade.draw_circle_filled(b.center_x,b.center_y,7,(255,85,85,55))
 
         if self.player.shield_active:
-            ring_r = 38 + 2.5*math.sin(self.bg_time*9.0)
-            arcade.draw_circle_outline(self.player.center_x, self.player.center_y,
-                                        ring_r, (90, 235, 255, 230), 3)
+            rr = 38+2.5*math.sin(self.bg_time*9)
+            arcade.draw_circle_outline(self.player.center_x,self.player.center_y,
+                                        rr,(90,235,255,230),3)
 
         for pu in self.powerups:
-            arcade.draw_text(POWERUP_LABELS[pu.kind],
-                             pu.center_x, pu.center_y - 8,
-                             arcade.color.WHITE, 9, anchor_x="center")
+            arcade.draw_text(POWERUP_LABELS[pu.kind],pu.center_x,pu.center_y-8,
+                             arcade.color.WHITE,9,anchor_x="center")
 
         self._draw_enemy_health_bars()
         self._draw_particles()
         self._draw_hud()
 
         if self.damage_flash > 0:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (255, 65, 65, int(170 * self.damage_flash)))
+            arcade.draw_lrbt_rectangle_filled(0,w,0,h,
+                (255,65,65,int(170*self.damage_flash)))
 
         self._draw_crosshair()
 
-        if self.game_over:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3, 6, 18, 165))
+        if self.game_state == STATE_GAMEOVER:
+            arcade.draw_lrbt_rectangle_filled(0,w,0,h,(3,6,18,165))
             self.txt_score2.text = f"SCORE {self.score}"
-            self.txt_over.draw()
-            self.txt_score2.draw()
-            self.txt_restart.draw()
+            self.txt_over.draw();  self.txt_score2.draw();  self.txt_restart.draw()
 
-        # Pause overlay drawn last so it sits on top of everything
-        if self.paused and not self.game_over:
-            self._draw_pause_overlay()
+        if self.game_state == STATE_PAUSED:
+            self._draw_menu()   # menu overlaid on frozen world
 
-    # --------------------------------------------------
-
-    def _update_starfield(self, delta):
-        w, h = self.width, self.height
-        flow  = 1.0 + min(0.9, self.time_alive / 80.0)
-        for star in self.stars:
-            star["y"] -= star["speed"] * flow * delta
-            if star["y"] < -6:
-                star["y"] = h + random.uniform(4, 60)
-                star["x"] = random.uniform(0, w)
-
-    def _update_particles(self, delta):
-        alive = []
-        for pt in self.particles:
-            pt["life"] -= delta
-            if pt["life"] <= 0:
-                continue
-            pt["x"]  += pt["vx"] * delta
-            pt["y"]  += pt["vy"] * delta
-            pt["vx"] *= pt["drag"]
-            pt["vy"] *= pt["drag"]
-            alive.append(pt)
-        self.particles = alive
-
-    # --------------------------------------------------
-    # Auto-trigger helpers
-    # --------------------------------------------------
-
-    def _check_auto_triggers(self):
-        """
-        1) If >AUTO_FIRE_ENEMY_THRESHOLD enemies are on screen and autofire is
-           stored (and not already active), consume one charge and activate.
-        2) If player health <= 50 % and shield is stored (and not already active),
-           consume one charge and activate.
-        """
-        p = self.player
-        enemy_count = len(self.enemies) + len(self.shooting_enemies) + len(self.bosses)
-
-        if (not p.autofire_active
-                and enemy_count > AUTO_FIRE_ENEMY_THRESHOLD
-                and p.inventory.get("autofire", 0) > 0):
-            p.inventory["autofire"] -= 1
-            self._activate_powerup("autofire")
-            # Override notification to make it clear it was auto-triggered
-            self.notif_text  = f"AUTO-FIRE TRIGGERED  ({enemy_count} enemies)"
-            self.notif_color = (255, 130, 255)
-            self.notif_timer = 1.6
-
-        if (not p.shield_active
-                and (p.health / p.max_health) <= AUTO_SHIELD_HEALTH_RATIO
-                and p.inventory.get("shield", 0) > 0):
-            p.inventory["shield"] -= 1
-            self._activate_powerup("shield")
-            self.notif_text  = "SHIELD AUTO-ACTIVATED  (low HP)"
-            self.notif_color = (90, 220, 255)
-            self.notif_timer = 1.6
-
-    # --------------------------------------------------
+    # ══════════════════════════════════════════════════
+    #  ON UPDATE
+    # ══════════════════════════════════════════════════
 
     def on_update(self, delta_time):
         delta = min(0.05, delta_time)
         self.bg_time += delta
 
-        # Starfield + particles keep moving even when paused (cosmetic only)
         self._update_starfield(delta)
         self._update_particles(delta)
 
-        if self.notif_timer > 0:
-            self.notif_timer -= delta
-        if self.damage_flash > 0:
-            self.damage_flash = max(0.0, self.damage_flash - 2.6*delta)
-        if self.contact_damage_timer > 0:
-            self.contact_damage_timer -= delta
-        if self.combo_timer > 0:
-            self.combo_timer -= delta
-        elif self.combo > 0:
-            self.combo = 0
+        if self.notif_timer  > 0: self.notif_timer  -= delta
+        if self.damage_flash > 0: self.damage_flash = max(0.0, self.damage_flash-2.6*delta)
+        if self.contact_damage_timer > 0: self.contact_damage_timer -= delta
+        if self.combo_timer > 0: self.combo_timer -= delta
+        elif self.combo > 0:     self.combo = 0
 
-        # ── Early exit if paused or game over ──
-        if self.paused or self.game_over:
+        if self.game_state != STATE_PLAYING:
             return
 
         self.time_alive += delta
         p = self.player
+        difficulty = min(3.0, self.time_alive/90.0)
 
-        # ---- difficulty ----
-        difficulty = min(3.0, self.time_alive / 90.0)
-
-        # ---- player movement ----
-        ix = float(self.right_key) - float(self.left_key)
-        iy = float(self.up)        - float(self.down)
-        if ix != 0 and iy != 0:
-            ix *= 0.70710678; iy *= 0.70710678
-        tx = ix * p.get_speed(); ty = iy * p.get_speed()
+        # movement
+        ix = float(self.right_key)-float(self.left_key)
+        iy = float(self.up)-float(self.down)
+        if ix and iy: ix *= 0.70710678;  iy *= 0.70710678
+        ship_spd = p.get_speed() * SHIPS[self.selected_ship]["spd_mult"]
         sm = min(1.0, 14.0*delta)
-        p.change_x += (tx - p.change_x)*sm
-        p.change_y += (ty - p.change_y)*sm
+        p.change_x += (ix*ship_spd - p.change_x)*sm
+        p.change_y += (iy*ship_spd - p.change_y)*sm
         p.update(delta)
         p.update_powerups(delta)
 
-        # Engine exhaust
-        mv = abs(p.change_x) + abs(p.change_y)
-        if mv > 130 and random.random() < 0.55:
-            ang = math.atan2(-p.change_y, -p.change_x) + random.uniform(-0.5, 0.5)
-            spd = random.uniform(80, 160)
-            self._add_particle(
-                x=p.center_x+random.uniform(-4, 4),
-                y=p.center_y-8+random.uniform(-3, 3),
-                vx=math.cos(ang)*spd, vy=math.sin(ang)*spd,
-                size=random.uniform(1.4, 2.8), life=random.uniform(0.12, 0.24),
-                color=(120, 205, 255), drag=0.9)
+        # boundary clamp uses live window size (fixes fullscreen)
+        p.left   = max(p.left,   0)
+        p.right  = min(p.right,  self.width)
+        p.bottom = max(p.bottom, 0)
+        p.top    = min(p.top,    self.height)
 
-        # Firing
+        # engine particles
+        mv = abs(p.change_x)+abs(p.change_y)
+        if mv > 130 and random.random() < 0.55:
+            ang = math.atan2(-p.change_y,-p.change_x)+random.uniform(-0.5,0.5)
+            s2  = random.uniform(80,160)
+            self._add_particle(
+                p.center_x+random.uniform(-4,4), p.center_y-8+random.uniform(-3,3),
+                math.cos(ang)*s2, math.sin(ang)*s2,
+                random.uniform(1.4,2.8), random.uniform(0.12,0.24), (120,205,255), 0.9)
+
+        # firing
         firing = self.mouse_held or p.autofire_active
         if firing:
             rate = AUTO_FIRE_RATE if p.autofire_active else NORMAL_FIRE_RATE
@@ -794,277 +996,300 @@ class GameWindow(arcade.Window):
                     self._shoot_toward(self.mouse_x, self.mouse_y)
                 self.fire_timer -= rate
 
-        self.bullets.update(delta)
-        self.enemy_bullets.update(delta)
+        self.bullets.update(delta);  self.enemy_bullets.update(delta)
         self.powerups.update(delta)
 
-        # Cull off-screen / expired
-        w, h = self.width, self.height
+        ww, hh = self.width, self.height
         for b in list(self.bullets):
-            if b.life<=0 or b.right<-30 or b.left>w+30 or b.top<-30 or b.bottom>h+30:
+            if b.life<=0 or b.right<-30 or b.left>ww+30 or b.top<-30 or b.bottom>hh+30:
                 b.remove_from_sprite_lists()
         for b in list(self.enemy_bullets):
-            if b.life<=0 or b.right<-30 or b.left>w+30 or b.top<-30 or b.bottom>h+30:
+            if b.life<=0 or b.right<-30 or b.left>ww+30 or b.top<-30 or b.bottom>hh+30:
                 b.remove_from_sprite_lists()
         for pu in list(self.powerups):
-            if pu.top < -10:
-                pu.remove_from_sprite_lists()
+            if pu.top < -10: pu.remove_from_sprite_lists()
 
-        # ---- spawn intervals ----
-        enemy_interval    = max(0.10, 1.0  - 0.58*min(difficulty,1) - 0.16*max(0,difficulty-1) - 0.08*max(0,difficulty-2))
-        shooting_interval = max(0.45, 3.0  - 2.30*min(difficulty,1) - 0.40*max(0,difficulty-1))
-        boss_interval     = max(7.0,  22.0 - 9.0 *min(difficulty,1) - 3.0 *max(0,difficulty-1))
-
-        enemy_batch    = 1 + int(difficulty * 1.8)
-        shooting_batch = 1 + int(difficulty * 0.9)
+        # spawning
+        ei = max(0.10, 1.0 -0.58*min(difficulty,1)-0.16*max(0,difficulty-1)-0.08*max(0,difficulty-2))
+        si = max(0.45, 3.0 -2.30*min(difficulty,1)-0.40*max(0,difficulty-1))
+        bi = max(7.0,  22.0-9.0 *min(difficulty,1)-3.0 *max(0,difficulty-1))
+        eb = 1+int(difficulty*1.8);  sb = 1+int(difficulty*0.9)
 
         self.enemy_spawn += delta
-        if self.enemy_spawn >= enemy_interval:
-            for _ in range(enemy_batch):
-                self.spawn_enemy(difficulty)
+        if self.enemy_spawn >= ei:
+            for _ in range(eb): self.spawn_enemy(difficulty)
             self.enemy_spawn = 0.0
 
         self.shooting_spawn += delta
-        if self.shooting_spawn >= shooting_interval:
-            for _ in range(shooting_batch):
-                self.spawn_shooting_enemy(difficulty)
+        if self.shooting_spawn >= si:
+            for _ in range(sb): self.spawn_shooting_enemy(difficulty)
             self.shooting_spawn = 0.0
 
         self.boss_spawn += delta
-        if self.boss_spawn >= boss_interval:
-            self.spawn_boss(difficulty)
-            self.boss_spawn = 0.0
+        if self.boss_spawn >= bi:
+            self.spawn_boss(difficulty);  self.boss_spawn = 0.0
 
         self.update_enemies(delta, difficulty)
         self.check_collisions()
-
-        # ---- auto-trigger power-ups ----
         self._check_auto_triggers()
 
-    # --------------------------------------------------
+    # ──────────────────────────────────────────────────
+    #  ENEMY AI
+    # ──────────────────────────────────────────────────
 
     def _nearest_enemy(self):
-        all_e = list(self.enemies) + list(self.shooting_enemies) + list(self.bosses)
-        if not all_e:
-            return None
+        all_e = list(self.enemies)+list(self.shooting_enemies)+list(self.bosses)
+        if not all_e: return None
         px, py = self.player.center_x, self.player.center_y
         return min(all_e, key=lambda e: math.hypot(e.center_x-px, e.center_y-py))
 
     def _shoot_toward(self, tx, ty):
         px, py = self.player.center_x, self.player.center_y
         base   = math.atan2(ty-py, tx-px)
-        for off in ([-0.18, 0.0, 0.18] if self.player.triple_active else [0.0]):
-            ang = base + off
-            self.bullets.append(Bullet(px, py, ang))
-            self._spawn_muzzle(px, py, ang)
-
-    # --------------------------------------------------
+        for off in ([-0.18,0.0,0.18] if self.player.triple_active else [0.0]):
+            ang = base+off
+            self.bullets.append(Bullet(px,py,ang))
+            self._spawn_muzzle(px,py,ang)
 
     def update_enemies(self, delta, difficulty):
         p = self.player
-
         for e in self.enemies:
-            a     = math.atan2(p.center_y-e.center_y, p.center_x-e.center_x)
-            spd   = ENEMY_SPEED * (1.0 + 0.22*difficulty)
-            e.center_x += math.cos(a)*spd*delta
-            e.center_y += math.sin(a)*spd*delta
-            e.angle     = math.degrees(a) - 90
+            a   = math.atan2(p.center_y-e.center_y, p.center_x-e.center_x)
+            spd = ENEMY_SPEED*(1.0+0.22*difficulty)
+            e.center_x += math.cos(a)*spd*delta;  e.center_y += math.sin(a)*spd*delta
+            e.angle = math.degrees(a)-90
 
         for e in self.shooting_enemies:
-            a     = math.atan2(p.center_y-e.center_y, p.center_x-e.center_x)
-            spd   = ENEMY_SPEED * (0.9 + 0.22*difficulty)
-            e.center_x += math.cos(a)*spd*delta
-            e.center_y += math.sin(a)*spd*delta
-            e.angle     = math.degrees(a) - 90
+            a   = math.atan2(p.center_y-e.center_y, p.center_x-e.center_x)
+            spd = ENEMY_SPEED*(0.9+0.22*difficulty)
+            e.center_x += math.cos(a)*spd*delta;  e.center_y += math.sin(a)*spd*delta
+            e.angle = math.degrees(a)-90
             e.shoot_timer += delta
-            shoot_rate = max(0.30, 1.1 - 0.30*difficulty)
-            if e.shoot_timer >= shoot_rate:
-                self.enemy_bullets.append(EnemyBullet(e.center_x, e.center_y, p.center_x, p.center_y))
+            if e.shoot_timer >= max(0.30, 1.1-0.30*difficulty):
+                self.enemy_bullets.append(EnemyBullet(e.center_x,e.center_y,p.center_x,p.center_y))
                 e.shoot_timer = 0.0
 
         for boss in self.bosses:
-            a     = math.atan2(p.center_y-boss.center_y, p.center_x-boss.center_x)
-            spd   = BOSS_SPEED * (0.95 + 0.15*difficulty)
-            boss.center_x += math.cos(a)*spd*delta
-            boss.center_y += math.sin(a)*spd*delta
-            boss.angle     = math.degrees(a) - 90
-            boss.normal_timer  += delta
-            boss.special_timer += delta
-
-            nr = max(0.6, 1.45 - 0.28*difficulty)
-            if boss.normal_timer >= nr:
-                self.enemy_bullets.append(EnemyBullet(boss.center_x, boss.center_y, p.center_x, p.center_y))
+            a   = math.atan2(p.center_y-boss.center_y, p.center_x-boss.center_x)
+            spd = BOSS_SPEED*(0.95+0.15*difficulty)
+            boss.center_x += math.cos(a)*spd*delta;  boss.center_y += math.sin(a)*spd*delta
+            boss.angle = math.degrees(a)-90
+            boss.normal_timer += delta;  boss.special_timer += delta
+            if boss.normal_timer >= max(0.6,1.45-0.28*difficulty):
+                self.enemy_bullets.append(EnemyBullet(boss.center_x,boss.center_y,p.center_x,p.center_y))
                 boss.normal_timer = 0.0
-
-            sr = max(2.0, 4.8 - 0.9*difficulty)
-            if boss.special_timer >= sr:
-                base  = math.atan2(p.center_y-boss.center_y, p.center_x-boss.center_x)
-                n     = 5 + int(difficulty)
-                step  = 0.26
-                half  = n // 2
-                for i in range(-half, half+1):
+            if boss.special_timer >= max(2.0,4.8-0.9*difficulty):
+                base = math.atan2(p.center_y-boss.center_y, p.center_x-boss.center_x)
+                nn   = 5+int(difficulty)
+                for i in range(-(nn//2), nn//2+1):
                     self.enemy_bullets.append(EnemyBullet(
                         boss.center_x, boss.center_y,
-                        angle_rad=base+i*step,
-                        speed=ENEMY_BULLET_SPEED*(1.0+0.05*difficulty)))
-                self._burst(boss.center_x, boss.center_y, 16, (255,100,100), 60, 170, 2.0, 3.8, 0.15, 0.35)
+                        angle_rad=base+i*0.26,
+                        speed=ENEMY_BULLET_SPEED*(1+0.05*difficulty)))
+                self._burst(boss.center_x,boss.center_y,16,(255,100,100),60,170,2,3.8,.15,.35)
                 boss.special_timer = 0.0
 
-    # --------------------------------------------------
+    # ──────────────────────────────────────────────────
+    #  COLLISIONS
+    # ──────────────────────────────────────────────────
 
     def check_collisions(self):
         p = self.player
-
         for bullet in list(self.bullets):
             hits = arcade.check_for_collision_with_lists(
                 bullet, [self.enemies, self.shooting_enemies, self.bosses])
-            if not hits:
-                continue
-            enemy = hits[0]
-            enemy.health -= 20
-            self._burst(bullet.center_x, bullet.center_y, 6, (255,220,140), 70, 190, 1.2, 2.2, 0.08, 0.2)
+            if not hits: continue
+            enemy = hits[0];  enemy.health -= 20
+            self._burst(bullet.center_x,bullet.center_y,6,(255,220,140),70,190,1.2,2.2,.08,.2)
             bullet.remove_from_sprite_lists()
             if enemy.health <= 0:
-                is_boss     = isinstance(enemy, BossEnemy)
-                self.score += (70 if is_boss else 12) + min(24, self.combo*2)
-                self.combo += 1; self.combo_timer = 2.0
-                self._try_drop_powerup(enemy.center_x, enemy.center_y, is_boss)
+                is_boss = isinstance(enemy, BossEnemy)
+                self.score += (70 if is_boss else 12)+min(24,self.combo*2)
+                self.combo += 1;  self.combo_timer = 2.0
+                self._try_drop_powerup(enemy.center_x,enemy.center_y,is_boss)
                 if is_boss:
-                    self._burst(enemy.center_x, enemy.center_y, 64, (255,100,80), 70, 320, 2.3, 4.8, 0.25, 0.65)
+                    self._burst(enemy.center_x,enemy.center_y,64,(255,100,80),70,320,2.3,4.8,.25,.65)
                 else:
-                    self._burst(enemy.center_x, enemy.center_y, 24, (255,145,90), 55, 240, 1.7, 3.5, 0.2, 0.45)
+                    self._burst(enemy.center_x,enemy.center_y,24,(255,145,90),55,240,1.7,3.5,.2,.45)
                 enemy.remove_from_sprite_lists()
 
         for b in list(self.enemy_bullets):
-            if not arcade.check_for_collision(b, p):
-                continue
-            hx, hy = b.center_x, b.center_y
-            b.remove_from_sprite_lists()
+            if not arcade.check_for_collision(b, p): continue
+            hx, hy = b.center_x, b.center_y;  b.remove_from_sprite_lists()
             if p.shield_active:
-                self._burst(hx, hy, 10, (110,230,255), 80, 220, 1.2, 2.8, 0.1, 0.24)
+                self._burst(hx,hy,10,(110,230,255),80,220,1.2,2.8,.1,.24)
             else:
-                p.health -= 10; self.combo = 0
-                self.damage_flash = max(self.damage_flash, 0.95)
-                self._burst(hx, hy, 18, (255,95,95), 90, 260, 1.6, 3.4, 0.15, 0.32)
+                p.health -= 10;  self.combo = 0
+                self.damage_flash = max(self.damage_flash,0.95)
+                self._burst(hx,hy,18,(255,95,95),90,260,1.6,3.4,.15,.32)
 
         touching = arcade.check_for_collision_with_lists(
             p, [self.enemies, self.shooting_enemies, self.bosses])
         if touching and self.contact_damage_timer <= 0:
             self.contact_damage_timer = CONTACT_DAMAGE_COOLDOWN
             if p.shield_active:
-                self._burst(p.center_x, p.center_y, 14, (100,230,255), 70, 180, 1.6, 3.2, 0.1, 0.24)
+                self._burst(p.center_x,p.center_y,14,(100,230,255),70,180,1.6,3.2,.1,.24)
             else:
-                p.health -= CONTACT_DAMAGE; self.combo = 0
-                self.damage_flash = max(self.damage_flash, 1.0)
-                self._burst(p.center_x, p.center_y, 24, (255,80,80), 90, 260, 1.8, 4.0, 0.16, 0.36)
+                p.health -= CONTACT_DAMAGE;  self.combo = 0
+                self.damage_flash = max(self.damage_flash,1.0)
+                self._burst(p.center_x,p.center_y,24,(255,80,80),90,260,1.8,4,.16,.36)
 
         for pu in list(self.powerups):
             if arcade.check_for_collision(pu, p):
                 self._collect_powerup(pu.kind)
                 c = POWERUP_COLORS[pu.kind]
-                self._burst(pu.center_x, pu.center_y, 20, (c[0],c[1],c[2]), 70, 240, 1.4, 3.0, 0.12, 0.32)
+                self._burst(pu.center_x,pu.center_y,20,(c[0],c[1],c[2]),70,240,1.4,3,.12,.32)
                 pu.remove_from_sprite_lists()
 
-        if p.health <= 0 and not self.game_over:
-            self.game_over  = True; self.mouse_held = False
-            self._burst(p.center_x, p.center_y, 85, (255,75,75), 80, 360, 2.0, 5.0, 0.25, 0.75)
+        if p.health <= 0 and self.game_state == STATE_PLAYING:
+            self.game_state = STATE_GAMEOVER;  self.mouse_held = False
+            self._burst(p.center_x,p.center_y,85,(255,75,75),80,360,2,5,.25,.75)
 
-    # --------------------------------------------------
+    # ──────────────────────────────────────────────────
+    #  AUTO TRIGGERS
+    # ──────────────────────────────────────────────────
+
+    def _check_auto_triggers(self):
+        p  = self.player
+        ne = len(self.enemies)+len(self.shooting_enemies)+len(self.bosses)
+        if (not p.autofire_active and ne > AUTO_FIRE_ENEMY_THRESHOLD
+                and p.inventory.get("autofire",0) > 0):
+            p.inventory["autofire"] -= 1
+            self._activate_powerup("autofire")
+            self.notif_text  = f"AUTO-FIRE TRIGGERED  ({ne} enemies!)"
+            self.notif_color = (255,130,255);  self.notif_timer = 1.6
+        if (not p.shield_active
+                and (p.health/p.max_health) <= AUTO_SHIELD_HEALTH_RATIO
+                and p.inventory.get("shield",0) > 0):
+            p.inventory["shield"] -= 1
+            self._activate_powerup("shield")
+            self.notif_text  = "SHIELD AUTO-ACTIVATED  (low HP!)"
+            self.notif_color = (90,220,255);  self.notif_timer = 1.6
+
+    # ──────────────────────────────────────────────────
+    #  POWERUP HANDLERS
+    # ──────────────────────────────────────────────────
 
     def _collect_powerup(self, kind: str):
         p = self.player
         if kind == "health":
-            p.health = min(PLAYER_HEALTH, p.health + 30)
+            p.health = min(p.max_health, p.health+30)
             self.notif_text  = "+30 HEALTH!"
-            self.notif_color = (130, 255, 130)
-            self.notif_timer = 1.4
+            self.notif_color = (130,255,130);  self.notif_timer = 1.4
             return
         if p.inventory[kind] < MAX_POWERUP_STORAGE:
             p.inventory[kind] += 1
             self.notif_text  = f"{POWERUP_LABELS[kind]} STORED  [{p.inventory[kind]}/{MAX_POWERUP_STORAGE}]"
-            self.notif_color = _notif_color(kind)
-            self.notif_timer = 1.0
+            self.notif_color = _notif_color(kind);  self.notif_timer = 1.0
         else:
             self._activate_powerup(kind, immediate=True)
 
     def _activate_powerup(self, kind: str, immediate: bool = False):
         p = self.player
-        msgs = {"shield":   ("SHIELD ONLINE!",  (110, 230, 255)),
-                "autofire": ("AUTO-FIRE!",       (255, 130, 255)),
-                "speed":    ("SPEED BOOST!",     (255, 220, 120)),
-                "triple":   ("TRIPLE SHOT!",     (255, 180, 120))}
+        msgs = {"shield":("SHIELD ONLINE!",(110,230,255)),
+                "autofire":("AUTO-FIRE!",(255,130,255)),
+                "speed":("SPEED BOOST!",(255,220,120)),
+                "triple":("TRIPLE SHOT!",(255,180,120))}
         text, color = msgs[kind]
-        self.notif_text  = ("STORAGE FULL – " + text) if immediate else text
-        self.notif_color = color
-        self.notif_timer = 1.4
+        self.notif_text  = ("STORAGE FULL - "+text) if immediate else text
+        self.notif_color = color;  self.notif_timer = 1.4
         setattr(p, f"{kind}_active", True)
         setattr(p, f"{kind}_timer",  POWERUP_DURATION)
 
     def _try_drop_powerup(self, x, y, boss=False):
-        if random.randint(1, 100) <= (100 if boss else DROP_CHANCE):
+        if random.randint(1,100) <= (100 if boss else DROP_CHANCE):
             self.powerups.append(Powerup(x, y, random.choice(POWERUP_TYPES)))
 
-    # --------------------------------------------------
+    # ──────────────────────────────────────────────────
+    #  SPAWNING
+    # ──────────────────────────────────────────────────
 
     def spawn_enemy(self, difficulty=0.0):
-        hp = int(ENEMY_HEALTH * (1.0 + 0.35*difficulty))
-        self.enemies.append(Enemy(random.randint(40, self.width-40), self.height+20, hp))
+        hp = int(ENEMY_HEALTH*(1+0.35*difficulty))
+        self.enemies.append(Enemy(random.randint(40,self.width-40), self.height+20, hp))
 
     def spawn_shooting_enemy(self, difficulty=0.0):
-        hp = int(ENEMY_HEALTH * (1.0 + 0.35*difficulty))
+        hp = int(ENEMY_HEALTH*(1+0.35*difficulty))
         self.shooting_enemies.append(
-            ShootingEnemy(random.randint(50, self.width-50), self.height+30, hp))
+            ShootingEnemy(random.randint(50,self.width-50), self.height+30, hp))
 
     def spawn_boss(self, difficulty=0.0):
-        hp = int(BOSS_HEALTH * (1.0 + 0.45*difficulty))
-        self.bosses.append(BossEnemy(random.randint(140, self.width-140), self.height+55, hp))
+        hp = int(BOSS_HEALTH*(1+0.45*difficulty))
+        self.bosses.append(BossEnemy(random.randint(140,self.width-140), self.height+55, hp))
         self.notif_text  = "BOSS INCOMING!"
-        self.notif_color = (255, 120, 120)
-        self.notif_timer = 1.6
+        self.notif_color = (255,120,120);  self.notif_timer = 1.6
 
-    # --------------------------------------------------
+    # ══════════════════════════════════════════════════
+    #  INPUT
+    # ══════════════════════════════════════════════════
 
     def on_mouse_motion(self, x, y, dx, dy):
-        self.mouse_x = x; self.mouse_y = y
+        self.mouse_x = x;  self.mouse_y = y
 
     def on_mouse_press(self, x, y, button, modifiers):
-        # While paused: clicking the Play button resumes the game
-        if self.paused and not self.game_over:
-            if button == arcade.MOUSE_BUTTON_LEFT:
-                l, r, b, t = self._play_btn_rect()
-                if l <= x <= r and b <= y <= t:
-                    self.paused = False
-                    self.set_mouse_visible(False)
+        if button != arcade.MOUSE_BUTTON_LEFT:
             return
 
-        if self.game_over or button != arcade.MOUSE_BUTTON_LEFT:
+        if self.game_state in (STATE_MENU, STATE_PAUSED):
+            # ship card selection
+            for i, rect in self._ship_cards.items():
+                l, r, b, t = rect
+                if l<=x<=r and b<=y<=t and SHIPS[i]["available"]:
+                    self.selected_ship = i;  return
+            # button actions
+            for name, rect in self._menu_btns.items():
+                l, r, b, t = rect
+                if l<=x<=r and b<=y<=t:
+                    if name == "play":
+                        if self.game_state == STATE_MENU:
+                            self.setup()
+                        else:
+                            self.game_state = STATE_PLAYING
+                            self.set_mouse_visible(False)
+                    elif name == "quit":
+                        self.game_state = STATE_MENU
+                        self.set_mouse_visible(True)
+                    elif name == "theme":
+                        self.menu_theme = "light" if self.menu_theme=="dark" else "dark"
+                    return
             return
-        self.mouse_held = True; self.mouse_x = x; self.mouse_y = y
-        self._shoot_toward(x, y); self.fire_timer = 0.0
+
+        if self.game_state == STATE_PLAYING:
+            self.mouse_held = True;  self.mouse_x = x;  self.mouse_y = y
+            self._shoot_toward(x, y);  self.fire_timer = 0.0
 
     def on_mouse_release(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.mouse_held = False
 
     def on_key_press(self, key, modifiers):
-        if   key == arcade.key.W:     self.up        = True
-        elif key == arcade.key.S:     self.down      = True
-        elif key == arcade.key.A:     self.left_key  = True
-        elif key == arcade.key.D:     self.right_key = True
-        elif key == arcade.key.R and self.game_over:
-            self.setup()
+        if   key == arcade.key.W: self.up        = True
+        elif key == arcade.key.S: self.down      = True
+        elif key == arcade.key.A: self.left_key  = True
+        elif key == arcade.key.D: self.right_key = True
+
         elif key == arcade.key.ESCAPE:
-            # Toggle pause (no effect on game-over screen)
-            if not self.game_over:
-                self.paused = not self.paused
-                # Show cursor while paused so the Play button is clickable
-                self.set_mouse_visible(self.paused)
-        elif key == arcade.key.H and not self.game_over:
-            self.show_health = not self.show_health
+            if self.game_state == STATE_PLAYING:
+                self.game_state = STATE_PAUSED
+                self.set_mouse_visible(True)
+            elif self.game_state == STATE_PAUSED:
+                self.game_state = STATE_PLAYING
+                self.set_mouse_visible(False)
+            # no ESC action in STATE_MENU or STATE_GAMEOVER
+
+        elif key == arcade.key.H:
+            if self.game_state in (STATE_PLAYING, STATE_PAUSED):
+                self.show_hud = not self.show_hud
+
+        elif key == arcade.key.R and self.game_state == STATE_GAMEOVER:
+            self.setup()
+
         elif key == arcade.key.F11:
             self._toggle_fullscreen()
+
         elif key in POWERUP_KEYS:
-            self._use_stored_powerup(POWERUP_KEYS[key])
+            if self.game_state == STATE_PLAYING:
+                self._use_stored_powerup(POWERUP_KEYS[key])
 
     def on_key_release(self, key, modifiers):
         if   key == arcade.key.W: self.up        = False
@@ -1072,47 +1297,37 @@ class GameWindow(arcade.Window):
         elif key == arcade.key.A: self.left_key  = False
         elif key == arcade.key.D: self.right_key = False
 
-    # --------------------------------------------------
+    # ──────────────────────────────────────────────────
+    #  FULLSCREEN
+    # ──────────────────────────────────────────────────
 
     def _toggle_fullscreen(self):
         self._fullscreen = not self._fullscreen
         self.set_fullscreen(self._fullscreen)
         if not self._fullscreen:
             self.set_size(SCREEN_WIDTH, SCREEN_HEIGHT)
+            try:
+                dw, dh = arcade.get_display_size()
+                self.set_location((dw-SCREEN_WIDTH)//2, (dh-SCREEN_HEIGHT)//2)
+            except Exception:
+                pass
 
     def _use_stored_powerup(self, kind: str):
-        if self.game_over or self.paused:
-            return
         p = self.player
         if p.inventory.get(kind, 0) <= 0:
             self.notif_text  = f"NO {POWERUP_LABELS[kind]} IN STORAGE!"
-            self.notif_color = (220, 100, 100)
-            self.notif_timer = 0.9
+            self.notif_color = (220,100,100);  self.notif_timer = 0.9
             return
         p.inventory[kind] -= 1
         self._activate_powerup(kind)
 
 
-# -------------------------------------------------
-# HELPERS
-# -------------------------------------------------
-
-def _notif_color(kind: str) -> tuple:
-    return {"speed":   (255, 220, 120),
-            "shield":  (110, 230, 255),
-            "autofire":(255, 130, 255),
-            "triple":  (255, 180, 120),
-            "health":  (130, 255, 130)}.get(kind, (255, 255, 255))
-
-
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
-
+# ─────────────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────────────
 
 def main():
     game = GameWindow()
-    game.setup()
     arcade.run()
 
 

@@ -1,7 +1,9 @@
 import arcade
 import random
 import math
+from collections import deque
 from PIL import Image
+import numpy as np
 
 # ─────────────────────────────────────────────────────
 #  CONSTANTS
@@ -231,15 +233,57 @@ SHIPS = [
 _texture_cache: dict = {}
 
 
+def _remove_background(img: Image.Image, threshold: int = 210) -> Image.Image:
+    """
+    Flood-fill from all four edges to remove the background colour
+    (white, light-grey, or any uniform border colour).  Only pixels
+    that are *reachable from the image border* and brighter than
+    `threshold` in all three channels are made transparent.
+    This preserves metallic/silver interior ship parts that happen to
+    be bright, because they are not connected to the outer border.
+    """
+    arr = np.array(img, dtype=np.uint8)   # shape (H, W, 4)
+    h, w = arr.shape[:2]
+
+    # ── Build a boolean mask of background pixels via BFS ──────────
+    visited  = np.zeros((h, w), dtype=bool)
+    q        = deque()
+
+    def _seed(y, x):
+        if not visited[y, x]:
+            r, g, b = int(arr[y, x, 0]), int(arr[y, x, 1]), int(arr[y, x, 2])
+            if r > threshold and g > threshold and b > threshold:
+                visited[y, x] = True
+                q.append((y, x))
+
+    # Seed from every pixel on all four edges
+    for x in range(w):
+        _seed(0, x);      _seed(h - 1, x)
+    for y in range(h):
+        _seed(y, 0);      _seed(y, w - 1)
+
+    # BFS — spread to 4-connected bright neighbours
+    while q:
+        y, x = q.popleft()
+        arr[y, x, 3] = 0          # make transparent
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            ny, nx = y + dy, x + dx
+            if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx]:
+                r, g, b = int(arr[ny, nx, 0]), int(arr[ny, nx, 1]), int(arr[ny, nx, 2])
+                if r > threshold and g > threshold and b > threshold:
+                    visited[ny, nx] = True
+                    q.append((ny, nx))
+
+    return Image.fromarray(arr)
+
+
 def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
+    """Load a sprite image, remove the background using flood-fill, and cache it."""
     key = (path, scale)
     if key in _texture_cache:
         return _texture_cache[key]
     img = Image.open(path).convert("RGBA")
-    img.putdata([
-        (r, g, b, 0) if (r > 200 and g > 200 and b > 200) else (r, g, b, a)
-        for r, g, b, a in img.getdata()
-    ])
+    img = _remove_background(img, threshold=210)
     if scale != 1.0:
         img = img.resize(
             (int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
@@ -1388,7 +1432,14 @@ class GameWindow(arcade.Window):
 
     def update_enemies(self, delta, difficulty):
         p  = self.player
-        dp = self._dpreset          # active difficulty preset
+        dp = self._dpreset
+
+        def _face_player(sprite, a_rad, smooth=18.0):
+            """Smoothly rotate sprite to face direction a_rad (angle to player)."""
+            target = math.degrees(a_rad) - 90   # -90: nose-up sprites face the player
+            # Shortest-path angle difference  (-180 to +180)
+            diff = (target - sprite.angle + 180) % 360 - 180
+            sprite.angle += diff * min(1.0, smooth * delta)
 
         # ── Basic chasers ─────────────────────────────
         for e in self.enemies:
@@ -1396,7 +1447,7 @@ class GameWindow(arcade.Window):
             spd = ENEMY_SPEED * (1.0+0.22*difficulty) * dp["enemy_speed_mult"]
             e.center_x += math.cos(a)*spd*delta
             e.center_y += math.sin(a)*spd*delta
-            e.angle = math.degrees(a)-90
+            _face_player(e, a)
 
         # ── Shooting enemies ─────────────────────────
         for e in self.shooting_enemies:
@@ -1404,9 +1455,8 @@ class GameWindow(arcade.Window):
             spd = ENEMY_SPEED * (0.9+0.22*difficulty) * dp["enemy_speed_mult"]
             e.center_x += math.cos(a)*spd*delta
             e.center_y += math.sin(a)*spd*delta
-            e.angle = math.degrees(a)-90
+            _face_player(e, a)
             e.shoot_timer += delta
-            # preset fire_rate overrides the time-based formula
             if e.shoot_timer >= dp["enemy_fire_rate"]:
                 self.enemy_bullets.append(
                     EnemyBullet(e.center_x, e.center_y, p.center_x, p.center_y))
@@ -1418,7 +1468,7 @@ class GameWindow(arcade.Window):
             spd = BOSS_SPEED * (0.95+0.15*difficulty) * dp["boss_speed_mult"]
             boss.center_x += math.cos(a)*spd*delta
             boss.center_y += math.sin(a)*spd*delta
-            boss.angle = math.degrees(a)-90
+            _face_player(boss, a, smooth=10.0)  # boss turns slightly slower = more menacing
 
             boss.normal_timer  += delta
             boss.special_timer += delta

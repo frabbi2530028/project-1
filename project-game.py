@@ -406,10 +406,15 @@ class EnemyBullet(arcade.Sprite):
 
 
 def _draw_btn(x, w, y, h, fill, border, text_color, label, font_size):
+    _FU = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
     arcade.draw_lrbt_rectangle_filled(x, x + w, y, y + h, fill)
     arcade.draw_lrbt_rectangle_outline(x, x + w, y, y + h, border, 2)
-    arcade.draw_text(label, x + w // 2, y + h // 2, text_color, font_size,
-                     anchor_x="center", anchor_y="center", bold=True)
+    cx = x + w // 2;  cy = y + h // 2
+    sa = min(175, int((text_color[3] if len(text_color)==4 else 255)*0.45))
+    arcade.draw_text(label, cx+2, cy-2, (0,0,0,sa), font_size,
+                     anchor_x="center", anchor_y="center", bold=True, font_name=_FU)
+    arcade.draw_text(label, cx, cy, text_color, font_size,
+                     anchor_x="center", anchor_y="center", bold=True, font_name=_FU)
 
 
 def _notif_color(kind: str) -> tuple:
@@ -447,28 +452,43 @@ class GameWindow(arcade.Window):
         self._ship_cards: dict  = {}
         self._diff_btns:  dict  = {}
 
-        # ── HUD text objects ──────────────────────────
+        # ── HUD text objects  (Futura→Century Gothic→Arial fallback chain) ──
+        FONT_UI  = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        FONT_NUM = ("Courier New", "Menlo", "Monaco", "monospace")
         h = SCREEN_HEIGHT
-        self.txt_score   = arcade.Text("SCORE 0", 24, h-32,  arcade.color.WHITE, 18, bold=True)
-        self.txt_health  = arcade.Text("HP 100",  24, h-50,  arcade.color.WHITE, 13)
-        self.txt_active  = arcade.Text("",        24, h-84,  arcade.color.YELLOW, 12)
-        self.txt_inv     = arcade.Text("",        24, h-102, (200,200,200), 11)
-        self.txt_notif   = arcade.Text("", SCREEN_WIDTH//2, h//2+78,
-                                        (255,255,110,255), 28, anchor_x="center", bold=True)
+        self.txt_score   = arcade.Text("SCORE 0", 22, h-28,
+                                        (255,255,255,240), 22, bold=True, font_name=FONT_UI)
+        self.txt_health  = arcade.Text("100 / 100", 22, h-74,
+                                        (200,230,255,210), 11, font_name=FONT_NUM)
+        self.txt_active  = arcade.Text("", 22, h-112,
+                                        (255,240,100,230), 11, bold=True, font_name=FONT_UI)
+        self.txt_inv     = arcade.Text("", 22, h-132,
+                                        (160,185,225,200), 10, font_name=FONT_NUM)
+        self.txt_notif   = arcade.Text("", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+90,
+                                        (255,255,110,255), 26, anchor_x="center",
+                                        bold=True, font_name=FONT_UI)
         self.txt_hint    = arcade.Text(
-            "WASD Move   LMB Shoot   [1]Speed [2]Shield [3]Auto [4]Triple   "
-            "H HUD   F11 Fullscreen   R Restart   ESC Menu",
-            18, 12, (155, 175, 215), 11)
-        self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, h//2+10,
-                                        (255,90,90), 52, anchor_x="center")
-        self.txt_score2  = arcade.Text("SCORE 0",   SCREEN_WIDTH//2, h//2-48,
-                                        arcade.color.WHITE, 28, anchor_x="center")
-        self.txt_restart = arcade.Text("Press R to Restart", SCREEN_WIDTH//2, h//2-102,
-                                        arcade.color.WHITE, 19, anchor_x="center")
-        self.txt_combo   = arcade.Text("", SCREEN_WIDTH-18, h-28,
-                                        (255,220,95), 18, anchor_x="right", bold=True)
-        self.txt_timer   = arcade.Text("", SCREEN_WIDTH-18, h-52,
-                                        (180,210,255), 14, anchor_x="right")
+            "WASD · LMB Shoot · 1-4 Power-ups · H HUD · F11 Fullscreen · R Restart · ESC Menu",
+            SCREEN_WIDTH//2, 11, (100, 125, 175, 140), 9,
+            anchor_x="center", font_name=FONT_UI)
+        self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+18,
+                                        (255,75,75,255), 56, anchor_x="center",
+                                        bold=True, font_name=FONT_UI)
+        self.txt_score2  = arcade.Text("SCORE 0",   SCREEN_WIDTH//2, SCREEN_HEIGHT//2-44,
+                                        (200,225,255,240), 26, anchor_x="center",
+                                        font_name=FONT_NUM)
+        self.txt_restart = arcade.Text("PRESS  R  TO  RESTART", SCREEN_WIDTH//2, SCREEN_HEIGHT//2-96,
+                                        (140,170,220,200), 16, anchor_x="center",
+                                        font_name=FONT_UI)
+        self.txt_combo   = arcade.Text("", SCREEN_WIDTH-18, SCREEN_HEIGHT-28,
+                                        (255,220,60,235), 20, anchor_x="right",
+                                        bold=True, font_name=FONT_UI)
+        self.txt_timer   = arcade.Text("", SCREEN_WIDTH-18, SCREEN_HEIGHT-30,
+                                        (165,200,255,215), 13, anchor_x="right",
+                                        font_name=FONT_NUM)
+        # stash font names for dynamic Text objects created later
+        self._FONT_UI  = FONT_UI
+        self._FONT_NUM = FONT_NUM
 
         # ── Game object handles ───────────────────────
         self.player = self.player_list = None
@@ -508,17 +528,17 @@ class GameWindow(arcade.Window):
     def on_resize(self, width, height):
         super().on_resize(width, height)
         w, h = width, height
-        self.txt_score.x   = 24;     self.txt_score.y   = h-32
-        self.txt_health.x  = 24;     self.txt_health.y  = h-50
-        self.txt_active.x  = 24;     self.txt_active.y  = h-84
-        self.txt_inv.x     = 24;     self.txt_inv.y     = h-102
-        self.txt_notif.x   = w//2;   self.txt_notif.y   = h//2+78
-        self.txt_hint.x    = 18;     self.txt_hint.y    = 12
-        self.txt_over.x    = w//2;   self.txt_over.y    = h//2+10
-        self.txt_score2.x  = w//2;   self.txt_score2.y  = h//2-48
-        self.txt_restart.x = w//2;   self.txt_restart.y = h//2-102
-        self.txt_combo.x   = w-18;   self.txt_combo.y   = h-28
-        self.txt_timer.x   = w-18;   self.txt_timer.y   = h-52
+        self.txt_score.x   = 22;      self.txt_score.y   = h-28
+        self.txt_health.x  = 22;      self.txt_health.y  = h-74
+        self.txt_active.x  = 22;      self.txt_active.y  = h-112
+        self.txt_inv.x     = 22;      self.txt_inv.y     = h-132
+        self.txt_notif.x   = w//2;    self.txt_notif.y   = h//2+90
+        self.txt_hint.x    = w//2;    self.txt_hint.y    = 11
+        self.txt_over.x    = w//2;    self.txt_over.y    = h//2+18
+        self.txt_score2.x  = w//2;    self.txt_score2.y  = h//2-44
+        self.txt_restart.x = w//2;    self.txt_restart.y = h//2-96
+        self.txt_combo.x   = w-18;    self.txt_combo.y   = h-28
+        self.txt_timer.x   = w-18;    self.txt_timer.y   = h-30
         self._build_starfield()
 
     # ──────────────────────────────────────────────────
@@ -683,19 +703,25 @@ class GameWindow(arcade.Window):
             arcade.draw_line(ax,ay,ax,      ay+dy*sz,    ac,2)
 
         # ── Title ────────────────────────────────────
+        _FU = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
         title = "PAUSED" if is_pause else "NEON  DRIFT"
         ty    = ptop - 52
-        arcade.draw_text(title, w//2+3, ty-3, T["title_shadow"], 42,
-                         anchor_x="center", bold=True)
+        arcade.draw_text(title, w//2+4, ty-4, T["title_shadow"], 42,
+                         anchor_x="center", bold=True, font_name=_FU)
         arcade.draw_text(title, w//2,   ty,   T["title"],        42,
-                         anchor_x="center", bold=True)
+                         anchor_x="center", bold=True, font_name=_FU)
         sub = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
-        arcade.draw_text(sub, w//2, ty-30, T["subtitle"], 12, anchor_x="center")
+        arcade.draw_text(sub, w//2+1, ty-31, (0,0,0,80), 12,
+                         anchor_x="center", font_name=_FU)
+        arcade.draw_text(sub, w//2, ty-30, T["subtitle"], 12,
+                         anchor_x="center", font_name=_FU)
 
         div_y = ptop - 97
         arcade.draw_line(pl+22, div_y, pr-22, div_y, T["divider"], 1)
+        arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-23, (0,0,0,90), 13,
+                         anchor_x="center", bold=True, font_name=_FU)
         arcade.draw_text("SELECT YOUR SHIP", w//2, div_y-22,
-                         T["text"], 13, anchor_x="center", bold=True)
+                         T["text"], 13, anchor_x="center", bold=True, font_name=_FU)
 
         # ── Ship cards ───────────────────────────────
         n  = len(SHIPS)
@@ -758,30 +784,40 @@ class GameWindow(arcade.Window):
             else:
                 arcade.draw_circle_outline(pcx,pcy,28, T["locked_border"],2)
                 arcade.draw_text("?", pcx, pcy, T["locked_text"], 28,
-                                 anchor_x="center", anchor_y="center", bold=True)
+                                 anchor_x="center", anchor_y="center", bold=True,
+                                 font_name=("Futura","Century Gothic","Arial"))
 
             name_y = cb+int(ch*0.41)
             nc = T["locked_text"] if not avl else \
                  (T["card_sel_border"] if sel else T["text"])
+            arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), 11,
+                             anchor_x="center", bold=True,
+                             font_name=("Futura","Century Gothic","Arial"))
             arcade.draw_text(ship["name"], pcx, name_y, nc, 11,
-                             anchor_x="center", bold=True)
+                             anchor_x="center", bold=True,
+                             font_name=("Futura","Century Gothic","Arial"))
 
             if avl:
                 arcade.draw_text(ship["tagline"], pcx, name_y-17,
-                                 T["text_dim"], 9, anchor_x="center")
+                                 T["text_dim"], 9, anchor_x="center",
+                                 font_name=("Futura","Century Gothic","Arial"))
                 sy = name_y-36
                 for j,(lbl,val) in enumerate([("SPD",ship["stat_spd"]),
                                                ("ATK",ship["stat_atk"]),
                                                ("DEF",ship["stat_def"])]):
                     ry = sy-j*18
-                    arcade.draw_text(lbl, cl+18, ry, T["text_dim"], 8, anchor_y="center")
+                    arcade.draw_text(lbl, cl+18, ry, T["text_dim"], 8,
+                                     anchor_y="center",
+                                     font_name=("Courier New","Menlo","monospace"))
                     self._draw_stat_pips(cl+80, ry, val, 5, T["stat_filled"], T["stat_empty"])
                 if sel:
                     arcade.draw_text("SELECTED", pcx, cb+9,
-                                     T["selected_badge"], 9, anchor_x="center", bold=True)
+                                     T["selected_badge"], 9, anchor_x="center", bold=True,
+                                     font_name=("Futura","Century Gothic","Arial"))
             else:
                 arcade.draw_text("COMING SOON", pcx, name_y-20,
-                                 T["locked_text"], 9, anchor_x="center")
+                                 T["locked_text"], 9, anchor_x="center",
+                                 font_name=("Futura","Century Gothic","Arial"))
 
             self._ship_cards[i] = (cl, cr, cb, ct)
 
@@ -791,8 +827,10 @@ class GameWindow(arcade.Window):
         btn_top = cy0 - 12
 
         # ── Difficulty selector ──────────────────────
+        arcade.draw_text("SELECT DIFFICULTY", w//2+1, btn_top-3, (0,0,0,90), 12,
+                         anchor_x="center", bold=True, font_name=_FU)
         arcade.draw_text("SELECT DIFFICULTY", w//2, btn_top-2,
-                         T["text"], 12, anchor_x="center", bold=True)
+                         T["text"], 12, anchor_x="center", bold=True, font_name=_FU)
 
         dw, dh = 118, 38
         dgap   = 10
@@ -831,8 +869,13 @@ class GameWindow(arcade.Window):
                 pulse = 0.5+0.5*math.sin(t*4.0)
                 arcade.draw_lrbt_rectangle_outline(
                     dleft-3, dright+3, diff_by-3, dtop+3, (*dc, int(50+45*pulse)), 2)
+            sa_ = min(175, int((tcolor[3] if len(tcolor)==4 else 255)*0.4))
+            arcade.draw_text(preset["label"], dleft+dw//2+1, diff_by+dh//2-1,
+                             (0,0,0,sa_), 14, anchor_x="center", anchor_y="center",
+                             bold=True, font_name=_FU)
             arcade.draw_text(preset["label"], dleft+dw//2, diff_by+dh//2,
-                             tcolor, 14, anchor_x="center", anchor_y="center", bold=True)
+                             tcolor, 14, anchor_x="center", anchor_y="center",
+                             bold=True, font_name=_FU)
 
             self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
 
@@ -921,79 +964,178 @@ class GameWindow(arcade.Window):
     #  HUD  (H hides the ENTIRE panel)
     # ──────────────────────────────────────────────────
 
+    # ──────────────────────────────────────────────────
+    #  HUD  — floating, no box, futuristic style
+    # ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _txt_shadow(text, x, y, color, size, font_name,
+                    anchor_x="left", anchor_y="baseline",
+                    bold=False, ox=2, oy=-2):
+        """Draw text with a dark drop-shadow for crisp readability."""
+        sr, sg, sb = 0, 0, 0
+        sa = min(200, int(color[3] * 0.55) if len(color) == 4 else 140)
+        arcade.draw_text(text, x+ox, y+oy, (sr,sg,sb,sa), size,
+                         anchor_x=anchor_x, anchor_y=anchor_y,
+                         bold=bold, font_name=font_name)
+        arcade.draw_text(text, x, y, color, size,
+                         anchor_x=anchor_x, anchor_y=anchor_y,
+                         bold=bold, font_name=font_name)
+
+    def _draw_seg_bar(self, x, y, width, height, ratio,
+                      color_fill, segs=20, gap=2):
+        """Segmented health / progress bar — no border rectangle."""
+        seg_w = (width - gap*(segs-1)) / segs
+        filled = int(ratio * segs + 0.5)
+        for i in range(segs):
+            lx = x + i*(seg_w+gap)
+            rx = lx + seg_w
+            if i < filled:
+                # bright fill + small top-edge highlight
+                arcade.draw_lrbt_rectangle_filled(lx, rx, y, y+height, color_fill)
+                bright = tuple(min(255, c+80) for c in color_fill[:3])
+                arcade.draw_lrbt_rectangle_filled(lx, rx, y+height-2, y+height,
+                                                   (*bright, 180))
+            else:
+                arcade.draw_lrbt_rectangle_filled(lx, rx, y, y+height, (35,45,70,100))
+
     def _draw_hud(self):
         w, h = self.width, self.height
-        p = self.player
+        p    = self.player
+        FU   = self._FONT_UI
+        FN   = self._FONT_NUM
+
+        # ── Invisible vignette edges for readability ──
+        # (subtle dark gradient around borders so text floats on any BG)
+        for i in range(5):
+            a = 28 - i*5
+            arcade.draw_lrbt_rectangle_filled(0, w, h-i*12, h, (0,0,0,a))
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, i*12, (0,0,0,a))
+            arcade.draw_lrbt_rectangle_filled(0, i*12, 0, h,  (0,0,0,a))
 
         if not self.show_hud:
-            arcade.draw_text("[H] show HUD", 14, h-22, (128,148,192,115), 10)
+            self._txt_shadow("[H] show HUD", 14, h-18,
+                             (110,135,185,110), 9, FU)
             return
 
-        T  = THEMES[self.menu_theme]
-        hp = T["hud_panel"];  hb = T["hud_border"]
-        ht = T["hud_text"];   hd = T["hud_text_dim"]
+        t = self.bg_time
 
-        arcade.draw_lrbt_rectangle_filled(12, 400, h-118, h-10, hp)
-        arcade.draw_lrbt_rectangle_outline(12, 400, h-118, h-10, hb, 2)
+        # ══ TOP-LEFT  ════════════════════════════════
 
-        # score
-        self.txt_score.text  = f"SCORE {self.score}"
-        self.txt_score.color = ht;  self.txt_score.draw()
+        # ── SCORE ──────────────────────────────────
+        self.txt_score.text = f"{self.score:,}"
+        self.txt_score.draw()
+        self._txt_shadow("SCORE", 22, h-12, (120,165,230,180), 9, FU)
 
-        # hp bar  (sits between h-66 and h-52, clearly below score at h-32)
-        hr = max(0.0, p.health/p.max_health)
-        hc = (95,230,120) if hr>0.45 else (255,180,80) if hr>0.2 else (255,90,90)
-        arcade.draw_lrbt_rectangle_filled(24, 270, h-66, h-52, (28,35,55,220))
-        arcade.draw_lrbt_rectangle_filled(24, 24+246*hr, h-66, h-52, hc)
-        arcade.draw_lrbt_rectangle_outline(24, 270, h-66, h-52, (*hb[:3],118), 1)
-        self.txt_health.text  = f"HP  {int(max(0,p.health))} / {p.max_health}"
-        self.txt_health.color = ht;  self.txt_health.draw()
+        # ── HP bar ─────────────────────────────────
+        hr   = max(0.0, p.health/p.max_health)
+        hc   = (60,235,110) if hr>0.55 else (255,195,55) if hr>0.28 else (255,60,60)
+        # label
+        self._txt_shadow("HEALTH", 22, h-56, (120,165,230,180), 9, FU)
+        # segmented bar
+        self._draw_seg_bar(22, h-80, 210, 9, hr, hc, segs=21, gap=2)
+        # neon glow line along the filled portion
+        if hr > 0:
+            gw = int(210*hr)
+            arcade.draw_lrbt_rectangle_filled(22, 22+gw, h-72, h-71,
+                                               (*hc[:3], int(160*hr)))
+        # numbers
+        self.txt_health.text  = f"{int(max(0,p.health))}  /  {p.max_health}"
+        self.txt_health.color = (*hc[:3], 210)
+        self.txt_health.draw()
 
-        self.txt_timer.text  = f"TIME {self.time_alive:05.1f}s"
-        self.txt_timer.color = hd;  self.txt_timer.draw()
+        # ── Active power-ups ───────────────────────
+        active_pills = []
+        if p.shield_active:   active_pills.append(("SHIELD",  p.shield_timer,   (55,215,255)))
+        if p.autofire_active: active_pills.append(("AUTO",    p.autofire_timer,  (235,80,255)))
+        if p.speed_active:    active_pills.append(("SPEED",   p.speed_timer,     (255,215,40)))
+        if p.triple_active:   active_pills.append(("TRIPLE",  p.triple_timer,    (255,140,40)))
 
-        # difficulty badge (top-right, below timer)
-        dp = self._dpreset
-        dc = dp["color"]
-        arcade.draw_text(dp["label"], w-18, h-68,
-                         (*dc, 210), 11, anchor_x="right", bold=True)
+        pill_x = 22
+        pill_y = h-108
+        for label, timer, pc in active_pills:
+            pw = len(label)*7 + 44
+            arcade.draw_lrbt_rectangle_filled(pill_x, pill_x+pw, pill_y-1, pill_y+16,
+                                               (*pc, 40))
+            arcade.draw_lrbt_rectangle_outline(pill_x, pill_x+pw, pill_y-1, pill_y+16,
+                                                (*pc, 165), 1)
+            self._txt_shadow(f"{label} {timer:.0f}s", pill_x+6, pill_y+3,
+                             (*pc, 230), 9, FU)
+            pill_x += pw + 6
 
-        # boss lockout indicator
-        if self.boss_on_screen:
-            pulse = int(180 + 75*math.sin(self.bg_time*5))
-            arcade.draw_text("⚠ BOSS FIGHT — LOCKDOWN",
-                             w//2, 36, (255, 80, 80, pulse), 13,
-                             anchor_x="center", bold=True)
+        # ── Inventory ──────────────────────────────
+        inv  = p.inventory
+        inv_data = [
+            ("1", "SPD", inv["speed"],   (255,215,40)),
+            ("2", "SHD", inv["shield"],  (55,215,255)),
+            ("3", "AUT", inv["autofire"],(235,80,255)),
+            ("4", "TRP", inv["triple"],  (255,140,40)),
+        ]
+        ix = 22
+        iy = h - 132
+        for key, lbl, cnt, ic in inv_data:
+            dim = cnt == 0
+            fc  = (*ic, 55 if dim else 130)
+            bc  = (*ic, 70 if dim else 175)
+            tc  = (*ic, 120 if dim else 230)
+            arcade.draw_lrbt_rectangle_filled(ix, ix+52, iy-1, iy+14, fc)
+            arcade.draw_lrbt_rectangle_outline(ix, ix+52, iy-1, iy+14, bc, 1)
+            self._txt_shadow(f"[{key}]{lbl}:{cnt}", ix+4, iy+2, tc, 8, FN)
+            ix += 58
 
-        active = []
-        if p.shield_active:   active.append(f"SHIELD {p.shield_timer:.0f}s")
-        if p.autofire_active: active.append(f"AUTO {p.autofire_timer:.0f}s")
-        if p.speed_active:    active.append(f"SPEED {p.speed_timer:.0f}s")
-        if p.triple_active:   active.append(f"TRIPLE {p.triple_timer:.0f}s")
-        self.txt_active.text  = ("ACTIVE: "+"   ".join(active)) if active else ""
-        self.txt_active.color = (255,230,100)
-        if active: self.txt_active.draw()
+        # ══ TOP-RIGHT ════════════════════════════════
 
-        inv = p.inventory
-        self.txt_inv.text = (
-            f"[1]SPD:{inv['speed']}/{MAX_POWERUP_STORAGE}  "
-            f"[2]SHD:{inv['shield']}/{MAX_POWERUP_STORAGE}  "
-            f"[3]AUT:{inv['autofire']}/{MAX_POWERUP_STORAGE}  "
-            f"[4]TRP:{inv['triple']}/{MAX_POWERUP_STORAGE}")
-        self.txt_inv.color = hd;  self.txt_inv.draw()
+        # ── Timer ──────────────────────────────────
+        self._txt_shadow("TIME", w-18, h-14, (120,165,230,175), 9, FU,
+                         anchor_x="right")
+        self.txt_timer.text = f"{self.time_alive:06.1f}s"
+        self.txt_timer.draw()
 
+        # ── Difficulty badge ────────────────────────
+        dp  = self._dpreset
+        dc  = dp["color"]
+        dlbl = dp["label"]
+        bw_ = len(dlbl)*9 + 24
+        bx_ = w - 18 - bw_
+        by_ = h - 54
+        arcade.draw_lrbt_rectangle_filled(bx_, bx_+bw_, by_, by_+18,
+                                           (*dc, 55))
+        arcade.draw_lrbt_rectangle_outline(bx_, bx_+bw_, by_, by_+18,
+                                            (*dc, 185), 1)
+        self._txt_shadow(dlbl, bx_+bw_//2, by_+3, (*dc, 240), 10, FU,
+                         anchor_x="center", bold=True)
+
+        # ══ COMBO (top-right below difficulty) ═══════
         if self.combo > 1 and self.combo_timer > 0:
-            self.txt_combo.text = f"x{self.combo} COMBO"
+            pulse = 0.75 + 0.25*math.sin(t*8)
+            self.txt_combo.text  = f"×{self.combo}  COMBO"
+            self.txt_combo.color = (255, 220, 60, int(230*pulse))
             self.txt_combo.draw()
 
-        if self.notif_timer > 0:
-            alpha = min(255, int(self.notif_timer*280))
-            c = self.notif_color
-            self.txt_notif.text  = self.notif_text
-            self.txt_notif.color = (c[0],c[1],c[2],alpha)
-            self.txt_notif.draw()
+        # ══ BOTTOM ════════════════════════════════════
 
+        # hint bar (very subtle, center bottom)
         self.txt_hint.draw()
+
+        # ── Boss lockout banner ─────────────────────
+        if self.boss_on_screen:
+            pulse = int(170 + 85*math.sin(t*5.5))
+            # glowing background strip
+            arcade.draw_lrbt_rectangle_filled(0, w, 26, 46, (180,20,20,int(60*math.sin(t*5.5)+65)))
+            self._txt_shadow("!! BOSS FIGHT  ·  ENEMY SPAWN LOCKED !!",
+                             w//2, 30, (255,85,85,pulse), 12, FU,
+                             anchor_x="center", bold=True)
+
+        # ── Notification ───────────────────────────
+        if self.notif_timer > 0:
+            a = min(255, int(self.notif_timer*290))
+            c = self.notif_color
+            # subtle glow behind notification
+            arcade.draw_lrbt_rectangle_filled(
+                w//2-240, w//2+240, h//2+74, h//2+106, (0,0,0,int(a*0.35)))
+            self.txt_notif.text  = self.notif_text
+            self.txt_notif.color = (*c[:3], a)
+            self.txt_notif.draw()
 
     def _draw_crosshair(self):
         x, y = self.mouse_x, self.mouse_y
@@ -1047,9 +1189,65 @@ class GameWindow(arcade.Window):
         self._draw_crosshair()
 
         if self.game_state == STATE_GAMEOVER:
-            arcade.draw_lrbt_rectangle_filled(0,w,0,h,(3,6,18,165))
-            self.txt_score2.text = f"SCORE {self.score}"
-            self.txt_over.draw();  self.txt_score2.draw();  self.txt_restart.draw()
+            # ── Full-screen blackout (solid enough to hide all sprites) ──
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3, 5, 18, 210))
+
+            # ── Central dark card ────────────────────────────────────────
+            cw_ = min(560, int(w * 0.72))
+            ch_ = 310
+            cx_ = (w - cw_) // 2
+            cy_ = h // 2 - ch_ // 2
+            # card shadow
+            arcade.draw_lrbt_rectangle_filled(
+                cx_+6, cx_+cw_+6, cy_-6, cy_+ch_-6, (0, 0, 0, 90))
+            # card body
+            arcade.draw_lrbt_rectangle_filled(
+                cx_, cx_+cw_, cy_, cy_+ch_, (8, 12, 32, 235))
+            # card border with red glow
+            arcade.draw_lrbt_rectangle_outline(
+                cx_, cx_+cw_, cy_, cy_+ch_, (200, 40, 40, 180), 2)
+            arcade.draw_lrbt_rectangle_outline(
+                cx_+4, cx_+cw_-4, cy_+4, cy_+ch_-4, (200, 40, 40, 55), 1)
+            # corner accents
+            csz = 18
+            for (ax, ay, dx, dy) in [(cx_, cy_, -1,-1), (cx_+cw_, cy_, 1,-1),
+                                      (cx_, cy_+ch_, -1, 1), (cx_+cw_, cy_+ch_, 1, 1)]:
+                arcade.draw_line(ax, ay, ax+dx*csz, ay, (255,60,60,160), 2)
+                arcade.draw_line(ax, ay, ax, ay+dy*csz, (255,60,60,160), 2)
+
+            # ── Content (all Y inside the card) ─────────────────────────
+            mid_x  = w // 2
+            top_y  = cy_ + ch_ - 58    # "GAME OVER" title
+            lbl_y  = cy_ + ch_ - 128   # "FINAL SCORE" label
+            num_y  = cy_ + ch_ - 172   # score number
+            div_y_ = cy_ + ch_ - 200   # thin divider line
+            rst_y  = cy_ + 22          # "PRESS R" restart prompt
+
+            # decorative top/bottom lines inside card
+            arcade.draw_line(cx_+24, top_y-14, cx_+cw_-24, top_y-14,
+                             (200, 40, 40, 100), 1)
+            arcade.draw_line(cx_+24, div_y_,   cx_+cw_-24, div_y_,
+                             (80, 100, 160, 100), 1)
+
+            # GAME OVER
+            self._txt_shadow("GAME OVER", mid_x, top_y,
+                             (255, 50, 50, 255), 52,
+                             self._FONT_UI, anchor_x="center", bold=True)
+
+            # FINAL SCORE label
+            self._txt_shadow("FINAL  SCORE", mid_x, lbl_y,
+                             (130, 165, 215, 200), 12,
+                             self._FONT_UI, anchor_x="center")
+
+            # Score value — large, bright, monospace
+            self._txt_shadow(f"{self.score:,}", mid_x, num_y,
+                             (210, 235, 255, 245), 36,
+                             self._FONT_NUM, anchor_x="center", bold=True)
+
+            # PRESS R TO RESTART
+            self._txt_shadow("PRESS  R  TO  RESTART", mid_x, rst_y,
+                             (120, 158, 215, 195), 15,
+                             self._FONT_UI, anchor_x="center")
 
         if self.game_state == STATE_PAUSED:
             self._draw_menu()   # menu overlaid on frozen world

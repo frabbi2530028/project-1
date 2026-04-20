@@ -243,38 +243,45 @@ def _remove_background(img: Image.Image, threshold: int = 210) -> Image.Image:
     be bright, because they are not connected to the outer border.
     """
     arr = np.array(img, dtype=np.uint8)   # shape (H, W, 4)
-    h, w = arr.shape[:2]
+    img_h, img_w = arr.shape[:2]
 
     # ── Build a boolean mask of background pixels via BFS ──────────
-    visited  = np.zeros((h, w), dtype=bool)
-    q        = deque()
+    visited = np.zeros((img_h, img_w), dtype=bool)
+    queue   = deque()
 
-    def _seed(y, x):
-        if not visited[y, x]:
-            r, g, b = int(arr[y, x, 0]), int(arr[y, x, 1]), int(arr[y, x, 2])
-            if r > threshold and g > threshold and b > threshold:
-                visited[y, x] = True
-                q.append((y, x))
+    def _seed(row: int, col: int) -> None:
+        if not visited[row, col]:
+            pr, pg, pb = int(arr[row, col, 0]), int(arr[row, col, 1]), int(arr[row, col, 2])
+            if pr > threshold and pg > threshold and pb > threshold:
+                visited[row, col] = True
+                queue.append((row, col))
 
     # Seed from every pixel on all four edges
-    for x in range(w):
-        _seed(0, x);      _seed(h - 1, x)
-    for y in range(h):
-        _seed(y, 0);      _seed(y, w - 1)
+    for col in range(img_w):
+        _seed(0, col);         _seed(img_h - 1, col)
+    for row in range(img_h):
+        _seed(row, 0);         _seed(row, img_w - 1)
 
     # BFS — spread to 4-connected bright neighbours
-    while q:
-        y, x = q.popleft()
-        arr[y, x, 3] = 0          # make transparent
-        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            ny, nx = y + dy, x + dx
-            if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx]:
-                r, g, b = int(arr[ny, nx, 0]), int(arr[ny, nx, 1]), int(arr[ny, nx, 2])
-                if r > threshold and g > threshold and b > threshold:
-                    visited[ny, nx] = True
-                    q.append((ny, nx))
+    while queue:
+        row, col = queue.popleft()
+        arr[row, col, 3] = 0          # make transparent
+        for drow, dcol in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nrow, ncol = row + drow, col + dcol
+            if 0 <= nrow < img_h and 0 <= ncol < img_w and not visited[nrow, ncol]:
+                pr, pg, pb = int(arr[nrow, ncol, 0]), int(arr[nrow, ncol, 1]), int(arr[nrow, ncol, 2])
+                if pr > threshold and pg > threshold and pb > threshold:
+                    visited[nrow, ncol] = True
+                    queue.append((nrow, ncol))
 
     return Image.fromarray(arr)
+
+
+# Resampling filter — works with both old and new Pillow versions
+try:
+    _RESAMPLE = Image.Resampling.LANCZOS   # Pillow >= 9.1
+except AttributeError:
+    _RESAMPLE = Image.LANCZOS              # Pillow < 9.1
 
 
 def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
@@ -285,8 +292,9 @@ def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
     img = Image.open(path).convert("RGBA")
     img = _remove_background(img, threshold=210)
     if scale != 1.0:
-        img = img.resize(
-            (int(img.width * scale), int(img.height * scale)), Image.LANCZOS)
+        new_w = int(img.width * scale)
+        new_h = int(img.height * scale)
+        img = img.resize((new_w, new_h), _RESAMPLE)
     tex = arcade.Texture(image=img)
     _texture_cache[key] = tex
     return tex
@@ -450,15 +458,15 @@ class EnemyBullet(arcade.Sprite):
 
 
 def _draw_btn(x, w, y, h, fill, border, text_color, label, font_size):
-    _FU = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+    font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
     arcade.draw_lrbt_rectangle_filled(x, x + w, y, y + h, fill)
     arcade.draw_lrbt_rectangle_outline(x, x + w, y, y + h, border, 2)
     cx = x + w // 2;  cy = y + h // 2
     sa = min(175, int((text_color[3] if len(text_color)==4 else 255)*0.45))
     arcade.draw_text(label, cx+2, cy-2, (0,0,0,sa), font_size,
-                     anchor_x="center", anchor_y="center", bold=True, font_name=_FU)
+                     anchor_x="center", anchor_y="center", bold=True, font_name=font_ui_local)
     arcade.draw_text(label, cx, cy, text_color, font_size,
-                     anchor_x="center", anchor_y="center", bold=True, font_name=_FU)
+                     anchor_x="center", anchor_y="center", bold=True, font_name=font_ui_local)
 
 
 def _notif_color(kind: str) -> tuple:
@@ -691,13 +699,18 @@ class GameWindow(arcade.Window):
     def _is_hovering(self, l, r, b, t):
         return l <= self.mouse_x <= r and b <= self.mouse_y <= t
 
-    def _draw_stat_pips(self, cx, y, value, max_v, c_on, c_off):
-        spacing = 14;  total = spacing*(max_v-1);  sx = cx - total//2
+    @staticmethod
+    def _draw_stat_pips(cx: int, y: int, value: int, max_v: int,
+                        c_on: tuple, c_off: tuple) -> None:
+        spacing = 14
+        total   = spacing * (max_v - 1)
+        sx      = cx - total // 2
         for i in range(max_v):
-            arcade.draw_circle_filled(sx+i*spacing, y, 5, c_on if i < value else c_off)
+            arcade.draw_circle_filled(sx + i*spacing, y, 5,
+                                      c_on if i < value else c_off)
 
     def _draw_menu(self):
-        T  = THEMES[self.menu_theme]
+        theme_c  = THEMES[self.menu_theme]
         w, h = self.width, self.height
         t  = self.bg_time
         is_pause = (self.game_state == STATE_PAUSED)
@@ -706,7 +719,7 @@ class GameWindow(arcade.Window):
         if is_pause:
             arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 5, 16, 170))
         else:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, T["bg"])
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, theme_c["bg"])
             if self.menu_theme == "dark":
                 p = (math.sin(t*0.65)+1)*0.5
                 arcade.draw_circle_filled(w*0.13,h*0.88,228+18*p,     (38,80,185,42))
@@ -736,36 +749,36 @@ class GameWindow(arcade.Window):
         pb = (h-ph)//2;  ptop = pb+ph
 
         arcade.draw_lrbt_rectangle_filled(pl+7,pr+7,pb-7,ptop-7,(0,0,0,70))
-        arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop, T["panel_fill"])
-        arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop, T["panel_border"], 2)
-        arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5, T["panel_inner"], 1)
+        arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop, theme_c["panel_fill"])
+        arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop, theme_c["panel_border"], 2)
+        arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5, theme_c["panel_inner"], 1)
 
         # corner accents
-        ac = T["panel_border"];  sz = 24
+        ac = theme_c["panel_border"];  sz = 24
         for (ax,ay,dx,dy) in [(pl,pb,-1,-1),(pr,pb,1,-1),(pl,ptop,-1,1),(pr,ptop,1,1)]:
             arcade.draw_line(ax,ay,ax+dx*sz,ay,          ac,2)
             arcade.draw_line(ax,ay,ax,      ay+dy*sz,    ac,2)
 
         # ── Title ────────────────────────────────────
-        _FU = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
         title = "PAUSED" if is_pause else "NEON  DRIFT"
         ty    = ptop - 52
-        arcade.draw_text(title, w//2+4, ty-4, T["title_shadow"], 42,
-                         anchor_x="center", bold=True, font_name=_FU)
-        arcade.draw_text(title, w//2,   ty,   T["title"],        42,
-                         anchor_x="center", bold=True, font_name=_FU)
+        arcade.draw_text(title, w//2+4, ty-4, theme_c["title_shadow"], 42,
+                         anchor_x="center", bold=True, font_name=font_ui_local)
+        arcade.draw_text(title, w//2,   ty,   theme_c["title"],        42,
+                         anchor_x="center", bold=True, font_name=font_ui_local)
         sub = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
         arcade.draw_text(sub, w//2+1, ty-31, (0,0,0,80), 12,
-                         anchor_x="center", font_name=_FU)
-        arcade.draw_text(sub, w//2, ty-30, T["subtitle"], 12,
-                         anchor_x="center", font_name=_FU)
+                         anchor_x="center", font_name=font_ui_local)
+        arcade.draw_text(sub, w//2, ty-30, theme_c["subtitle"], 12,
+                         anchor_x="center", font_name=font_ui_local)
 
         div_y = ptop - 97
-        arcade.draw_line(pl+22, div_y, pr-22, div_y, T["divider"], 1)
+        arcade.draw_line(pl+22, div_y, pr-22, div_y, theme_c["divider"], 1)
         arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-23, (0,0,0,90), 13,
-                         anchor_x="center", bold=True, font_name=_FU)
+                         anchor_x="center", bold=True, font_name=font_ui_local)
         arcade.draw_text("SELECT YOUR SHIP", w//2, div_y-22,
-                         T["text"], 13, anchor_x="center", bold=True, font_name=_FU)
+                         theme_c["text"], 13, anchor_x="center", bold=True, font_name=font_ui_local)
 
         # ── Ship cards ───────────────────────────────
         n  = len(SHIPS)
@@ -784,13 +797,13 @@ class GameWindow(arcade.Window):
             hov = self._is_hovering(cl,cr,cb,ct)
 
             if not avl:
-                fill = T["locked_fill"];  bord = T["locked_border"];  bthk = 1
+                fill = theme_c["locked_fill"];  bord = theme_c["locked_border"];  bthk = 1
             elif sel:
-                fill = T["card_sel_fill"]; bord = T["card_sel_border"]; bthk = 3
+                fill = theme_c["card_sel_fill"]; bord = theme_c["card_sel_border"]; bthk = 3
             elif hov:
-                fill = T["card_hover_fill"]; bord = T["card_border"]; bthk = 2
+                fill = theme_c["card_hover_fill"]; bord = theme_c["card_border"]; bthk = 2
             else:
-                fill = T["card_fill"]; bord = T["card_border"]; bthk = 1
+                fill = theme_c["card_fill"]; bord = theme_c["card_border"]; bthk = 1
 
             arcade.draw_lrbt_rectangle_filled(cl,cr,cb,ct, fill)
             arcade.draw_lrbt_rectangle_outline(cl,cr,cb,ct, bord, bthk)
@@ -815,7 +828,8 @@ class GameWindow(arcade.Window):
                         tex,
                         arcade.XYWH(pcx, draw_y, tex.width, tex.height)
                     )
-                except Exception:
+                except (AttributeError, TypeError):
+                    # Older arcade versions don't have draw_texture_rect — use SpriteList
                     _sl = arcade.SpriteList()
                     _sp = arcade.Sprite()
                     _sp.texture  = tex
@@ -826,14 +840,14 @@ class GameWindow(arcade.Window):
                 arcade.draw_circle_filled(pcx, pcy, 30,
                                           (*ship["color"], 35+int(20*math.sin(t*3))))
             else:
-                arcade.draw_circle_outline(pcx,pcy,28, T["locked_border"],2)
-                arcade.draw_text("?", pcx, pcy, T["locked_text"], 28,
+                arcade.draw_circle_outline(pcx,pcy,28, theme_c["locked_border"],2)
+                arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 28,
                                  anchor_x="center", anchor_y="center", bold=True,
                                  font_name=("Futura","Century Gothic","Arial"))
 
             name_y = cb+int(ch*0.41)
-            nc = T["locked_text"] if not avl else \
-                 (T["card_sel_border"] if sel else T["text"])
+            nc = theme_c["locked_text"] if not avl else \
+                 (theme_c["card_sel_border"] if sel else theme_c["text"])
             arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), 11,
                              anchor_x="center", bold=True,
                              font_name=("Futura","Century Gothic","Arial"))
@@ -843,24 +857,24 @@ class GameWindow(arcade.Window):
 
             if avl:
                 arcade.draw_text(ship["tagline"], pcx, name_y-17,
-                                 T["text_dim"], 9, anchor_x="center",
+                                 theme_c["text_dim"], 9, anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
                 sy = name_y-36
                 for j,(lbl,val) in enumerate([("SPD",ship["stat_spd"]),
                                                ("ATK",ship["stat_atk"]),
                                                ("DEF",ship["stat_def"])]):
                     ry = sy-j*18
-                    arcade.draw_text(lbl, cl+18, ry, T["text_dim"], 8,
+                    arcade.draw_text(lbl, cl+18, ry, theme_c["text_dim"], 8,
                                      anchor_y="center",
                                      font_name=("Courier New","Menlo","monospace"))
-                    self._draw_stat_pips(cl+80, ry, val, 5, T["stat_filled"], T["stat_empty"])
+                    self._draw_stat_pips(cl+80, ry, val, 5, theme_c["stat_filled"], theme_c["stat_empty"])
                 if sel:
                     arcade.draw_text("SELECTED", pcx, cb+9,
-                                     T["selected_badge"], 9, anchor_x="center", bold=True,
+                                     theme_c["selected_badge"], 9, anchor_x="center", bold=True,
                                      font_name=("Futura","Century Gothic","Arial"))
             else:
                 arcade.draw_text("COMING SOON", pcx, name_y-20,
-                                 T["locked_text"], 9, anchor_x="center",
+                                 theme_c["locked_text"], 9, anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
 
             self._ship_cards[i] = (cl, cr, cb, ct)
@@ -872,9 +886,9 @@ class GameWindow(arcade.Window):
 
         # ── Difficulty selector ──────────────────────
         arcade.draw_text("SELECT DIFFICULTY", w//2+1, btn_top-3, (0,0,0,90), 12,
-                         anchor_x="center", bold=True, font_name=_FU)
+                         anchor_x="center", bold=True, font_name=font_ui_local)
         arcade.draw_text("SELECT DIFFICULTY", w//2, btn_top-2,
-                         T["text"], 12, anchor_x="center", bold=True, font_name=_FU)
+                         theme_c["text"], 12, anchor_x="center", bold=True, font_name=font_ui_local)
 
         dw, dh = 118, 38
         dgap   = 10
@@ -916,10 +930,10 @@ class GameWindow(arcade.Window):
             sa_ = min(175, int((tcolor[3] if len(tcolor)==4 else 255)*0.4))
             arcade.draw_text(preset["label"], dleft+dw//2+1, diff_by+dh//2-1,
                              (0,0,0,sa_), 14, anchor_x="center", anchor_y="center",
-                             bold=True, font_name=_FU)
+                             bold=True, font_name=font_ui_local)
             arcade.draw_text(preset["label"], dleft+dw//2, diff_by+dh//2,
                              tcolor, 14, anchor_x="center", anchor_y="center",
-                             bold=True, font_name=_FU)
+                             bold=True, font_name=font_ui_local)
 
             self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
 
@@ -929,8 +943,8 @@ class GameWindow(arcade.Window):
         bx = w//2-bw//2;  by = play_y - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
         _draw_btn(bx, bw, by, bh,
-                  T["btn_hover"] if hov_p else T["btn_fill"],
-                  T["btn_border"], T["btn_text"],
+                  theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
+                  theme_c["btn_border"], theme_c["btn_text"],
                   "[ RESUME ]" if is_pause else "[ PLAY GAME ]", 20)
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
 
@@ -939,8 +953,8 @@ class GameWindow(arcade.Window):
             qx = w//2-qw//2;  qy = by-qh-10
             hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
             _draw_btn(qx, qw, qy, qh,
-                      T["btn_hover"] if hov_q else (*T["btn_fill"][:3], 145),
-                      (*T["btn_border"][:3], 152), T["btn_text_dim"],
+                      theme_c["btn_hover"] if hov_q else (*theme_c["btn_fill"][:3], 145),
+                      (*theme_c["btn_border"][:3], 152), theme_c["btn_text_dim"],
                       "QUIT TO MENU", 14)
             self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
 
@@ -949,9 +963,9 @@ class GameWindow(arcade.Window):
         tx = w//2-tw//2;  ty2 = pb+16
         hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
         _draw_btn(tx, tw, ty2, th2,
-                  T["btn_hover"] if hov_t else (*T["btn_fill"][:3], 145),
-                  (*T["btn_border"][:3], 158),
-                  T["toggle_text"],
+                  theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 145),
+                  (*theme_c["btn_border"][:3], 158),
+                  theme_c["toggle_text"],
                   "[ DARK MODE ]" if self.menu_theme=="dark" else "[ LIGHT MODE ]",
                   12)
         self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
@@ -1026,28 +1040,28 @@ class GameWindow(arcade.Window):
                          anchor_x=anchor_x, anchor_y=anchor_y,
                          bold=bold, font_name=font_name)
 
-    def _draw_seg_bar(self, x, y, width, height, ratio,
-                      color_fill, segs=20, gap=2):
+    @staticmethod
+    def _draw_seg_bar(x: int, y: int, width: int, height: int, ratio: float,
+                      color_fill: tuple, segs: int = 20, gap: int = 2) -> None:
         """Segmented health / progress bar — no border rectangle."""
-        seg_w = (width - gap*(segs-1)) / segs
+        seg_w  = (width - gap * (segs - 1)) / segs
         filled = int(ratio * segs + 0.5)
         for i in range(segs):
-            lx = x + i*(seg_w+gap)
+            lx = x + i * (seg_w + gap)
             rx = lx + seg_w
             if i < filled:
-                # bright fill + small top-edge highlight
-                arcade.draw_lrbt_rectangle_filled(lx, rx, y, y+height, color_fill)
-                bright = tuple(min(255, c+80) for c in color_fill[:3])
-                arcade.draw_lrbt_rectangle_filled(lx, rx, y+height-2, y+height,
+                arcade.draw_lrbt_rectangle_filled(lx, rx, y, y + height, color_fill)
+                bright = tuple(min(255, c + 80) for c in color_fill[:3])
+                arcade.draw_lrbt_rectangle_filled(lx, rx, y + height - 2, y + height,
                                                    (*bright, 180))
             else:
-                arcade.draw_lrbt_rectangle_filled(lx, rx, y, y+height, (35,45,70,100))
+                arcade.draw_lrbt_rectangle_filled(lx, rx, y, y + height, (35, 45, 70, 100))
 
     def _draw_hud(self):
         w, h = self.width, self.height
         p    = self.player
-        FU   = self._FONT_UI
-        FN   = self._FONT_NUM
+        font_ui  = self._FONT_UI
+        font_num = self._FONT_NUM
 
         # ── Invisible vignette edges for readability ──
         # (subtle dark gradient around borders so text floats on any BG)
@@ -1059,7 +1073,7 @@ class GameWindow(arcade.Window):
 
         if not self.show_hud:
             self._txt_shadow("[H] show HUD", 14, h-18,
-                             (110,135,185,110), 9, FU)
+                             (110,135,185,110), 9, font_ui)
             return
 
         t = self.bg_time
@@ -1069,13 +1083,13 @@ class GameWindow(arcade.Window):
         # ── SCORE ──────────────────────────────────
         self.txt_score.text = f"{self.score:,}"
         self.txt_score.draw()
-        self._txt_shadow("SCORE", 22, h-12, (120,165,230,180), 9, FU)
+        self._txt_shadow("SCORE", 22, h-12, (120,165,230,180), 9, font_ui)
 
         # ── HP bar ─────────────────────────────────
         hr   = max(0.0, p.health/p.max_health)
         hc   = (60,235,110) if hr>0.55 else (255,195,55) if hr>0.28 else (255,60,60)
         # label
-        self._txt_shadow("HEALTH", 22, h-56, (120,165,230,180), 9, FU)
+        self._txt_shadow("HEALTH", 22, h-56, (120,165,230,180), 9, font_ui)
         # segmented bar
         self._draw_seg_bar(22, h-80, 210, 9, hr, hc, segs=21, gap=2)
         # neon glow line along the filled portion
@@ -1104,7 +1118,7 @@ class GameWindow(arcade.Window):
             arcade.draw_lrbt_rectangle_outline(pill_x, pill_x+pw, pill_y-1, pill_y+16,
                                                 (*pc, 165), 1)
             self._txt_shadow(f"{label} {timer:.0f}s", pill_x+6, pill_y+3,
-                             (*pc, 230), 9, FU)
+                             (*pc, 230), 9, font_ui)
             pill_x += pw + 6
 
         # ── Inventory ──────────────────────────────
@@ -1124,13 +1138,13 @@ class GameWindow(arcade.Window):
             tc  = (*ic, 120 if dim else 230)
             arcade.draw_lrbt_rectangle_filled(ix, ix+52, iy-1, iy+14, fc)
             arcade.draw_lrbt_rectangle_outline(ix, ix+52, iy-1, iy+14, bc, 1)
-            self._txt_shadow(f"[{key}]{lbl}:{cnt}", ix+4, iy+2, tc, 8, FN)
+            self._txt_shadow(f"[{key}]{lbl}:{cnt}", ix+4, iy+2, tc, 8, font_num)
             ix += 58
 
         # ══ TOP-RIGHT ════════════════════════════════
 
         # ── Timer ──────────────────────────────────
-        self._txt_shadow("TIME", w-18, h-14, (120,165,230,175), 9, FU,
+        self._txt_shadow("TIME", w-18, h-14, (120,165,230,175), 9, font_ui,
                          anchor_x="right")
         self.txt_timer.text = f"{self.time_alive:06.1f}s"
         self.txt_timer.draw()
@@ -1146,7 +1160,7 @@ class GameWindow(arcade.Window):
                                            (*dc, 55))
         arcade.draw_lrbt_rectangle_outline(bx_, bx_+bw_, by_, by_+18,
                                             (*dc, 185), 1)
-        self._txt_shadow(dlbl, bx_+bw_//2, by_+3, (*dc, 240), 10, FU,
+        self._txt_shadow(dlbl, bx_+bw_//2, by_+3, (*dc, 240), 10, font_ui,
                          anchor_x="center", bold=True)
 
         # ══ COMBO (top-right below difficulty) ═══════
@@ -1167,7 +1181,7 @@ class GameWindow(arcade.Window):
             # glowing background strip
             arcade.draw_lrbt_rectangle_filled(0, w, 26, 46, (180,20,20,int(60*math.sin(t*5.5)+65)))
             self._txt_shadow("!! BOSS FIGHT  ·  ENEMY SPAWN LOCKED !!",
-                             w//2, 30, (255,85,85,pulse), 12, FU,
+                             w//2, 30, (255,85,85,pulse), 12, font_ui,
                              anchor_x="center", bold=True)
 
         # ── Notification ───────────────────────────
@@ -1723,8 +1737,8 @@ class GameWindow(arcade.Window):
             try:
                 dw, dh = arcade.get_display_size()
                 self.set_location((dw-SCREEN_WIDTH)//2, (dh-SCREEN_HEIGHT)//2)
-            except Exception:
-                pass
+            except (AttributeError, OSError):
+                pass   # get_display_size not available on all platforms
 
     def _use_stored_powerup(self, kind: str):
         p = self.player

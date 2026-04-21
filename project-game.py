@@ -754,12 +754,20 @@ class GameWindow(arcade.Window):
     @staticmethod
     def _draw_stat_pips(cx: int, y: int, value: int, max_v: int,
                         c_on: tuple, c_off: tuple) -> None:
-        spacing = 14
+        spacing = 18   # was 14 — wider spacing between pips
         total   = spacing * (max_v - 1)
         sx      = cx - total // 2
         for i in range(max_v):
-            arcade.draw_circle_filled(sx + i*spacing, y, 5,
-                                      c_on if i < value else c_off)
+            color = c_on if i < value else c_off
+            # filled pips get a bigger radius + inner bright dot
+            if i < value:
+                arcade.draw_circle_filled(sx + i*spacing, y, 7, color)
+                bright = tuple(min(255, c + 90) for c in color[:3])
+                arcade.draw_circle_filled(sx + i*spacing, y, 3, (*bright, 200))
+            else:
+                arcade.draw_circle_filled(sx + i*spacing, y, 6, color)
+                arcade.draw_circle_outline(sx + i*spacing, y, 6,
+                                           (*color[:3], 120), 1)
 
     def _draw_menu(self):
         theme_c  = THEMES[self.menu_theme]
@@ -834,8 +842,8 @@ class GameWindow(arcade.Window):
 
         # ── Ship cards ───────────────────────────────
         n  = len(SHIPS)
-        cw, ch = 158, 172
-        gap    = 16
+        cw, ch = 172, 182   # wider + taller cards to fit bigger pips
+        gap    = 14
         total_cw = cw*n+gap*(n-1)
         cx0  = (w-total_cw)//2
         cy0  = div_y - 54 - ch        # card bottom y
@@ -908,21 +916,24 @@ class GameWindow(arcade.Window):
                              font_name=("Futura","Century Gothic","Arial"))
 
             if avl:
-                arcade.draw_text(ship["tagline"], pcx, name_y-17,
+                arcade.draw_text(ship["tagline"], pcx, name_y-18,
                                  theme_c["text_dim"], 9, anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
-                sy = name_y-36
-                for j,(lbl,val) in enumerate([("SPD",ship["stat_spd"]),
-                                               ("ATK",ship["stat_atk"]),
-                                               ("DEF",ship["stat_def"])]):
-                    ry = sy-j*18
-                    arcade.draw_text(lbl, cl+18, ry, theme_c["text_dim"], 8,
-                                     anchor_y="center",
+                sy = name_y - 40
+                for j, (lbl, val) in enumerate([("SPD", ship["stat_spd"]),
+                                                ("ATK", ship["stat_atk"]),
+                                                ("DEF", ship["stat_def"])]):
+                    ry = sy - j*22
+                    # stat label
+                    arcade.draw_text(lbl, cl+14, ry, theme_c["text_dim"], 10,
+                                     anchor_y="center", bold=True,
                                      font_name=("Courier New","Menlo","monospace"))
-                    self._draw_stat_pips(cl+80, ry, val, 5, theme_c["stat_filled"], theme_c["stat_empty"])
+                    # pips — centred in the right half of the card
+                    self._draw_stat_pips(cl+95, ry, val, 5,
+                                         theme_c["stat_filled"], theme_c["stat_empty"])
                 if sel:
-                    arcade.draw_text("SELECTED", pcx, cb+9,
-                                     theme_c["selected_badge"], 9, anchor_x="center", bold=True,
+                    arcade.draw_text("✔ SELECTED", pcx, cb+10,
+                                     theme_c["selected_badge"], 10, anchor_x="center", bold=True,
                                      font_name=("Futura","Century Gothic","Arial"))
             else:
                 arcade.draw_text("COMING SOON", pcx, name_y-20,
@@ -1168,36 +1179,58 @@ class GameWindow(arcade.Window):
         if p.triple_active:   active_pills.append(("TRIPLE",  p.triple_timer,    (255,140,40)))
 
         pill_x = 22
-        pill_y = h-108
+        pill_y = h - 112
+        pill_h = 20
         for label, timer, pc in active_pills:
-            pw = len(label)*7 + 44
-            arcade.draw_lrbt_rectangle_filled(pill_x, pill_x+pw, pill_y-1, pill_y+16,
-                                               (*pc, 40))
-            arcade.draw_lrbt_rectangle_outline(pill_x, pill_x+pw, pill_y-1, pill_y+16,
-                                                (*pc, 165), 1)
-            self._txt_shadow(f"{label} {timer:.0f}s", pill_x+6, pill_y+3,
-                             (*pc, 230), 9, font_ui)
-            pill_x += pw + 6
+            pw = len(label)*8 + 50
+            # glow bg
+            arcade.draw_lrbt_rectangle_filled(pill_x-2, pill_x+pw+2,
+                                               pill_y-2, pill_y+pill_h+2,
+                                               (*pc, 22))
+            arcade.draw_lrbt_rectangle_filled(pill_x, pill_x+pw,
+                                               pill_y, pill_y+pill_h,
+                                               (*pc, 55))
+            arcade.draw_lrbt_rectangle_outline(pill_x, pill_x+pw,
+                                                pill_y, pill_y+pill_h,
+                                                (*pc, 220), 1)
+            self._txt_shadow(f"{label}  {timer:.0f}s", pill_x+8, pill_y+4,
+                             (*pc, 255), 11, font_ui, bold=True)
+            pill_x += pw + 8
 
         # ── Inventory ──────────────────────────────
         inv  = p.inventory
         inv_data = [
-            ("1", "SPD", inv["speed"],   (255,215,40)),
-            ("2", "SHD", inv["shield"],  (55,215,255)),
-            ("3", "AUT", inv["autofire"],(235,80,255)),
-            ("4", "TRP", inv["triple"],  (255,140,40)),
+            ("1", "SPD", "SPEED",   inv["speed"],    (255, 215, 40)),
+            ("2", "SHD", "SHIELD",  inv["shield"],   (55,  215, 255)),
+            ("3", "AUT", "AUTO",    inv["autofire"], (235, 80,  255)),
+            ("4", "TRP", "TRIPLE",  inv["triple"],   (255, 140, 40)),
         ]
         ix = 22
-        iy = h - 132
-        for key, lbl, cnt, ic in inv_data:
+        iy = h - 138
+        badge_w = 64
+        badge_h = 22
+        for key, short, full, cnt, ic in inv_data:
             dim = cnt == 0
-            fc  = (*ic, 55 if dim else 130)
-            bc  = (*ic, 70 if dim else 175)
-            tc  = (*ic, 120 if dim else 230)
-            arcade.draw_lrbt_rectangle_filled(ix, ix+52, iy-1, iy+14, fc)
-            arcade.draw_lrbt_rectangle_outline(ix, ix+52, iy-1, iy+14, bc, 1)
-            self._txt_shadow(f"[{key}]{lbl}:{cnt}", ix+4, iy+2, tc, 8, font_num)
-            ix += 58
+            fc  = (*ic, 38 if dim else 110)
+            bc  = (*ic, 55 if dim else 200)
+            tc  = (*ic, 110 if dim else 255)
+            # badge background
+            arcade.draw_lrbt_rectangle_filled(ix, ix+badge_w, iy, iy+badge_h, fc)
+            arcade.draw_lrbt_rectangle_outline(ix, ix+badge_w, iy, iy+badge_h, bc, 1)
+            # key hotkey label (top-left corner)
+            arcade.draw_text(f"[{key}]", ix+4, iy+badge_h-10,
+                             (*ic, 175 if dim else 255), 8,
+                             font_name=font_num)
+            # short name centre
+            self._txt_shadow(short, ix+badge_w//2, iy+6,
+                             (*ic, 120 if dim else 240), 9,
+                             font_ui, anchor_x="center", bold=True)
+            # count bottom-right
+            count_c = (180, 180, 180, 140) if dim else (*ic, 255)
+            arcade.draw_text(str(cnt), ix+badge_w-5, iy+1,
+                             count_c, 11,
+                             anchor_x="right", font_name=font_num, bold=True)
+            ix += badge_w + 6
 
         # ══ TOP-RIGHT ════════════════════════════════
 
@@ -1291,6 +1324,26 @@ class GameWindow(arcade.Window):
             rr = 38 + 2.5*math.sin(self.bg_time*9)
             arcade.draw_circle_outline(self.player.center_x, self.player.center_y,
                                         rr, tc["shield_ring"], 3)
+
+        # ── Auto-fire target lock ring ───────────────
+        if self.player.autofire_active:
+            tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
+            if tgt:
+                pulse = 0.55 + 0.45*math.sin(self.bg_time*9)
+                ring_r = max(tgt.width, tgt.height)*0.65 + 8
+                arcade.draw_circle_outline(tgt.center_x, tgt.center_y,
+                                            ring_r, (255, 80, 255, int(210*pulse)), 2)
+                # corner brackets
+                bk = ring_r * 0.55
+                for (sx, sy) in [(tgt.center_x-ring_r, tgt.center_y+ring_r),
+                                  (tgt.center_x+ring_r, tgt.center_y+ring_r),
+                                  (tgt.center_x-ring_r, tgt.center_y-ring_r),
+                                  (tgt.center_x+ring_r, tgt.center_y-ring_r)]:
+                    dx = 1 if sx > tgt.center_x else -1
+                    dy = 1 if sy > tgt.center_y else -1
+                    c_ = (255, 80, 255, int(230*pulse))
+                    arcade.draw_line(sx, sy, sx + dx*bk, sy, c_, 2)
+                    arcade.draw_line(sx, sy, sx, sy - dy*bk, c_, 2)
 
         for pu in self.powerups:
             arcade.draw_text(POWERUP_LABELS[pu.kind], pu.center_x, pu.center_y-8,
@@ -1427,7 +1480,8 @@ class GameWindow(arcade.Window):
             self.fire_timer += delta
             while self.fire_timer >= rate:
                 if p.autofire_active:
-                    tgt = self._nearest_enemy()
+                    # target enemy closest to crosshair so player can steer
+                    tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
                     self._shoot_toward(tgt.center_x if tgt else self.mouse_x,
                                        tgt.center_y if tgt else self.mouse_y)
                 else:
@@ -1490,10 +1544,26 @@ class GameWindow(arcade.Window):
     # ──────────────────────────────────────────────────
 
     def _nearest_enemy(self):
+        """Returns the enemy closest to the player (fallback for auto-fire)."""
         all_e = list(self.enemies)+list(self.shooting_enemies)+list(self.bosses)
         if not all_e: return None
         px, py = self.player.center_x, self.player.center_y
         return min(all_e, key=lambda e: math.hypot(e.center_x-px, e.center_y-py))
+
+    def _targeted_enemy(self, cursor_x: float, cursor_y: float):
+        """
+        Returns the enemy closest to the cursor position.
+        Used by auto-fire so the player can steer which enemy gets shot.
+        Falls back to nearest-to-player if no enemy is within 220 px of cursor.
+        """
+        all_e = list(self.enemies)+list(self.shooting_enemies)+list(self.bosses)
+        if not all_e: return None
+        # find closest to cursor
+        best = min(all_e, key=lambda e: math.hypot(e.center_x-cursor_x, e.center_y-cursor_y))
+        dist = math.hypot(best.center_x-cursor_x, best.center_y-cursor_y)
+        if dist <= 220:
+            return best          # cursor is near this enemy — lock on
+        return self._nearest_enemy()  # cursor is in open space — pick nearest
 
     def _shoot_toward(self, tx, ty):
         px, py = self.player.center_x, self.player.center_y

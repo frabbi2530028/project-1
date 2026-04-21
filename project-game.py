@@ -117,6 +117,7 @@ STATE_GAMEOVER = "gameover"
 
 THEMES = {
     "dark": {
+        # ── menu / UI ─────────────────────────────────
         "bg":              (6, 9, 24),
         "panel_fill":      (7, 15, 44, 220),
         "panel_border":    (70, 112, 205, 218),
@@ -149,8 +150,34 @@ THEMES = {
         "hud_border":      (90, 122, 188, 182),
         "hud_text":        (210, 228, 255),
         "hud_text_dim":    (165, 185, 225),
+        # ── game world ────────────────────────────────
+        "world_bg":        (6, 9, 24),
+        "nebula1":         (40,  85, 190, 42),
+        "nebula2":         (150, 45, 170, 34),
+        "nebula3":         (30, 160, 200, 18),
+        "grid_line":       (30, 46, 78, 26),
+        "star_color":      (205, 228, 255),
+        "player_glow":     (95, 200, 255, 68),
+        "player_glow_spd": (255, 230, 90, 82),
+        "enemy_glow":      (255, 92,  92,  48),
+        "shoot_glow":      (255, 130, 90,  55),
+        "boss_glow":       (255, 60,  60,  60),
+        "bullet_glow":     (255, 200, 110, 55),
+        "ebullet_glow":    (255, 85,  85,  55),
+        "shield_ring":     (90, 235, 255, 230),
+        "crosshair":       (130, 220, 255, 185),
+        "damage_flash":    (255, 65,  65,  170),
+        "engine_particle": (120, 205, 255),
+        "powerup_label":   (255, 255, 255),
+        "gameover_bg":     (3, 5, 18, 210),
+        "gameover_card":   (8, 12, 32, 235),
+        "gameover_border": (200, 40, 40, 180),
+        "gameover_accent": (255, 60, 60, 160),
+        "hp_bar_bg":       (28, 35, 55, 220),
+        "vignette":        (0, 0, 0),
     },
     "light": {
+        # ── menu / UI ─────────────────────────────────
         "bg":              (192, 212, 248),
         "panel_fill":      (236, 243, 255, 228),
         "panel_border":    (100, 145, 228, 228),
@@ -183,6 +210,31 @@ THEMES = {
         "hud_border":      (95, 138, 210, 182),
         "hud_text":        (14, 34, 86),
         "hud_text_dim":    (68, 98, 155),
+        # ── game world (bright nebula / daytime space) ─
+        "world_bg":        (168, 200, 245),
+        "nebula1":         (180, 110, 240, 38),
+        "nebula2":         (255, 145, 80,  30),
+        "nebula3":         (80,  185, 255, 25),
+        "grid_line":       (140, 170, 220, 18),
+        "star_color":      (50,  80,  180),
+        "player_glow":     (30, 130, 255, 90),
+        "player_glow_spd": (255, 175, 20, 95),
+        "enemy_glow":      (210, 40,  40,  70),
+        "shoot_glow":      (215, 95,  20,  75),
+        "boss_glow":       (175, 15,  15,  90),
+        "bullet_glow":     (255, 165, 20,  80),
+        "ebullet_glow":    (210, 30,  30,  80),
+        "shield_ring":     (20, 140, 255, 235),
+        "crosshair":       (20,  90, 210, 210),
+        "damage_flash":    (220, 50,  50,  155),
+        "engine_particle": (40, 130, 255),
+        "powerup_label":   (14, 34, 86),
+        "gameover_bg":     (210, 225, 248, 210),
+        "gameover_card":   (230, 240, 255, 238),
+        "gameover_border": (30, 90, 200, 180),
+        "gameover_accent": (20, 80, 195, 160),
+        "hp_bar_bg":       (185, 205, 240, 200),
+        "vignette":        (90, 130, 200),
     },
 }
 
@@ -975,31 +1027,37 @@ class GameWindow(arcade.Window):
     # ══════════════════════════════════════════════════
 
     def _draw_bg_space(self):
-        w, h = self.width, self.height
-        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, BG_COLOR)
+        w, h  = self.width, self.height
+        tc    = THEMES[self.menu_theme]   # active theme colors
         pulse = (math.sin(self.bg_time*0.7)+1)*0.5
-        arcade.draw_circle_filled(w*0.19,h*0.83,250+20*pulse,     (40, 85,190,42))
-        arcade.draw_circle_filled(w*0.84,h*0.28,280+30*(1-pulse), (150,45,170,34))
-        arcade.draw_circle_filled(w*0.53,h*1.07,280,               (30,160,200,18))
-        off = (self.bg_time*14)%28
-        for y in range(-30, h+30, 28):
-            arcade.draw_line(0,y+off,w,y+off-18,(30,46,78,26),1)
+
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["world_bg"])
+        arcade.draw_circle_filled(w*0.19, h*0.83, 250+20*pulse,       tc["nebula1"])
+        arcade.draw_circle_filled(w*0.84, h*0.28, 280+30*(1.0-pulse), tc["nebula2"])
+        arcade.draw_circle_filled(w*0.53, h*1.07, 280,                tc["nebula3"])
+
+        off = (self.bg_time*14) % 28
+        for grid_y in range(-30, h+30, 28):
+            arcade.draw_line(0, grid_y+off, w, grid_y+off-18, tc["grid_line"], 1)
+
+        sc = tc["star_color"]
         for s in self.stars:
-            tw = 0.55+0.45*math.sin(self.bg_time*s["twinkle"]+s["phase"])
-            al = max(20,min(255,int(s["alpha"]*tw)))
-            arcade.draw_circle_filled(s["x"],s["y"],s["size"],(205,228,255,al))
+            tw = 0.55 + 0.45*math.sin(self.bg_time*s["twinkle"]+s["phase"])
+            al = max(20, min(255, int(s["alpha"]*tw)))
+            arcade.draw_circle_filled(s["x"], s["y"], s["size"], (*sc[:3], al))
 
     def _draw_entity_glows(self):
-        p = self.player
-        c = (255,230,90,82) if p.speed_active else (95,200,255,68)
-        arcade.draw_circle_filled(p.center_x, p.center_y, 34, c)
+        tc = THEMES[self.menu_theme]
+        p  = self.player
+        pg = tc["player_glow_spd"] if p.speed_active else tc["player_glow"]
+        arcade.draw_circle_filled(p.center_x, p.center_y, 34, pg)
         for e in self.enemies:
-            arcade.draw_circle_filled(e.center_x,e.center_y,24,(255,92,92,45))
+            arcade.draw_circle_filled(e.center_x, e.center_y, 24, tc["enemy_glow"])
         for e in self.shooting_enemies:
-            arcade.draw_circle_filled(e.center_x,e.center_y,26,(255,130,90,55))
+            arcade.draw_circle_filled(e.center_x, e.center_y, 26, tc["shoot_glow"])
         for b in self.bosses:
-            r = 54+8*math.sin(self.bg_time*2.5)
-            arcade.draw_circle_filled(b.center_x,b.center_y,r,(255,70,70,55))
+            boss_r = 54 + 8*math.sin(self.bg_time*2.5)
+            arcade.draw_circle_filled(b.center_x, b.center_y, boss_r, tc["boss_glow"])
 
     def _draw_particles(self):
         for pt in self.particles:
@@ -1063,13 +1121,13 @@ class GameWindow(arcade.Window):
         font_ui  = self._FONT_UI
         font_num = self._FONT_NUM
 
-        # ── Invisible vignette edges for readability ──
-        # (subtle dark gradient around borders so text floats on any BG)
+        # ── Subtle vignette edges so text floats on any background ──
+        vig = THEMES[self.menu_theme]["vignette"]
         for i in range(5):
-            a = 28 - i*5
-            arcade.draw_lrbt_rectangle_filled(0, w, h-i*12, h, (0,0,0,a))
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, i*12, (0,0,0,a))
-            arcade.draw_lrbt_rectangle_filled(0, i*12, 0, h,  (0,0,0,a))
+            va = 28 - i*5
+            arcade.draw_lrbt_rectangle_filled(0, w, h-i*12, h, (*vig, va))
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, i*12,   (*vig, va))
+            arcade.draw_lrbt_rectangle_filled(0, i*12, 0, h,   (*vig, va))
 
         if not self.show_hud:
             self._txt_shadow("[H] show HUD", 14, h-18,
@@ -1197,10 +1255,11 @@ class GameWindow(arcade.Window):
 
     def _draw_crosshair(self):
         x, y = self.mouse_x, self.mouse_y
-        arcade.draw_circle_outline(x,y,13,(130,220,255,185),2)
-        for x1,y1,x2,y2 in [(x-20,y,x-8,y),(x+8,y,x+20,y),
-                              (x,y-20,x,y-8),(x,y+8,x,y+20)]:
-            arcade.draw_line(x1,y1,x2,y2,(130,220,255,185),2)
+        cc   = THEMES[self.menu_theme]["crosshair"]
+        arcade.draw_circle_outline(x, y, 13, cc, 2)
+        for x1, y1, x2, y2 in [(x-20, y, x-8, y), (x+8, y, x+20, y),
+                                 (x, y-20, x, y-8), (x, y+8, x, y+20)]:
+            arcade.draw_line(x1, y1, x2, y2, cc, 2)
 
     # ══════════════════════════════════════════════════
     #  ON DRAW
@@ -1215,6 +1274,7 @@ class GameWindow(arcade.Window):
             return
 
         # Playing / paused / gameover — always draw the world
+        tc = THEMES[self.menu_theme]   # pull once, use everywhere below
         self._draw_bg_space()
         self._draw_entity_glows()
         self.powerups.draw()
@@ -1223,88 +1283,86 @@ class GameWindow(arcade.Window):
         self.bullets.draw();  self.enemy_bullets.draw()
 
         for b in self.bullets:
-            arcade.draw_circle_filled(b.center_x,b.center_y,6,(255,200,110,55))
+            arcade.draw_circle_filled(b.center_x, b.center_y, 6, tc["bullet_glow"])
         for b in self.enemy_bullets:
-            arcade.draw_circle_filled(b.center_x,b.center_y,7,(255,85,85,55))
+            arcade.draw_circle_filled(b.center_x, b.center_y, 7, tc["ebullet_glow"])
 
         if self.player.shield_active:
-            rr = 38+2.5*math.sin(self.bg_time*9)
-            arcade.draw_circle_outline(self.player.center_x,self.player.center_y,
-                                        rr,(90,235,255,230),3)
+            rr = 38 + 2.5*math.sin(self.bg_time*9)
+            arcade.draw_circle_outline(self.player.center_x, self.player.center_y,
+                                        rr, tc["shield_ring"], 3)
 
         for pu in self.powerups:
-            arcade.draw_text(POWERUP_LABELS[pu.kind],pu.center_x,pu.center_y-8,
-                             arcade.color.WHITE,9,anchor_x="center")
+            arcade.draw_text(POWERUP_LABELS[pu.kind], pu.center_x, pu.center_y-8,
+                             tc["powerup_label"], 9, anchor_x="center")
 
         self._draw_enemy_health_bars()
         self._draw_particles()
         self._draw_hud()
 
         if self.damage_flash > 0:
-            arcade.draw_lrbt_rectangle_filled(0,w,0,h,
-                (255,65,65,int(170*self.damage_flash)))
+            df_r, df_g, df_b = tc["damage_flash"][:3]
+            df_base_a = tc["damage_flash"][3] if len(tc["damage_flash"]) == 4 else 170
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h,
+                (df_r, df_g, df_b, int(df_base_a * self.damage_flash)))
 
         self._draw_crosshair()
 
         if self.game_state == STATE_GAMEOVER:
-            # ── Full-screen blackout (solid enough to hide all sprites) ──
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3, 5, 18, 210))
+            # ── Full-screen overlay ──────────────────────────────────────
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["gameover_bg"])
 
-            # ── Central dark card ────────────────────────────────────────
+            # ── Central card ─────────────────────────────────────────────
             cw_ = min(560, int(w * 0.72))
             ch_ = 310
             cx_ = (w - cw_) // 2
             cy_ = h // 2 - ch_ // 2
-            # card shadow
             arcade.draw_lrbt_rectangle_filled(
-                cx_+6, cx_+cw_+6, cy_-6, cy_+ch_-6, (0, 0, 0, 90))
-            # card body
+                cx_+6, cx_+cw_+6, cy_-6, cy_+ch_-6, (0, 0, 0, 80))
             arcade.draw_lrbt_rectangle_filled(
-                cx_, cx_+cw_, cy_, cy_+ch_, (8, 12, 32, 235))
-            # card border with red glow
+                cx_, cx_+cw_, cy_, cy_+ch_, tc["gameover_card"])
             arcade.draw_lrbt_rectangle_outline(
-                cx_, cx_+cw_, cy_, cy_+ch_, (200, 40, 40, 180), 2)
+                cx_, cx_+cw_, cy_, cy_+ch_, tc["gameover_border"], 2)
             arcade.draw_lrbt_rectangle_outline(
-                cx_+4, cx_+cw_-4, cy_+4, cy_+ch_-4, (200, 40, 40, 55), 1)
+                cx_+4, cx_+cw_-4, cy_+4, cy_+ch_-4,
+                (*tc["gameover_border"][:3], 55), 1)
             # corner accents
             csz = 18
+            ga  = tc["gameover_accent"]
             for (ax, ay, dx, dy) in [(cx_, cy_, -1,-1), (cx_+cw_, cy_, 1,-1),
                                       (cx_, cy_+ch_, -1, 1), (cx_+cw_, cy_+ch_, 1, 1)]:
-                arcade.draw_line(ax, ay, ax+dx*csz, ay, (255,60,60,160), 2)
-                arcade.draw_line(ax, ay, ax, ay+dy*csz, (255,60,60,160), 2)
+                arcade.draw_line(ax, ay, ax+dx*csz, ay, ga, 2)
+                arcade.draw_line(ax, ay, ax, ay+dy*csz, ga, 2)
 
-            # ── Content (all Y inside the card) ─────────────────────────
+            # ── Content ──────────────────────────────────────────────────
             mid_x  = w // 2
-            top_y  = cy_ + ch_ - 58    # "GAME OVER" title
-            lbl_y  = cy_ + ch_ - 128   # "FINAL SCORE" label
-            num_y  = cy_ + ch_ - 172   # score number
-            div_y_ = cy_ + ch_ - 200   # thin divider line
-            rst_y  = cy_ + 22          # "PRESS R" restart prompt
+            top_y  = cy_ + ch_ - 58
+            lbl_y  = cy_ + ch_ - 128
+            num_y  = cy_ + ch_ - 172
+            div_y_ = cy_ + ch_ - 200
+            rst_y  = cy_ + 22
 
-            # decorative top/bottom lines inside card
             arcade.draw_line(cx_+24, top_y-14, cx_+cw_-24, top_y-14,
-                             (200, 40, 40, 100), 1)
+                             tc["gameover_border"], 1)
             arcade.draw_line(cx_+24, div_y_,   cx_+cw_-24, div_y_,
-                             (80, 100, 160, 100), 1)
+                             (*tc["gameover_accent"][:3], 100), 1)
 
-            # GAME OVER
-            self._txt_shadow("GAME OVER", mid_x, top_y,
-                             (255, 50, 50, 255), 52,
+            go_title_c = (255, 50, 50, 255) if self.menu_theme == "dark" \
+                         else (20, 50, 180, 255)
+            score_c    = (210, 235, 255, 245) if self.menu_theme == "dark" \
+                         else (14, 34, 86, 245)
+            label_c    = (130, 165, 215, 200) if self.menu_theme == "dark" \
+                         else (60, 90, 165, 200)
+            restart_c  = (120, 158, 215, 195) if self.menu_theme == "dark" \
+                         else (50, 80, 160, 195)
+
+            self._txt_shadow("GAME OVER", mid_x, top_y, go_title_c, 52,
                              self._FONT_UI, anchor_x="center", bold=True)
-
-            # FINAL SCORE label
-            self._txt_shadow("FINAL  SCORE", mid_x, lbl_y,
-                             (130, 165, 215, 200), 12,
+            self._txt_shadow("FINAL  SCORE", mid_x, lbl_y, label_c, 12,
                              self._FONT_UI, anchor_x="center")
-
-            # Score value — large, bright, monospace
-            self._txt_shadow(f"{self.score:,}", mid_x, num_y,
-                             (210, 235, 255, 245), 36,
+            self._txt_shadow(f"{self.score:,}", mid_x, num_y, score_c, 36,
                              self._FONT_NUM, anchor_x="center", bold=True)
-
-            # PRESS R TO RESTART
-            self._txt_shadow("PRESS  R  TO  RESTART", mid_x, rst_y,
-                             (120, 158, 215, 195), 15,
+            self._txt_shadow("PRESS  R  TO  RESTART", mid_x, rst_y, restart_c, 15,
                              self._FONT_UI, anchor_x="center")
 
         if self.game_state == STATE_PAUSED:
@@ -1354,12 +1412,13 @@ class GameWindow(arcade.Window):
         # engine particles
         mv = abs(p.change_x)+abs(p.change_y)
         if mv > 130 and random.random() < 0.55:
-            ang = math.atan2(-p.change_y,-p.change_x)+random.uniform(-0.5,0.5)
-            s2  = random.uniform(80,160)
+            ang   = math.atan2(-p.change_y,-p.change_x)+random.uniform(-0.5,0.5)
+            s2    = random.uniform(80,160)
+            ep_c  = THEMES[self.menu_theme]["engine_particle"]
             self._add_particle(
                 p.center_x+random.uniform(-4,4), p.center_y-8+random.uniform(-3,3),
                 math.cos(ang)*s2, math.sin(ang)*s2,
-                random.uniform(1.4,2.8), random.uniform(0.12,0.24), (120,205,255), 0.9)
+                random.uniform(1.4,2.8), random.uniform(0.12,0.24), ep_c, 0.9)
 
         # firing
         firing = self.mouse_held or p.autofire_active

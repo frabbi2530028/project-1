@@ -633,9 +633,9 @@ class GameWindow(arcade.Window):
         super().on_resize(width, height)
         w, h = width, height
         self.txt_score.x   = 22;      self.txt_score.y   = h-28
-        self.txt_health.x  = 22;      self.txt_health.y  = h-74
-        self.txt_active.x  = 22;      self.txt_active.y  = h-112
-        self.txt_inv.x     = 22;      self.txt_inv.y     = h-132
+        self.txt_health.x  = 22;      self.txt_health.y  = h-62   # numbers row (drawn via shadow)
+        self.txt_active.x  = 22;      self.txt_active.y  = h-108
+        self.txt_inv.x     = 22;      self.txt_inv.y     = h-142
         self.txt_notif.x   = w//2;    self.txt_notif.y   = h//2+90
         self.txt_hint.x    = w//2;    self.txt_hint.y    = 11
         self.txt_over.x    = w//2;    self.txt_over.y    = h//2+18
@@ -804,7 +804,7 @@ class GameWindow(arcade.Window):
 
         # ── Panel ────────────────────────────────────
         pw = min(int(w*0.80), 650)
-        ph = min(int(h*0.92), 560 if is_pause else 525)
+        ph = min(int(h*0.95), 580 if is_pause else 560)
         pl = (w-pw)//2;  pr = pl+pw
         pb = (h-ph)//2;  ptop = pb+ph
 
@@ -842,7 +842,7 @@ class GameWindow(arcade.Window):
 
         # ── Ship cards ───────────────────────────────
         n  = len(SHIPS)
-        cw, ch = 172, 182   # wider + taller cards to fit bigger pips
+        cw, ch = 172, 210   # taller card gives room for all rows + badge
         gap    = 14
         total_cw = cw*n+gap*(n-1)
         cx0  = (w-total_cw)//2
@@ -875,9 +875,9 @@ class GameWindow(arcade.Window):
                 arcade.draw_lrbt_rectangle_outline(
                     cl-3,cr+3,cb-3,ct+3, (*g,int(55+50*pulse)), 2)
 
-            # ship preview
-            pcx = cl+cw//2
-            pcy = ct - int(ch*0.52)//2 - 8
+            # ship preview — centred in top 45% of card
+            pcx = cl + cw//2
+            pcy = cb + ch - int(ch * 0.28)   # sits in upper portion, above the text area
 
             if avl and ship["texture"]:
                 tex  = load_texture_clean(ship["texture"], ship["tex_scale"])
@@ -905,9 +905,25 @@ class GameWindow(arcade.Window):
                                  anchor_x="center", anchor_y="center", bold=True,
                                  font_name=("Futura","Century Gothic","Arial"))
 
-            name_y = cb+int(ch*0.41)
+            # ── Ship name (fixed distance from card bottom) ──
+            # Layout anchored from cb (card bottom) so all rows stay inside:
+            #   cb+8   = SELECTED badge
+            #   cb+28  = DEF row
+            #   cb+46  = ATK row
+            #   cb+64  = SPD row
+            #   cb+82  = tagline
+            #   cb+98  = ship name
+
+            name_y   = cb + 98
+            tag_y    = cb + 82
+            spd_y    = cb + 64
+            atk_y    = cb + 46
+            def_y    = cb + 28
+            badge_y  = cb + 8
+
             nc = theme_c["locked_text"] if not avl else \
                  (theme_c["card_sel_border"] if sel else theme_c["text"])
+            # name shadow + main
             arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), 11,
                              anchor_x="center", bold=True,
                              font_name=("Futura","Century Gothic","Arial"))
@@ -916,27 +932,33 @@ class GameWindow(arcade.Window):
                              font_name=("Futura","Century Gothic","Arial"))
 
             if avl:
-                arcade.draw_text(ship["tagline"], pcx, name_y-18,
+                # tagline
+                arcade.draw_text(ship["tagline"], pcx, tag_y,
                                  theme_c["text_dim"], 9, anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
-                sy = name_y - 40
-                for j, (lbl, val) in enumerate([("SPD", ship["stat_spd"]),
-                                                ("ATK", ship["stat_atk"]),
-                                                ("DEF", ship["stat_def"])]):
-                    ry = sy - j*22
-                    # stat label
-                    arcade.draw_text(lbl, cl+14, ry, theme_c["text_dim"], 10,
+
+                # thin divider between tagline and stats
+                arcade.draw_line(cl+12, tag_y-8, cr-12, tag_y-8,
+                                 (*theme_c["divider"][:3], 80), 1)
+
+                # stat rows — SPD / ATK / DEF with fixed Y
+                for row_y, lbl, val in [(spd_y, "SPD", ship["stat_spd"]),
+                                         (atk_y, "ATK", ship["stat_atk"]),
+                                         (def_y, "DEF", ship["stat_def"])]:
+                    arcade.draw_text(lbl, cl+14, row_y, theme_c["text_dim"], 10,
                                      anchor_y="center", bold=True,
                                      font_name=("Courier New","Menlo","monospace"))
-                    # pips — centred in the right half of the card
-                    self._draw_stat_pips(cl+95, ry, val, 5,
+                    self._draw_stat_pips(cl+95, row_y, val, 5,
                                          theme_c["stat_filled"], theme_c["stat_empty"])
+
+                # SELECTED badge at very bottom of card
                 if sel:
-                    arcade.draw_text("✔ SELECTED", pcx, cb+10,
-                                     theme_c["selected_badge"], 10, anchor_x="center", bold=True,
+                    arcade.draw_text("✔ SELECTED", pcx, badge_y,
+                                     theme_c["selected_badge"], 10,
+                                     anchor_x="center", bold=True,
                                      font_name=("Futura","Century Gothic","Arial"))
             else:
-                arcade.draw_text("COMING SOON", pcx, name_y-20,
+                arcade.draw_text("COMING SOON", pcx, tag_y,
                                  theme_c["locked_text"], 9, anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
 
@@ -1020,10 +1042,15 @@ class GameWindow(arcade.Window):
                       (*theme_c["btn_border"][:3], 152), theme_c["btn_text_dim"],
                       "QUIT TO MENU", 14)
             self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
+            # in pause mode, anchor toggle below quit button
+            _theme_ref_y = qy
+        else:
+            _theme_ref_y = by   # in menu mode, anchor below play button
 
-        # theme toggle — always at bottom
+        # theme toggle — always a fixed gap below the lowest action button
         tw, th2 = 190, 32
-        tx = w//2-tw//2;  ty2 = pb+16
+        tx  = w//2 - tw//2
+        ty2 = max(pb + 10, _theme_ref_y - th2 - 12)
         hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
         _draw_btn(tx, tw, ty2, th2,
                   theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 145),
@@ -1154,22 +1181,29 @@ class GameWindow(arcade.Window):
         self.txt_score.draw()
         self._txt_shadow("SCORE", 22, h-12, (120,165,230,180), 9, font_ui)
 
-        # ── HP bar ─────────────────────────────────
+        # ── HP section ─────────────────────────────
+        # Row positions (all from h, spaced so nothing overlaps):
+        #   h-46 : "HEALTH" small label
+        #   h-60 : "100 / 100" numbers
+        #   h-76 to h-68 : segmented bar  (8px below numbers)
+        #   h-66 : neon glow line on top of bar
         hr   = max(0.0, p.health/p.max_health)
         hc   = (60,235,110) if hr>0.55 else (255,195,55) if hr>0.28 else (255,60,60)
-        # label
-        self._txt_shadow("HEALTH", 22, h-56, (120,165,230,180), 9, font_ui)
-        # segmented bar
-        self._draw_seg_bar(22, h-80, 210, 9, hr, hc, segs=21, gap=2)
-        # neon glow line along the filled portion
+
+        # "HEALTH" label row
+        self._txt_shadow("HEALTH", 22, h-46, (120,165,230,200), 10, font_ui)
+
+        # HP numbers row — drawn BEFORE bar so bar doesn't cover them
+        hp_str = f"{int(max(0, p.health))}  /  {p.max_health}"
+        self._txt_shadow(hp_str, 22, h-62, (*hc[:3], 230), 11, font_num, bold=True)
+
+        # Segmented bar — clear below numbers (bar top = h-68, number baseline = h-62, gap = 6px)
+        self._draw_seg_bar(22, h-82, 230, 10, hr, hc, segs=23, gap=2)
+        # Neon glow highlight line
         if hr > 0:
-            gw = int(210*hr)
+            gw = int(230 * hr)
             arcade.draw_lrbt_rectangle_filled(22, 22+gw, h-72, h-71,
-                                               (*hc[:3], int(160*hr)))
-        # numbers
-        self.txt_health.text  = f"{int(max(0,p.health))}  /  {p.max_health}"
-        self.txt_health.color = (*hc[:3], 210)
-        self.txt_health.draw()
+                                               (*hc[:3], int(155*hr)))
 
         # ── Active power-ups ───────────────────────
         active_pills = []
@@ -1179,7 +1213,7 @@ class GameWindow(arcade.Window):
         if p.triple_active:   active_pills.append(("TRIPLE",  p.triple_timer,    (255,140,40)))
 
         pill_x = 22
-        pill_y = h - 112
+        pill_y = h - 108   # 26px clear gap below bar bottom (h-82)
         pill_h = 20
         for label, timer, pc in active_pills:
             pw = len(label)*8 + 50
@@ -1206,7 +1240,7 @@ class GameWindow(arcade.Window):
             ("4", "TRP", "TRIPLE",  inv["triple"],   (255, 140, 40)),
         ]
         ix = 22
-        iy = h - 138
+        iy = h - 142   # below pills (pill_y=h-108, pill_h=20 → pill bottom=h-128, +14 gap)
         badge_w = 64
         badge_h = 22
         for key, short, full, cnt, ic in inv_data:
@@ -1279,9 +1313,6 @@ class GameWindow(arcade.Window):
         if self.notif_timer > 0:
             a = min(255, int(self.notif_timer*290))
             c = self.notif_color
-            # subtle glow behind notification
-            arcade.draw_lrbt_rectangle_filled(
-                w//2-240, w//2+240, h//2+74, h//2+106, (0,0,0,int(a*0.35)))
             self.txt_notif.text  = self.notif_text
             self.txt_notif.color = (*c[:3], a)
             self.txt_notif.draw()

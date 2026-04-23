@@ -1024,15 +1024,14 @@ class GameWindow(arcade.Window):
 
     def _draw_menu(self):
         is_pause = (self.game_state == STATE_PAUSED)
-        # Pause overlay always uses the dark theme for a clean dark panel look.
-        # Only the main menu respects the user's light/dark preference.
         theme_c  = THEMES["dark"] if is_pause else THEMES[self.menu_theme]
         w, h = self.width, self.height
         t  = self.bg_time
+        font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
 
         # ── Background ───────────────────────────────
         if is_pause:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 5, 16, 170))
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 5, 16, 175))
         else:
             arcade.draw_lrbt_rectangle_filled(0, w, 0, h, theme_c["bg"])
             if self.menu_theme == "dark":
@@ -1057,263 +1056,275 @@ class GameWindow(arcade.Window):
                 for yi in range(-30,h+30,26):
                     arcade.draw_line(0,yi+off,w,yi+off-14,(155,182,228,20),1)
 
-        # ── Panel ────────────────────────────────────
-        pw = min(int(w*0.80), 650)
-        ph = min(int(h*0.95), 580 if is_pause else 560)
-        pl = (w-pw)//2;  pr = pl+pw
-        pb = (h-ph)//2;  ptop = pb+ph
+        # ════════════════════════════════════════════════════════════════
+        #  LAYOUT — computed strictly top-down so nothing ever overflows
+        #
+        #  Row heights (pause):
+        #    TITLE block          : 80 px  (title 42pt + subtitle)
+        #    divider + "SELECT.." : 30 px
+        #    ship cards           : ch px
+        #    gap                  : 10 px
+        #    "SELECT DIFF" label  : 18 px
+        #    diff buttons         : dh px
+        #    gap                  : 10 px
+        #    RESUME button        : bh px
+        #    gap                  : 8  px
+        #    QUIT button          : qh px  (pause only)
+        #    gap                  : 6  px
+        #    LIGHT MODE button    : th px
+        #    bottom pad           : 14 px
+        # ════════════════════════════════════════════════════════════════
 
-        arcade.draw_lrbt_rectangle_filled(pl+7,pr+7,pb-7,ptop-7,(0,0,0,70))
-        arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop, theme_c["panel_fill"])
-        arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop, theme_c["panel_border"], 2)
-        arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5, theme_c["panel_inner"], 1)
+        # fixed row heights
+        ch   = 190   # ship card height
+        dh   = 36    # difficulty button height
+        bh   = 46    # resume/play button height
+        qh   = 34    # quit button height  (pause only)
+        th   = 28    # theme toggle height
 
-        # corner accents
-        ac = theme_c["panel_border"];  sz = 24
-        for (ax,ay,dx,dy) in [(pl,pb,-1,-1),(pr,pb,1,-1),(pl,ptop,-1,1),(pr,ptop,1,1)]:
-            arcade.draw_line(ax,ay,ax+dx*sz,ay,          ac,2)
-            arcade.draw_line(ax,ay,ax,      ay+dy*sz,    ac,2)
+        # total content height  (pause vs menu)
+        title_block  = 80
+        divider_row  = 30
+        gap_cd       = 10   # cards → diff label
+        diff_label_h = 18
+        gap_db       = 10   # diff buttons → play button
+        gap_bq       = 8    # play → quit
+        gap_qt       = 6    # quit → theme
+        bot_pad      = 14
+
+        if is_pause:
+            content_h = (title_block + divider_row + ch + gap_cd
+                         + diff_label_h + dh + gap_db + bh
+                         + gap_bq + qh + gap_qt + th + bot_pad)
+        else:
+            content_h = (title_block + divider_row + ch + gap_cd
+                         + diff_label_h + dh + gap_db + bh
+                         + gap_qt + th + bot_pad)
+
+        # panel — just wide/tall enough, centred
+        pw   = min(int(w * 0.88), 720)
+        ph   = max(content_h + 28, min(int(h * 0.96), content_h + 40))
+        pl   = (w - pw) // 2;  pr = pl + pw
+        pb   = (h - ph) // 2;  ptop = pb + ph
+
+        # ── Panel background ─────────────────────────
+        arcade.draw_lrbt_rectangle_filled(pl+6, pr+6, pb-6, ptop-6, (0,0,0,60))
+        arcade.draw_lrbt_rectangle_filled(pl, pr, pb, ptop, theme_c["panel_fill"])
+        arcade.draw_lrbt_rectangle_outline(pl, pr, pb, ptop, theme_c["panel_border"], 2)
+        arcade.draw_lrbt_rectangle_outline(pl+5, pr-5, pb+5, ptop-5, theme_c["panel_inner"], 1)
+        # corner accent lines
+        ac = theme_c["panel_border"];  sz = 22
+        for (ax, ay, dx, dy) in [(pl,pb,-1,-1),(pr,pb,1,-1),(pl,ptop,-1,1),(pr,ptop,1,1)]:
+            arcade.draw_line(ax, ay, ax+dx*sz, ay, ac, 2)
+            arcade.draw_line(ax, ay, ax, ay+dy*sz, ac, 2)
+
+        # ── Cursor (top-down row tracker) ────────────
+        cursor = ptop - 14   # start just inside top edge
 
         # ── Title ────────────────────────────────────
-        font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
-        title = "PAUSED" if is_pause else "NEON  DRIFT"
-        ty    = ptop - 52
-        arcade.draw_text(title, w//2+4, ty-4, theme_c["title_shadow"], 42,
+        title_text = "PAUSED" if is_pause else "NEON  DRIFT"
+        ty = cursor - 44
+        arcade.draw_text(title_text, w//2+3, ty-3, theme_c["title_shadow"], 42,
                          anchor_x="center", bold=True, font_name=font_ui_local)
-        arcade.draw_text(title, w//2,   ty,   theme_c["title"],        42,
+        arcade.draw_text(title_text, w//2,   ty,   theme_c["title"],        42,
                          anchor_x="center", bold=True, font_name=font_ui_local)
-        sub = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
-        arcade.draw_text(sub, w//2+1, ty-31, (0,0,0,80), 12,
+        sub_text = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
+        arcade.draw_text(sub_text, w//2+1, ty-28, (0,0,0,80), 12,
                          anchor_x="center", font_name=font_ui_local)
-        arcade.draw_text(sub, w//2, ty-30, theme_c["subtitle"], 12,
+        arcade.draw_text(sub_text, w//2,   ty-27, theme_c["subtitle"], 12,
                          anchor_x="center", font_name=font_ui_local)
+        cursor -= title_block   # move cursor down past title block
 
-        div_y = ptop - 97
+        # ── Divider + "SELECT YOUR SHIP" ─────────────
+        div_y = cursor
         arcade.draw_line(pl+22, div_y, pr-22, div_y, theme_c["divider"], 1)
-        arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-23, (0,0,0,90), 13,
+        arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-18, (0,0,0,90), 13,
                          anchor_x="center", bold=True, font_name=font_ui_local)
-        arcade.draw_text("SELECT YOUR SHIP", w//2, div_y-22,
-                         theme_c["text"], 13, anchor_x="center", bold=True, font_name=font_ui_local)
+        arcade.draw_text("SELECT YOUR SHIP", w//2,   div_y-17, theme_c["text"], 13,
+                         anchor_x="center", bold=True, font_name=font_ui_local)
+        cursor -= divider_row
 
         # ── Ship cards ───────────────────────────────
-        n  = len(SHIPS)
-        cw, ch = 172, 210   # taller card gives room for all rows + badge
-        gap    = 14
-        total_cw = cw*n+gap*(n-1)
-        cx0  = (w-total_cw)//2
-        cy0  = div_y - 54 - ch        # card bottom y
+        n        = len(SHIPS)
+        cw       = min(160, (pw - 20) // n - 8)   # auto-fit width to panel
+        gap      = max(6, (pw - 20 - cw * n) // (n + 1))
+        total_cw = cw * n + gap * (n - 1)
+        cx0      = (w - total_cw) // 2
+        cb_cards = cursor - ch          # bottom y of cards
+        ct_cards = cursor              # top y of cards
 
         self._ship_cards = {}
         for i, ship in enumerate(SHIPS):
-            cl  = cx0+i*(cw+gap);  cr = cl+cw
-            cb  = cy0;             ct = cy0+ch
+            cl  = cx0 + i*(cw + gap);  cr = cl + cw
+            cb  = cb_cards;            ct = ct_cards
             sel = (i == self.selected_ship)
             avl = ship["available"]
-            hov = self._is_hovering(cl,cr,cb,ct)
+            hov = self._is_hovering(cl, cr, cb, ct)
 
             if not avl:
-                fill = theme_c["locked_fill"];  bord = theme_c["locked_border"];  bthk = 1
+                fill = theme_c["locked_fill"];    bord = theme_c["locked_border"]; bthk = 1
             elif sel:
-                fill = theme_c["card_sel_fill"]; bord = theme_c["card_sel_border"]; bthk = 3
+                fill = theme_c["card_sel_fill"];  bord = theme_c["card_sel_border"]; bthk = 3
             elif hov:
-                fill = theme_c["card_hover_fill"]; bord = theme_c["card_border"]; bthk = 2
+                fill = theme_c["card_hover_fill"]; bord = theme_c["card_border"];   bthk = 2
             else:
-                fill = theme_c["card_fill"]; bord = theme_c["card_border"]; bthk = 1
+                fill = theme_c["card_fill"];      bord = theme_c["card_border"];    bthk = 1
 
-            arcade.draw_lrbt_rectangle_filled(cl,cr,cb,ct, fill)
-            arcade.draw_lrbt_rectangle_outline(cl,cr,cb,ct, bord, bthk)
+            arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
+            arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, bord, bthk)
 
-            # selection pulse
             if sel and avl:
-                pulse = 0.5+0.5*math.sin(t*4.5)
+                pulse = 0.5 + 0.5*math.sin(t*4.5)
                 g = ship["color"]
                 arcade.draw_lrbt_rectangle_outline(
-                    cl-3,cr+3,cb-3,ct+3, (*g,int(55+50*pulse)), 2)
+                    cl-3, cr+3, cb-3, ct+3, (*g, int(55+50*pulse)), 2)
 
-            # ship preview — centred in top 45% of card
-            pcx = cl + cw//2
-            pcy = cb + ch - int(ch * 0.28)   # sits in upper portion, above the text area
+            pcx = cl + cw // 2
+            pcy = cb + ch - int(ch * 0.30)   # image centre in upper 70%
 
             if avl and ship["texture"]:
-                tex  = load_texture_clean(ship["texture"], ship["tex_scale"])
+                tex    = load_texture_clean(ship["texture"], ship["tex_scale"])
                 draw_y = pcy + (math.sin(t*2.8)*4 if sel else 0)
-                # draw_texture_rect works across arcade versions; fall back to SpriteList if needed
                 try:
-                    arcade.draw_texture_rect(
-                        tex,
-                        arcade.XYWH(pcx, draw_y, tex.width, tex.height)
-                    )
+                    arcade.draw_texture_rect(tex, arcade.XYWH(pcx, draw_y, tex.width, tex.height))
                 except (AttributeError, TypeError):
-                    # Older arcade versions don't have draw_texture_rect — use SpriteList
                     _sl = arcade.SpriteList()
                     _sp = arcade.Sprite()
                     _sp.texture  = tex
                     _sp.center_x = pcx
                     _sp.center_y = draw_y
-                    _sl.append(_sp)
-                    _sl.draw()
-                arcade.draw_circle_filled(pcx, pcy, 30,
-                                          (*ship["color"], 35+int(20*math.sin(t*3))))
+                    _sl.append(_sp);  _sl.draw()
+                arcade.draw_circle_filled(pcx, pcy, 28,
+                                          (*ship["color"], 30+int(18*math.sin(t*3))))
             else:
-                arcade.draw_circle_outline(pcx,pcy,28, theme_c["locked_border"],2)
-                arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 28,
+                arcade.draw_circle_outline(pcx, pcy, 26, theme_c["locked_border"], 2)
+                arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 26,
                                  anchor_x="center", anchor_y="center", bold=True,
                                  font_name=("Futura","Century Gothic","Arial"))
 
-            # ── Ship name (fixed distance from card bottom) ──
-            # Layout anchored from cb (card bottom) so all rows stay inside:
-            #   cb+8   = SELECTED badge
-            #   cb+28  = DEF row
-            #   cb+46  = ATK row
-            #   cb+64  = SPD row
-            #   cb+82  = tagline
-            #   cb+98  = ship name
-
-            name_y   = cb + 98
-            tag_y    = cb + 82
-            spd_y    = cb + 64
-            atk_y    = cb + 46
-            def_y    = cb + 28
-            badge_y  = cb + 8
+            # text rows — anchored from card bottom, fixed spacing
+            badge_y = cb + 7
+            def_y   = cb + 22
+            atk_y   = cb + 37
+            spd_y   = cb + 52
+            tag_y   = cb + 68
+            name_y  = cb + 82
 
             nc = theme_c["locked_text"] if not avl else \
                  (theme_c["card_sel_border"] if sel else theme_c["text"])
-            # name shadow + main
-            arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), 11,
+            arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), 10,
                              anchor_x="center", bold=True,
                              font_name=("Futura","Century Gothic","Arial"))
-            arcade.draw_text(ship["name"], pcx, name_y, nc, 11,
+            arcade.draw_text(ship["name"], pcx, name_y, nc, 10,
                              anchor_x="center", bold=True,
                              font_name=("Futura","Century Gothic","Arial"))
 
             if avl:
-                # tagline
-                arcade.draw_text(ship["tagline"], pcx, tag_y,
-                                 theme_c["text_dim"], 9, anchor_x="center",
+                arcade.draw_text(ship["tagline"], pcx, tag_y, theme_c["text_dim"], 8,
+                                 anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
-
-                # thin divider between tagline and stats
-                arcade.draw_line(cl+12, tag_y-8, cr-12, tag_y-8,
-                                 (*theme_c["divider"][:3], 80), 1)
-
-                # stat rows — SPD / ATK / DEF with fixed Y
-                for row_y, lbl, val in [(spd_y, "SPD", ship["stat_spd"]),
-                                         (atk_y, "ATK", ship["stat_atk"]),
-                                         (def_y, "DEF", ship["stat_def"])]:
-                    arcade.draw_text(lbl, cl+14, row_y, theme_c["text_dim"], 10,
+                arcade.draw_line(cl+10, tag_y-6, cr-10, tag_y-6,
+                                 (*theme_c["divider"][:3], 70), 1)
+                for row_y, lbl, val in [(spd_y,"SPD",ship["stat_spd"]),
+                                        (atk_y,"ATK",ship["stat_atk"]),
+                                        (def_y,"DEF",ship["stat_def"])]:
+                    arcade.draw_text(lbl, cl+10, row_y, theme_c["text_dim"], 9,
                                      anchor_y="center", bold=True,
                                      font_name=("Courier New","Menlo","monospace"))
-                    self._draw_stat_pips(cl+95, row_y, val, 5,
+                    self._draw_stat_pips(cl+80, row_y, val, 5,
                                          theme_c["stat_filled"], theme_c["stat_empty"])
-
-                # SELECTED badge at very bottom of card
                 if sel:
-                    arcade.draw_text("✔ SELECTED", pcx, badge_y,
-                                     theme_c["selected_badge"], 10,
+                    arcade.draw_text("✔ SELECTED", pcx, badge_y, theme_c["selected_badge"], 9,
                                      anchor_x="center", bold=True,
                                      font_name=("Futura","Century Gothic","Arial"))
             else:
-                arcade.draw_text("COMING SOON", pcx, tag_y,
-                                 theme_c["locked_text"], 9, anchor_x="center",
+                arcade.draw_text("COMING SOON", pcx, tag_y, theme_c["locked_text"], 8,
+                                 anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
 
             self._ship_cards[i] = (cl, cr, cb, ct)
 
-        # ── Buttons ──────────────────────────────────
+        cursor = cb_cards - gap_cd   # move cursor below cards
+
+        # ── "SELECT DIFFICULTY" label ────────────────
         self._menu_btns = {}
         self._diff_btns = {}
-        btn_top = cy0 - 12
 
-        # ── Difficulty selector ──────────────────────
-        arcade.draw_text("SELECT DIFFICULTY", w//2+1, btn_top-3, (0,0,0,90), 12,
+        arcade.draw_text("SELECT DIFFICULTY", w//2+1, cursor-diff_label_h+2, (0,0,0,90), 12,
                          anchor_x="center", bold=True, font_name=font_ui_local)
-        arcade.draw_text("SELECT DIFFICULTY", w//2, btn_top-2,
-                         theme_c["text"], 12, anchor_x="center", bold=True, font_name=font_ui_local)
+        arcade.draw_text("SELECT DIFFICULTY", w//2,   cursor-diff_label_h+3, theme_c["text"], 12,
+                         anchor_x="center", bold=True, font_name=font_ui_local)
+        cursor -= diff_label_h + 4
 
-        dw, dh = 118, 38
-        dgap   = 10
-        dtotal = dw*3 + dgap*2
-        dx0    = (w - dtotal)//2
-        diff_by = btn_top - dh - 20   # bottom y of difficulty buttons
+        # ── Difficulty buttons ────────────────────────
+        dw_btn = 116;  dgap = 10
+        dtotal = dw_btn*3 + dgap*2
+        dx0    = (w - dtotal) // 2
+        diff_by = cursor - dh        # bottom of diff buttons
 
         for di, dkey in enumerate(DIFFICULTY_ORDER):
             preset = DIFFICULTY_PRESETS[dkey]
-            dleft  = dx0 + di*(dw+dgap)
-            dright = dleft + dw
+            dleft  = dx0 + di*(dw_btn + dgap)
+            dright = dleft + dw_btn
             dtop   = diff_by + dh
             sel_d  = (dkey == self.selected_difficulty)
             hov_d  = self._is_hovering(dleft, dright, diff_by, dtop)
-
             dc     = preset["color"]
             if sel_d:
-                fill   = (*dc, 210)
-                border = (*dc, 255)
-                bthk   = 3
-                tcolor = (255, 255, 255)
+                fill_d = (*dc, 210);   bord_d = (*dc, 255);        bthk_d = 3; tc_d = (255,255,255)
             elif hov_d:
-                fill   = (*dc[:3], 80)
-                border = (*dc, 200)
-                bthk   = 2
-                tcolor = (255, 255, 255)
+                fill_d = (*dc[:3],80); bord_d = (*dc, 200);        bthk_d = 2; tc_d = (255,255,255)
             else:
-                fill   = (*dc[:3], 30)
-                border = (*dc[:3], 110)
-                bthk   = 1
-                tcolor = (*dc[:3], 200)
-
-            arcade.draw_lrbt_rectangle_filled(dleft, dright, diff_by, dtop, fill)
-            arcade.draw_lrbt_rectangle_outline(dleft, dright, diff_by, dtop, border, bthk)
+                fill_d = (*dc[:3],28); bord_d = (*dc[:3],100);     bthk_d = 1; tc_d = (*dc[:3],200)
+            arcade.draw_lrbt_rectangle_filled(dleft, dright, diff_by, dtop, fill_d)
+            arcade.draw_lrbt_rectangle_outline(dleft, dright, diff_by, dtop, bord_d, bthk_d)
             if sel_d:
                 pulse = 0.5+0.5*math.sin(t*4.0)
                 arcade.draw_lrbt_rectangle_outline(
-                    dleft-3, dright+3, diff_by-3, dtop+3, (*dc, int(50+45*pulse)), 2)
-            sa_ = min(175, int((tcolor[3] if len(tcolor)==4 else 255)*0.4))
-            arcade.draw_text(preset["label"], dleft+dw//2+1, diff_by+dh//2-1,
-                             (0,0,0,sa_), 14, anchor_x="center", anchor_y="center",
+                    dleft-3, dright+3, diff_by-3, dtop+3, (*dc, int(48+44*pulse)), 2)
+            sa_ = min(170, int((tc_d[3] if len(tc_d)==4 else 255)*0.38))
+            arcade.draw_text(preset["label"], dleft+dw_btn//2+1, diff_by+dh//2-1,
+                             (0,0,0,sa_), 13, anchor_x="center", anchor_y="center",
                              bold=True, font_name=font_ui_local)
-            arcade.draw_text(preset["label"], dleft+dw//2, diff_by+dh//2,
-                             tcolor, 14, anchor_x="center", anchor_y="center",
+            arcade.draw_text(preset["label"], dleft+dw_btn//2, diff_by+dh//2,
+                             tc_d, 13, anchor_x="center", anchor_y="center",
                              bold=True, font_name=font_ui_local)
-
             self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
 
-        play_y = diff_by - 14   # play button sits below difficulty row
+        cursor = diff_by - gap_db   # move cursor below diff buttons
 
-        bw, bh = 230, 50
-        bx = w//2-bw//2;  by = play_y - bh
+        # ── RESUME / PLAY button ─────────────────────
+        bw = 224
+        bx = w//2 - bw//2;  by = cursor - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
         _draw_btn(bx, bw, by, bh,
                   theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
                   theme_c["btn_border"], theme_c["btn_text"],
-                  "[ RESUME ]" if is_pause else "[ PLAY GAME ]", 20)
+                  "[ RESUME ]" if is_pause else "[ PLAY GAME ]", 19)
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
+        cursor = by - gap_bq
 
+        # ── QUIT button (pause only) ──────────────────
         if is_pause:
-            qw, qh = 196, 40
-            qx = w//2-qw//2;  qy = by-qh-10
+            qw = 190
+            qx = w//2 - qw//2;  qy = cursor - qh
             hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
             _draw_btn(qx, qw, qy, qh,
-                      theme_c["btn_hover"] if hov_q else (*theme_c["btn_fill"][:3], 145),
-                      (*theme_c["btn_border"][:3], 152), theme_c["btn_text_dim"],
-                      "QUIT TO MENU", 14)
+                      theme_c["btn_hover"] if hov_q else (*theme_c["btn_fill"][:3], 140),
+                      (*theme_c["btn_border"][:3], 148), theme_c["btn_text_dim"],
+                      "QUIT TO MENU", 13)
             self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
-            # in pause mode, anchor toggle below quit button
-            _theme_ref_y = qy
-        else:
-            _theme_ref_y = by   # in menu mode, anchor below play button
+            cursor = qy - gap_qt
 
-        # theme toggle — always a fixed gap below the lowest action button
-        tw, th2 = 190, 32
-        tx  = w//2 - tw//2
-        ty2 = max(pb + 10, _theme_ref_y - th2 - 12)
-        hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
-        _draw_btn(tx, tw, ty2, th2,
-                  theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 145),
-                  (*theme_c["btn_border"][:3], 158),
-                  theme_c["toggle_text"],
-                  "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]",
-                  12)
-        self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
+        # ── Theme toggle ──────────────────────────────
+        tw2 = 186
+        tx  = w//2 - tw2//2;  ty2 = cursor - th
+        hov_t = self._is_hovering(tx, tx+tw2, ty2, ty2+th)
+        _draw_btn(tx, tw2, ty2, th,
+                  theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 130),
+                  (*theme_c["btn_border"][:3], 150), theme_c["toggle_text"],
+                  "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]", 11)
+        self._menu_btns["theme"] = (tx, tx+tw2, ty2, ty2+th)
 
     # ══════════════════════════════════════════════════
     #  GAME-WORLD DRAW HELPERS

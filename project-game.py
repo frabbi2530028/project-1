@@ -2,7 +2,8 @@ import arcade
 import random
 import math
 from collections import deque
-from PIL import Image
+from pathlib import Path
+from PIL import Image, ImageDraw
 import numpy as np
 
 # ─────────────────────────────────────────────────────
@@ -47,6 +48,7 @@ POWERUP_KEYS = {
     arcade.key.KEY_2: "shield",
     arcade.key.KEY_3: "autofire",
     arcade.key.KEY_4: "triple",
+    arcade.key.KEY_5: "elec360",   # Reaper special
 }
 
 # ─────────────────────────────────────────────────────
@@ -276,13 +278,48 @@ SHIPS = [
         "spd_mult":  0.68,
         "hp_mult":   1.65,
     },
+    {
+        "name":      "INTERCEPTOR",
+        "tagline":   "Beam destroyer",
+        "stat_spd":  4, "stat_atk": 5, "stat_def": 2,
+        "color":     (255, 90, 60),
+        "available": True,
+        "texture":   "image/interceptor.png",
+        "tex_scale": 0.18,
+        "spd_mult":  1.15,
+        "hp_mult":   0.80,
+        # unique trait flags
+        "beam_weapon": True,    # fires a beam instead of bullets
+    },
+    {
+        "name":      "REAPER",
+        "tagline":   "Electric storm",
+        "stat_spd":  2, "stat_atk": 5, "stat_def": 4,
+        "color":     (120, 80, 255),
+        "available": True,
+        "texture":   "image/reaper.png",
+        "tex_scale": 0.17,
+        "spd_mult":  0.85,
+        "hp_mult":   1.35,
+        # unique trait flags
+        "electric_weapon": True,   # fires electric bolts; special 360° blast
+    },
 ]
+
+# Which ship index uses the beam weapon?
+BEAM_SHIP_INDICES     = {i for i, s in enumerate(SHIPS) if s.get("beam_weapon")}
+# Which ship index uses the electric weapon?
+ELECTRIC_SHIP_INDICES = {i for i, s in enumerate(SHIPS) if s.get("electric_weapon")}
 
 # ─────────────────────────────────────────────────────
 #  TEXTURE CACHE
 # ─────────────────────────────────────────────────────
 
 _texture_cache: dict = {}
+ASSET_ROOT = Path(__file__).resolve().parent
+ASSET_ALIASES = {
+    "image/reaper.png": "image/reaper_1.png",
+}
 
 
 def _remove_background(img: Image.Image, threshold: int = 210) -> Image.Image:
@@ -336,16 +373,71 @@ except AttributeError:
     _RESAMPLE = Image.LANCZOS              # Pillow < 9.1
 
 
+def _resolve_asset_path(path: str) -> Path | None:
+    raw_path = Path(path)
+    candidates = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.append(raw_path)
+        candidates.append(ASSET_ROOT / raw_path)
+
+    alias = ASSET_ALIASES.get(path)
+    if alias:
+        alias_path = Path(alias)
+        candidates.append(alias_path)
+        candidates.append(ASSET_ROOT / alias_path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    if raw_path.suffix:
+        search_dirs = []
+        if raw_path.parent:
+            search_dirs.extend([raw_path.parent, ASSET_ROOT / raw_path.parent])
+        else:
+            search_dirs.extend([Path("."), ASSET_ROOT])
+
+        for directory in search_dirs:
+            if not directory.exists():
+                continue
+            matches = sorted(directory.glob(f"{raw_path.stem}*{raw_path.suffix}"))
+            if matches:
+                return matches[0]
+
+    return None
+
+
+def _missing_texture(path: str, scale: float) -> arcade.Texture:
+    size = max(36, int(160 * max(scale, 0.18)))
+    img = Image.new("RGBA", (size, size), (20, 26, 46, 230))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle((2, 2, size - 3, size - 3), radius=10,
+                           outline=(255, 120, 90, 255), width=3,
+                           fill=(28, 34, 60, 230))
+    draw.line((10, 10, size - 11, size - 11), fill=(255, 170, 80, 255), width=4)
+    draw.line((size - 11, 10, 10, size - 11), fill=(255, 170, 80, 255), width=4)
+    draw.rectangle((size * 0.32, size * 0.32, size * 0.68, size * 0.68),
+                   outline=(120, 220, 255, 255), width=3)
+    return arcade.Texture(image=img)
+
+
 def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
     """Load a sprite image, remove the background using flood-fill, and cache it."""
     key = (path, scale)
     if key in _texture_cache:
         return _texture_cache[key]
-    img = Image.open(path).convert("RGBA")
+    resolved_path = _resolve_asset_path(path)
+    if resolved_path is None:
+        tex = _missing_texture(path, scale)
+        _texture_cache[key] = tex
+        return tex
+    img = Image.open(resolved_path).convert("RGBA")
     img = _remove_background(img, threshold=210)
     if scale != 1.0:
-        new_w = int(img.width * scale)
-        new_h = int(img.height * scale)
+        new_w = max(1, int(img.width * scale))
+        new_h = max(1, int(img.height * scale))
         img = img.resize((new_w, new_h), _RESAMPLE)
     tex = arcade.Texture(image=img)
     _texture_cache[key] = tex
@@ -365,18 +457,25 @@ def solid_texture(size: int, color: tuple) -> arcade.Texture:
 #  POWERUPS
 # ─────────────────────────────────────────────────────
 
-POWERUP_TYPES  = ["health", "shield", "autofire", "speed", "triple"]
+POWERUP_TYPES  = ["health", "shield", "autofire", "speed", "triple", "beam360", "elec360"]
 POWERUP_COLORS = {
     "health":   (0,   255, 90,  220),
     "shield":   (0,   190, 255, 220),
     "autofire": (255, 70,  255, 220),
     "speed":    (255, 220, 0,   220),
     "triple":   (255, 130, 0,   220),
+    "beam360":  (255, 60,  20,  220),   # fiery orange-red
+    "elec360":  (120, 80,  255, 220),   # electric violet
 }
 POWERUP_LABELS = {
-    "health":  "+HP",  "shield": "SHIELD", "autofire": "AUTO",
-    "speed":   "SPEED", "triple": "TRIPLE",
+    "health":  "+HP",   "shield":  "SHIELD",  "autofire": "AUTO",
+    "speed":   "SPEED", "triple":  "TRIPLE",  "beam360":  "360°",
+    "elec360": "⚡360°",
 }
+# Types that only drop when the beam ship is active
+BEAM_ONLY_POWERUPS     = {"beam360"}
+# Types that only drop when the electric ship is active
+ELECTRIC_ONLY_POWERUPS = {"elec360"}
 
 
 class Powerup(arcade.Sprite):
@@ -413,14 +512,17 @@ class Player(arcade.Sprite):
         self.autofire_active = False;  self.autofire_timer = 0.0
         self.speed_active    = False;  self.speed_timer    = 0.0
         self.triple_active   = False;  self.triple_timer   = 0.0
+        self.beam360_active  = False;  self.beam360_timer  = 0.0
+        self.elec360_active  = False;  self.elec360_timer  = 0.0
 
-        self.inventory = {"speed": 0, "shield": 0, "autofire": 0, "triple": 0}
+        self.inventory = {"speed": 0, "shield": 0, "autofire": 0, "triple": 0,
+                          "beam360": 0, "elec360": 0}
 
     def get_speed(self):
         return PLAYER_SPEED * (1.65 if self.speed_active else 1.0)
 
     def update_powerups(self, delta):
-        for attr in ("shield", "autofire", "speed", "triple"):
+        for attr in ("shield", "autofire", "speed", "triple", "beam360", "elec360"):
             if getattr(self, f"{attr}_active"):
                 new_t = getattr(self, f"{attr}_timer") - delta
                 if new_t <= 0:
@@ -504,6 +606,145 @@ class EnemyBullet(arcade.Sprite):
         self.life     -= delta_time
 
 
+# ─────────────────────────────────────────────────────
+#  BEAM  (beam-weapon ship projectile — not a Sprite)
+# ─────────────────────────────────────────────────────
+
+BEAM_DAMAGE_PER_SEC   = 280    # DPS against bosses
+BEAM_BOSS_KILL_THRESH = 0      # regular enemies die instantly; boss takes DPS
+BEAM_RANGE            = 1400   # max beam length (longer than any screen)
+BEAM_DURATION         = 0.12   # seconds a fired beam lives
+BEAM_360_ANGLES       = 12     # number of beams in 360° burst
+
+
+class BeamRay:
+    """A single beam ray — rendered as a glowing line, not a sprite."""
+    __slots__ = ("ox", "oy", "angle_rad", "length", "life", "max_life", "color")
+
+    def __init__(self, ox: float, oy: float, angle_rad: float,
+                 length: float = BEAM_RANGE, life: float = BEAM_DURATION,
+                 color: tuple = (255, 100, 40)):
+        self.ox        = ox
+        self.oy        = oy
+        self.angle_rad = angle_rad
+        self.length    = length
+        self.life      = life
+        self.max_life  = life
+        self.color     = color
+
+    @property
+    def tip_x(self) -> float:
+        return self.ox + math.cos(self.angle_rad) * self.length
+
+    @property
+    def tip_y(self) -> float:
+        return self.oy + math.sin(self.angle_rad) * self.length
+
+    def update(self, delta: float) -> None:
+        self.life -= delta
+
+    def draw(self) -> None:
+        """Draw a glowing 3-layer beam."""
+        ratio = 0.0 if self.max_life <= 0 else max(0.0, min(1.0, self.life / self.max_life))
+        cr, cg, cb_ = self.color
+        tx, ty = self.tip_x, self.tip_y
+        # outer soft glow
+        arcade.draw_line(self.ox, self.oy, tx, ty,
+                         (cr, cg, cb_, int(55 * ratio)), 12)
+        # mid glow
+        arcade.draw_line(self.ox, self.oy, tx, ty,
+                         (cr, cg, cb_, int(130 * ratio)), 5)
+        # bright core
+        arcade.draw_line(self.ox, self.oy, tx, ty,
+                         (255, 200, 160, int(240 * ratio)), 2)
+
+    def intersects_circle(self, cx: float, cy: float, r: float) -> bool:
+        """Check if this ray hits a circle (enemy hitbox)."""
+        # Vector from ray origin toward tip
+        dx = math.cos(self.angle_rad)
+        dy = math.sin(self.angle_rad)
+        # Vector from origin to circle centre
+        fx = self.ox - cx
+        fy = self.oy - cy
+        a  = dx*dx + dy*dy
+        b  = 2*(fx*dx + fy*dy)
+        c  = fx*fx + fy*fy - r*r
+        disc = b*b - 4*a*c
+        if disc < 0:
+            return False
+        sq  = math.sqrt(disc)
+        t1  = (-b - sq) / (2*a)
+        t2  = (-b + sq) / (2*a)
+        return (0 <= t1 <= self.length) or (0 <= t2 <= self.length)
+
+
+# ─────────────────────────────────────────────────────
+#  ELECTRIC BOLT  (Reaper ship weapon)
+# ─────────────────────────────────────────────────────
+
+ELECTRIC_SPEED        = 820     # px/s
+ELECTRIC_DAMAGE       = 35      # damage per bolt hit
+ELECTRIC_BOSS_DAMAGE  = 90      # damage to boss per bolt hit
+ELECTRIC_BOLT_LIFE    = 1.8     # seconds
+ELECTRIC_FIRE_RATE    = 0.14    # seconds between bolts (faster than normal)
+ELECTRIC_360_COUNT    = 16      # bolts in 360° burst
+ELECTRIC_360_DURATION = 8.0     # how long 360° mode lasts
+
+
+class ElectricBolt(arcade.Sprite):
+    """
+    A zigzag lightning bolt fired by the Reaper ship.
+    Visually drawn as a chain of short jittered segments — re-randomised
+    every frame so it flickers like real electricity.
+    """
+
+    def __init__(self, sx: float, sy: float, angle_rad: float,
+                 speed: float = ELECTRIC_SPEED):
+        super().__init__()
+        # Use a tiny 1×1 transparent texture so arcade collision still works
+        img = Image.new("RGBA", (6, 6), (0, 0, 0, 0))
+        self.texture  = arcade.Texture(image=img)
+        self.center_x = sx
+        self.center_y = sy
+        self.change_x = math.cos(angle_rad) * speed
+        self.change_y = math.sin(angle_rad) * speed
+        self.angle_rad = angle_rad
+        self.life      = ELECTRIC_BOLT_LIFE
+        # pre-generate zigzag offsets (regenerated each draw for flicker)
+        self._segs     = 8     # number of zigzag segments
+        self._length   = 28.0  # length of each segment
+        self._offsets  = [random.uniform(-5, 5) for _ in range(self._segs)]
+
+    def update(self, delta_time: float = 1/60, *args, **kwargs) -> None:
+        self.center_x += self.change_x * delta_time
+        self.center_y += self.change_y * delta_time
+        self.life     -= delta_time
+        # Re-randomise jitter every frame → flickering effect
+        self._offsets = [random.uniform(-6, 6) for _ in range(self._segs)]
+
+    def draw_bolt(self) -> None:
+        """Draw a glowing zigzag lightning bolt."""
+        ratio = max(0.0, self.life / ELECTRIC_BOLT_LIFE)
+        perp  = self.angle_rad + math.pi / 2   # perpendicular direction
+
+        px, py = self.center_x, self.center_y
+        for i, off in enumerate(self._offsets):
+            nx = px + math.cos(self.angle_rad)*self._length \
+                    + math.cos(perp)*off
+            ny = py + math.sin(self.angle_rad)*self._length \
+                    + math.sin(perp)*off
+            # outer soft glow (blue)
+            arcade.draw_line(px, py, nx, ny,
+                             (80, 80, 255, int(60*ratio)), 8)
+            # mid glow (blue-white)
+            arcade.draw_line(px, py, nx, ny,
+                             (140, 120, 255, int(140*ratio)), 3)
+            # bright white core
+            arcade.draw_line(px, py, nx, ny,
+                             (230, 210, 255, int(245*ratio)), 1)
+            px, py = nx, ny
+
+
 # ═════════════════════════════════════════════════════
 #  GAME WINDOW
 # ═════════════════════════════════════════════════════
@@ -540,10 +781,15 @@ class GameWindow(arcade.Window):
 
         # pre-warm textures
         for path, sc in [("image/player.png", 0.15), ("image/player.png", 0.22),
+                          ("image/interceptor.png", 0.18), ("image/interceptor.png", 0.22),
+                          ("image/reaper.png", 0.17), ("image/reaper.png", 0.22),
                           ("image/enemy.png", 0.12), ("image/shooting_enemy.png", 0.12),
                           ("image/boss.png", 0.2), ("image/bullet.png", 0.1),
                           ("image/enemy_bullet.png", 0.1)]:
-            load_texture_clean(path, sc)
+            try:
+                load_texture_clean(path, sc)
+            except (FileNotFoundError, OSError):
+                pass   # image not yet in place — handled gracefully at runtime
         for k in POWERUP_TYPES:
             solid_texture(22, POWERUP_COLORS[k])
 
@@ -622,6 +868,8 @@ class GameWindow(arcade.Window):
         self._fullscreen = False
         self.boss_on_screen = False
         self._dpreset = DIFFICULTY_PRESETS[self.selected_difficulty]
+        self.beams: list = []          # active BeamRay objects (Interceptor)
+        self.elec_bolts = arcade.SpriteList()  # active ElectricBolt sprites (Reaper)
 
         self._build_starfield()
 
@@ -677,6 +925,8 @@ class GameWindow(arcade.Window):
         self.time_alive   = 0.0
         self.combo        = 0;  self.combo_timer = 0.0
         self.particles    = []
+        self.beams        = []
+        self.elec_bolts   = arcade.SpriteList()
         self.boss_on_screen = False   # lockout flag: True while any boss lives
 
         # Cache the active preset so AI code can read it cheaply
@@ -1207,10 +1457,12 @@ class GameWindow(arcade.Window):
 
         # ── Active power-ups ───────────────────────
         active_pills = []
-        if p.shield_active:   active_pills.append(("SHIELD",  p.shield_timer,   (55,215,255)))
-        if p.autofire_active: active_pills.append(("AUTO",    p.autofire_timer,  (235,80,255)))
-        if p.speed_active:    active_pills.append(("SPEED",   p.speed_timer,     (255,215,40)))
-        if p.triple_active:   active_pills.append(("TRIPLE",  p.triple_timer,    (255,140,40)))
+        if p.shield_active:   active_pills.append(("SHIELD",  p.shield_timer,   (55,  215, 255)))
+        if p.autofire_active: active_pills.append(("AUTO",    p.autofire_timer,  (235, 80,  255)))
+        if p.speed_active:    active_pills.append(("SPEED",   p.speed_timer,     (255, 215, 40)))
+        if p.triple_active:   active_pills.append(("TRIPLE",  p.triple_timer,    (255, 140, 40)))
+        if p.beam360_active:  active_pills.append(("360°BEAM",p.beam360_timer,   (255, 110, 40)))
+        if p.elec360_active:  active_pills.append(("⚡360°",  p.elec360_timer,   (155, 100, 255)))
 
         pill_x = 22
         pill_y = h - 108   # 26px clear gap below bar bottom (h-82)
@@ -1233,12 +1485,16 @@ class GameWindow(arcade.Window):
 
         # ── Inventory ──────────────────────────────
         inv  = p.inventory
+        # Base badges always shown
         inv_data = [
             ("1", "SPD", "SPEED",   inv["speed"],    (255, 215, 40)),
             ("2", "SHD", "SHIELD",  inv["shield"],   (55,  215, 255)),
             ("3", "AUT", "AUTO",    inv["autofire"], (235, 80,  255)),
             ("4", "TRP", "TRIPLE",  inv["triple"],   (255, 140, 40)),
         ]
+        # Ship-specific badge
+        if self.selected_ship in ELECTRIC_SHIP_INDICES:
+            inv_data.append(("5", "⚡360", "ELEC360", inv.get("elec360", 0), (155, 100, 255)))
         ix = 22
         iy = h - 142   # below pills (pill_y=h-108, pill_h=20 → pill bottom=h-128, +14 gap)
         badge_w = 64
@@ -1350,6 +1606,37 @@ class GameWindow(arcade.Window):
             arcade.draw_circle_filled(b.center_x, b.center_y, 6, tc["bullet_glow"])
         for b in self.enemy_bullets:
             arcade.draw_circle_filled(b.center_x, b.center_y, 7, tc["ebullet_glow"])
+
+        # ── Beams (beam-ship) ────────────────────────────────────────
+        for beam in self.beams:
+            beam.draw()
+
+        # ── Electric bolts (Reaper) ───────────────────────────────────
+        for bolt in self.elec_bolts:
+            bolt.draw_bolt()
+
+        # ── 360° electric aura ring while elec360 is active ──────────
+        if self.player.elec360_active:
+            t_pulse = self.bg_time
+            ring_r  = 48 + 12*math.sin(t_pulse*11)
+            for layer, (col, width) in enumerate([
+                    ((80,  50, 255, 38), 20),
+                    ((140, 90, 255, 80), 8),
+                    ((220, 180, 255, 200), 2)]):
+                arcade.draw_circle_outline(
+                    self.player.center_x, self.player.center_y,
+                    ring_r + layer*3, col, width)
+            # Randomly spark off the ring
+            if random.random() < 0.5:
+                ang = random.uniform(0, math.tau)
+                sx  = self.player.center_x + math.cos(ang)*ring_r
+                sy  = self.player.center_y + math.sin(ang)*ring_r
+                self._add_particle(sx, sy,
+                                    math.cos(ang)*random.uniform(40,120),
+                                    math.sin(ang)*random.uniform(40,120),
+                                    random.uniform(1.0, 2.2),
+                                    random.uniform(0.05, 0.14),
+                                    (180, 140, 255), 0.80)
 
         if self.player.shield_active:
             rr = 38 + 2.5*math.sin(self.bg_time*9)
@@ -1505,19 +1792,49 @@ class GameWindow(arcade.Window):
                 random.uniform(1.4,2.8), random.uniform(0.12,0.24), ep_c, 0.9)
 
         # firing
+        is_beam_ship     = (self.selected_ship in BEAM_SHIP_INDICES)
+        is_electric_ship = (self.selected_ship in ELECTRIC_SHIP_INDICES)
+
         firing = self.mouse_held or p.autofire_active
         if firing:
-            rate = AUTO_FIRE_RATE if p.autofire_active else NORMAL_FIRE_RATE
+            rate = (ELECTRIC_FIRE_RATE if is_electric_ship
+                    else AUTO_FIRE_RATE if p.autofire_active
+                    else NORMAL_FIRE_RATE)
             self.fire_timer += delta
             while self.fire_timer >= rate:
-                if p.autofire_active:
-                    # target enemy closest to crosshair so player can steer
-                    tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
-                    self._shoot_toward(tgt.center_x if tgt else self.mouse_x,
-                                       tgt.center_y if tgt else self.mouse_y)
+                if is_beam_ship:
+                    self._fire_beam(p.beam360_active)
+                elif is_electric_ship:
+                    # 360° mode active → burst every shot; aim mode → track cursor
+                    if p.elec360_active:
+                        self._fire_electric(full_360=True)
+                    elif p.autofire_active:
+                        tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
+                        aim_x = tgt.center_x if tgt else self.mouse_x
+                        aim_y = tgt.center_y if tgt else self.mouse_y
+                        ang   = math.atan2(aim_y - p.center_y, aim_x - p.center_x)
+                        self.elec_bolts.append(ElectricBolt(p.center_x, p.center_y, ang))
+                    else:
+                        self._fire_electric(full_360=False)
                 else:
-                    self._shoot_toward(self.mouse_x, self.mouse_y)
+                    if p.autofire_active:
+                        tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
+                        self._shoot_toward(tgt.center_x if tgt else self.mouse_x,
+                                           tgt.center_y if tgt else self.mouse_y)
+                    else:
+                        self._shoot_toward(self.mouse_x, self.mouse_y)
                 self.fire_timer -= rate
+
+        # Update beams
+        self.beams = [b for b in self.beams if b.life > 0]
+        for beam in self.beams:
+            beam.update(delta)
+
+        # Update electric bolts
+        self.elec_bolts.update(delta)
+        for bolt in list(self.elec_bolts):
+            if bolt.life <= 0:
+                bolt.remove_from_sprite_lists()
 
         self.bullets.update(delta);  self.enemy_bullets.update(delta)
         self.powerups.update(delta)
@@ -1604,7 +1921,67 @@ class GameWindow(arcade.Window):
             self.bullets.append(Bullet(px,py,ang))
             self._spawn_muzzle(px,py,ang)
 
-    def update_enemies(self, delta, difficulty):
+    def _fire_beam(self, full_360: bool = False) -> None:
+        """Fire a beam (or 360° burst) from the player's position."""
+        px, py = self.player.center_x, self.player.center_y
+        bc     = (255, 100, 40)   # beam core colour
+
+        if full_360:
+            # Fire BEAM_360_ANGLES evenly-spaced beams
+            for i in range(BEAM_360_ANGLES):
+                ang = i * (math.tau / BEAM_360_ANGLES)
+                self.beams.append(BeamRay(px, py, ang, color=bc))
+            # Burst particle effect
+            self._burst(px, py, 24, (255,120,50), 80, 260, 1.8, 3.5, .12, .28)
+        else:
+            ang = math.atan2(self.mouse_y - py, self.mouse_x - px)
+            self.beams.append(BeamRay(px, py, ang, color=bc))
+            # Small muzzle flash along beam
+            for _ in range(5):
+                off = random.uniform(-0.15, 0.15)
+                spd = random.uniform(150, 320)
+                self._add_particle(
+                    px + math.cos(ang)*random.uniform(8, 20),
+                    py + math.sin(ang)*random.uniform(8, 20),
+                    math.cos(ang+off)*spd, math.sin(ang+off)*spd,
+                    random.uniform(1.6, 2.8), random.uniform(0.06, 0.14),
+                    (255, 160, 80), 0.85)
+
+    def _fire_electric(self, full_360: bool = False) -> None:
+        """Fire electric bolt(s) from the Reaper ship."""
+        px, py = self.player.center_x, self.player.center_y
+
+        if full_360:
+            # 360° burst — fire ELECTRIC_360_COUNT bolts evenly around the ship
+            for i in range(ELECTRIC_360_COUNT):
+                ang  = i * (math.tau / ELECTRIC_360_COUNT)
+                bolt = ElectricBolt(px, py, ang)
+                self.elec_bolts.append(bolt)
+            # Big electric burst effect
+            self._burst(px, py, 40, (130, 90, 255), 90, 310, 2.0, 4.5, .12, .35)
+            self._burst(px, py, 20, (210, 180, 255), 50, 180, 1.2, 2.8, .08, .22)
+            # Screen flash
+            self.damage_flash = max(self.damage_flash, 0.45)
+            self.notif_text   = "⚡ 360° ELECTRIC BLAST!"
+            self.notif_color  = (150, 100, 255)
+            self.notif_timer  = 1.4
+        else:
+            # Single aimed bolt toward cursor
+            ang  = math.atan2(self.mouse_y - py, self.mouse_x - px)
+            bolt = ElectricBolt(px, py, ang)
+            self.elec_bolts.append(bolt)
+            # Small muzzle spark effect
+            for _ in range(6):
+                off  = random.uniform(-0.30, 0.30)
+                spd  = random.uniform(120, 260)
+                self._add_particle(
+                    px + math.cos(ang)*random.uniform(6, 16),
+                    py + math.sin(ang)*random.uniform(6, 16),
+                    math.cos(ang+off)*spd, math.sin(ang+off)*spd,
+                    random.uniform(1.2, 2.2), random.uniform(0.05, 0.12),
+                    (160, 120, 255), 0.82)
+
+    def update_enemies(self, delta: float, difficulty: float) -> None:
         p  = self.player
         dp = self._dpreset
 
@@ -1674,6 +2051,73 @@ class GameWindow(arcade.Window):
 
     def check_collisions(self):
         p = self.player
+
+        # ── Beam collisions (beam-ship only) ─────────────────────────
+        for beam in list(self.beams):
+            # Check regular enemies — instant kill
+            for sprite_list in (self.enemies, self.shooting_enemies):
+                for e in list(sprite_list):
+                    hit_r = max(e.width, e.height) * 0.45
+                    if beam.intersects_circle(e.center_x, e.center_y, hit_r):
+                        self.score += 12 + min(24, self.combo*2)
+                        self.combo += 1;  self.combo_timer = 2.0
+                        self._try_drop_powerup(e.center_x, e.center_y, False)
+                        self._burst(e.center_x, e.center_y,
+                                    30, (255,140,60), 60, 260, 1.8, 4.0, .15, .40)
+                        e.remove_from_sprite_lists()
+            # Check bosses — damage over time (DPS × beam life remaining)
+            for boss in list(self.bosses):
+                hit_r = max(boss.width, boss.height) * 0.45
+                if beam.intersects_circle(boss.center_x, boss.center_y, hit_r):
+                    dmg = BEAM_DAMAGE_PER_SEC * beam.life   # damage proportional to contact
+                    boss.health -= dmg
+                    self._burst(boss.center_x, boss.center_y,
+                                8, (255,120,50), 40, 140, 1.2, 2.4, .06, .18)
+                    if boss.health <= 0:
+                        self.score += 70 + min(24, self.combo*2)
+                        self.combo += 1;  self.combo_timer = 2.0
+                        self._try_drop_powerup(boss.center_x, boss.center_y, True)
+                        self._burst(boss.center_x, boss.center_y,
+                                    64,(255,100,80),70,320,2.3,4.8,.25,.65)
+                        boss.remove_from_sprite_lists()
+        # ── Electric bolt collisions (Reaper ship) ───────────────────
+        for bolt in list(self.elec_bolts):
+            hits = arcade.check_for_collision_with_lists(
+                bolt, [self.enemies, self.shooting_enemies])
+            if hits:
+                enemy = hits[0]
+                enemy.health -= ELECTRIC_DAMAGE
+                # Electric spark burst on hit
+                self._burst(bolt.center_x, bolt.center_y,
+                            10, (140, 100, 255), 55, 200, 1.2, 2.6, .06, .18)
+                self._burst(bolt.center_x, bolt.center_y,
+                            4,  (220, 200, 255), 80, 260, 0.8, 1.8, .04, .10)
+                bolt.remove_from_sprite_lists()
+                if enemy.health <= 0:
+                    self.score += 12 + min(24, self.combo*2)
+                    self.combo += 1;  self.combo_timer = 2.0
+                    self._try_drop_powerup(enemy.center_x, enemy.center_y, False)
+                    self._burst(enemy.center_x, enemy.center_y,
+                                20, (130, 90, 255), 60, 240, 1.6, 3.5, .14, .38)
+                    enemy.remove_from_sprite_lists()
+                continue
+
+            # Boss hit check — bolts damage boss but don't one-shot
+            boss_hits = arcade.check_for_collision_with_list(bolt, self.bosses)
+            if boss_hits:
+                boss = boss_hits[0]
+                boss.health -= ELECTRIC_BOSS_DAMAGE
+                self._burst(bolt.center_x, bolt.center_y,
+                            12, (150, 110, 255), 60, 220, 1.4, 3.0, .08, .20)
+                bolt.remove_from_sprite_lists()
+                if boss.health <= 0:
+                    self.score += 70 + min(24, self.combo*2)
+                    self.combo += 1;  self.combo_timer = 2.0
+                    self._try_drop_powerup(boss.center_x, boss.center_y, True)
+                    self._burst(boss.center_x, boss.center_y,
+                                64, (255, 100, 80), 70, 320, 2.3, 4.8, .25, .65)
+                    boss.remove_from_sprite_lists()
+
         for bullet in list(self.bullets):
             hits = arcade.check_for_collision_with_lists(
                 bullet, [self.enemies, self.shooting_enemies, self.bosses])
@@ -1765,19 +2209,30 @@ class GameWindow(arcade.Window):
 
     def _activate_powerup(self, kind: str, immediate: bool = False):
         p = self.player
-        msgs = {"shield":("SHIELD ONLINE!",(110,230,255)),
-                "autofire":("AUTO-FIRE!",(255,130,255)),
-                "speed":("SPEED BOOST!",(255,220,120)),
-                "triple":("TRIPLE SHOT!",(255,180,120))}
-        text, color = msgs[kind]
-        self.notif_text  = ("STORAGE FULL - "+text) if immediate else text
-        self.notif_color = color;  self.notif_timer = 1.4
+        msgs = {"shield":   ("SHIELD ONLINE!",       (110, 230, 255)),
+                "autofire": ("AUTO-FIRE!",            (255, 130, 255)),
+                "speed":    ("SPEED BOOST!",          (255, 220, 120)),
+                "triple":   ("TRIPLE SHOT!",          (255, 180, 120)),
+                "beam360":  ("360° BEAM BURST!",      (255, 120,  50)),
+                "elec360":  ("⚡ 360° ELECTRIC MODE!", (160, 110, 255))}
+        text, color = msgs.get(kind, (kind.upper() + "!", (255, 255, 255)))
+        self.notif_text  = ("STORAGE FULL - " + text) if immediate else text
+        self.notif_color = color;  self.notif_timer = 1.6
         setattr(p, f"{kind}_active", True)
-        setattr(p, f"{kind}_timer",  POWERUP_DURATION)
+        setattr(p, f"{kind}_timer",  POWERUP_DURATION
+                if kind != "elec360" else ELECTRIC_360_DURATION)
 
     def _try_drop_powerup(self, x, y, boss=False):
-        if random.randint(1,100) <= (100 if boss else DROP_CHANCE):
-            self.powerups.append(Powerup(x, y, random.choice(POWERUP_TYPES)))
+        if random.randint(1, 100) > (100 if boss else DROP_CHANCE):
+            return
+        # Build pool: universal powerups + ship-specific if applicable
+        pool = [k for k in POWERUP_TYPES
+                if k not in BEAM_ONLY_POWERUPS and k not in ELECTRIC_ONLY_POWERUPS]
+        if self.selected_ship in BEAM_SHIP_INDICES:
+            pool += ["beam360"] * 2     # extra weight
+        if self.selected_ship in ELECTRIC_SHIP_INDICES:
+            pool += ["elec360"] * 2     # extra weight
+        self.powerups.append(Powerup(x, y, random.choice(pool)))
 
     # ──────────────────────────────────────────────────
     #  SPAWNING

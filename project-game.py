@@ -904,6 +904,9 @@ class GameWindow(arcade.Window):
         self.player.center_y  = self.height // 2
         self.player.max_health = int(PLAYER_HEALTH * ship["hp_mult"])
         self.player.health     = self.player.max_health
+        # Apply the selected ship's texture (Player.__init__ defaults to player.png)
+        if ship["texture"]:
+            self.player.texture = load_texture_clean(ship["texture"], ship["tex_scale"])
         self.player_list       = arcade.SpriteList()
         self.player_list.append(self.player)
 
@@ -1020,10 +1023,12 @@ class GameWindow(arcade.Window):
                                            (*color[:3], 120), 1)
 
     def _draw_menu(self):
-        theme_c  = THEMES[self.menu_theme]
+        is_pause = (self.game_state == STATE_PAUSED)
+        # Pause overlay always uses the dark theme for a clean dark panel look.
+        # Only the main menu respects the user's light/dark preference.
+        theme_c  = THEMES["dark"] if is_pause else THEMES[self.menu_theme]
         w, h = self.width, self.height
         t  = self.bg_time
-        is_pause = (self.game_state == STATE_PAUSED)
 
         # ── Background ───────────────────────────────
         if is_pause:
@@ -1306,7 +1311,7 @@ class GameWindow(arcade.Window):
                   theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 145),
                   (*theme_c["btn_border"][:3], 158),
                   theme_c["toggle_text"],
-                  "[ DARK MODE ]" if self.menu_theme=="dark" else "[ LIGHT MODE ]",
+                  "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]",
                   12)
         self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
 

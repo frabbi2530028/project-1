@@ -334,9 +334,9 @@ SHIPS = [
         "tagline":   "Swift & elusive",
         "stat_spd":  5, "stat_atk": 2, "stat_def": 1,
         "color":     (192, 120, 255),
-        "available": False,
-        "texture":   None,
-        "tex_scale": 0.22,
+        "available": True,
+        "texture":   "__phantom__",
+        "tex_scale": 1.0,
         "spd_mult":  1.45,
         "hp_mult":   0.65,
     },
@@ -345,9 +345,9 @@ SHIPS = [
         "tagline":   "Heavy destroyer",
         "stat_spd":  1, "stat_atk": 5, "stat_def": 5,
         "color":     (255, 155, 70),
-        "available": False,
-        "texture":   None,
-        "tex_scale": 0.22,
+        "available": True,
+        "texture":   "__titan__",
+        "tex_scale": 1.0,
         "spd_mult":  0.68,
         "hp_mult":   1.65,
     },
@@ -496,11 +496,81 @@ def _missing_texture(path: str, scale: float) -> arcade.Texture:
     return arcade.Texture(image=img)
 
 
+def _make_phantom_texture() -> arcade.Texture:
+    """Sleek purple ghost-wing ship for the Phantom."""
+    key = ("__phantom__raw",)
+    if key in _texture_cache: return _texture_cache[key]
+    S = 96
+    img  = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d    = ImageDraw.Draw(img)
+    cx   = S // 2
+    # Main fuselage — thin elongated needle
+    d.polygon([(cx, 4), (cx+7, S-18), (cx, S-8), (cx-7, S-18)],
+              fill=(210, 140, 255, 240))
+    # swept-back wings
+    d.polygon([(cx, 20), (cx+40, S-28), (cx+18, S-22), (cx+4, 32)],
+              fill=(160, 80, 230, 200))
+    d.polygon([(cx, 20), (cx-40, S-28), (cx-18, S-22), (cx-4, 32)],
+              fill=(160, 80, 230, 200))
+    # Wing edge glow
+    d.line([(cx, 20), (cx+40, S-28)], fill=(230, 180, 255, 255), width=2)
+    d.line([(cx, 20), (cx-40, S-28)], fill=(230, 180, 255, 255), width=2)
+    # Cockpit glow
+    d.ellipse((cx-5, 10, cx+5, 24), fill=(240, 200, 255, 255))
+    # Engine exhaust
+    d.ellipse((cx-4, S-18, cx+4, S-8), fill=(180, 100, 255, 200))
+    tex = arcade.Texture(image=img)
+    _texture_cache[key] = tex
+    return tex
+
+
+def _make_titan_texture() -> arcade.Texture:
+    """Massive boxy heavy warship for the Titan."""
+    key = ("__titan__raw",)
+    if key in _texture_cache: return _texture_cache[key]
+    S = 96
+    img  = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d    = ImageDraw.Draw(img)
+    cx   = S // 2
+    # Thick armoured hull
+    d.rectangle([cx-14, 12, cx+14, S-10], fill=(200, 120, 50, 240))
+    # Wide shoulder plates
+    d.rectangle([cx-32, 28, cx+32, S-28], fill=(180, 100, 40, 235))
+    # Outer armour panels
+    d.rectangle([cx-26, 36, cx-14, S-24], fill=(220, 140, 60, 220))
+    d.rectangle([cx+14, 36, cx+26, S-24], fill=(220, 140, 60, 220))
+    # Cockpit
+    d.rectangle([cx-8, 14, cx+8, 32], fill=(255, 210, 100, 255))
+    d.ellipse((cx-6, 16, cx+6, 30), fill=(255, 240, 160, 255))
+    # Gun barrels left + right
+    d.rectangle([cx-30, 30, cx-22, 50], fill=(140, 80, 30, 255))
+    d.rectangle([cx+22, 30, cx+30, 50], fill=(140, 80, 30, 255))
+    # Hull edge highlights
+    d.line([(cx-14, 12), (cx+14, 12)], fill=(255, 200, 100, 200), width=2)
+    d.line([(cx-32, 28), (cx+32, 28)], fill=(255, 180, 80, 180), width=2)
+    # Engine glow
+    d.ellipse((cx-10, S-18, cx+10, S-8), fill=(255, 160, 50, 220))
+    tex = arcade.Texture(image=img)
+    _texture_cache[key] = tex
+    return tex
+
+
 def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
     """Load a sprite image, remove the background using flood-fill, and cache it."""
     key = (path, scale)
     if key in _texture_cache:
         return _texture_cache[key]
+
+    # ── Procedural ships ──────────────────────────────
+    if path == "__phantom__":
+        tex = _make_phantom_texture()
+        _texture_cache[key] = tex
+        return tex
+    if path == "__titan__":
+        tex = _make_titan_texture()
+        _texture_cache[key] = tex
+        return tex
+
     resolved_path = _resolve_asset_path(path)
     if resolved_path is None:
         tex = _missing_texture(path, scale)
@@ -1271,9 +1341,9 @@ class GameWindow(arcade.Window):
                 arcade.draw_lrbt_rectangle_outline(
                     cl-3,cr+3,cb-3,ct+3, (*g,int(55+50*pulse)), 2)
 
-            # ship preview — centred in top 45% of card
+            # ship preview — centred in top 48% of card (above text zone at 52%)
             pcx = cl + cw//2
-            pcy = cb + ch - int(ch * 0.28)   # sits in upper portion, above the text area
+            pcy = cb + int(ch * 0.76)   # 76% up from bottom = centre of top 48%
 
             if avl and ship["texture"]:
                 tex  = load_texture_clean(ship["texture"], ship["tex_scale"])
@@ -1301,61 +1371,62 @@ class GameWindow(arcade.Window):
                                  anchor_x="center", anchor_y="center", bold=True,
                                  font_name=("Futura","Century Gothic","Arial"))
 
-            # ── Ship name (fixed distance from card bottom) ──
-            # Layout anchored from cb (card bottom) so all rows stay inside:
-            #   cb+8   = SELECTED badge
-            #   cb+28  = DEF row
-            #   cb+46  = ATK row
-            #   cb+64  = SPD row
-            #   cb+82  = tagline
-            #   cb+98  = ship name
+            # ── Ship name / stats — proportional layout ──
+            # All Y positions relative to ch so they scale with card height.
+            # Text zone = bottom 52% of card; preview zone = top 48%.
+            # Gap of at least 8px kept between preview bottom and name top.
+            badge_y  = cb + int(ch * 0.04)
+            def_y    = cb + int(ch * 0.14)
+            atk_y    = cb + int(ch * 0.24)
+            spd_y    = cb + int(ch * 0.34)
+            tag_y    = cb + int(ch * 0.43)
+            name_y   = cb + int(ch * 0.52)
 
-            name_y   = cb + 98
-            tag_y    = cb + 82
-            spd_y    = cb + 64
-            atk_y    = cb + 46
-            def_y    = cb + 28
-            badge_y  = cb + 8
+            # scale font size with card width so text doesn't overflow
+            fname_sz = max(8, min(12, cw // 13))
+            ftag_sz  = max(7, min(10, cw // 16))
+            fstat_sz = max(7, min(10, cw // 16))
 
             nc = theme_c["locked_text"] if not avl else \
                  (theme_c["card_sel_border"] if sel else theme_c["text"])
             # name shadow + main
-            arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), 11,
+            arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), fname_sz,
                              anchor_x="center", bold=True,
                              font_name=("Futura","Century Gothic","Arial"))
-            arcade.draw_text(ship["name"], pcx, name_y, nc, 11,
+            arcade.draw_text(ship["name"], pcx, name_y, nc, fname_sz,
                              anchor_x="center", bold=True,
                              font_name=("Futura","Century Gothic","Arial"))
 
             if avl:
                 # tagline
                 arcade.draw_text(ship["tagline"], pcx, tag_y,
-                                 theme_c["text_dim"], 9, anchor_x="center",
+                                 theme_c["text_dim"], ftag_sz, anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
 
                 # thin divider between tagline and stats
-                arcade.draw_line(cl+12, tag_y-8, cr-12, tag_y-8,
+                arcade.draw_line(cl+8, tag_y-6, cr-8, tag_y-6,
                                  (*theme_c["divider"][:3], 80), 1)
 
-                # stat rows — SPD / ATK / DEF with fixed Y
+                # stat rows — SPD / ATK / DEF
+                pip_x = cl + int(cw * 0.42)   # pips start at 42% of card width
                 for row_y, lbl, val in [(spd_y, "SPD", ship["stat_spd"]),
                                          (atk_y, "ATK", ship["stat_atk"]),
                                          (def_y, "DEF", ship["stat_def"])]:
-                    arcade.draw_text(lbl, cl+10, row_y, theme_c["text_dim"], 10,
+                    arcade.draw_text(lbl, cl+6, row_y, theme_c["text_dim"], fstat_sz,
                                      anchor_y="center", bold=True,
                                      font_name=("Courier New","Menlo","monospace"))
-                    self._draw_stat_pips(cl + int(cw * 0.55), row_y, val, 5,
+                    self._draw_stat_pips(pip_x, row_y, val, 5,
                                          theme_c["stat_filled"], theme_c["stat_empty"])
 
-                # SELECTED badge at very bottom of card
+                # SELECTED badge
                 if sel:
                     arcade.draw_text("✔ SELECTED", pcx, badge_y,
-                                     theme_c["selected_badge"], 10,
+                                     theme_c["selected_badge"], fstat_sz,
                                      anchor_x="center", bold=True,
                                      font_name=("Futura","Century Gothic","Arial"))
             else:
                 arcade.draw_text("COMING SOON", pcx, tag_y,
-                                 theme_c["locked_text"], 9, anchor_x="center",
+                                 theme_c["locked_text"], ftag_sz, anchor_x="center",
                                  font_name=("Futura","Century Gothic","Arial"))
 
             self._ship_cards[i] = (cl, cr, cb, ct)

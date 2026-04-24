@@ -55,21 +55,74 @@ POWERUP_KEYS = {
 #  CURRENCY
 # ─────────────────────────────────────────────────────
 
-COIN_VALUE_ENEMY   = 5     # credits per basic/shooting enemy kill
-COIN_VALUE_BOSS    = 40    # credits per boss kill
-COIN_COMBO_BONUS   = 2     # extra credits per combo multiplier on kill
-COIN_FALL_SPEED    = 90    # px/s downward drift
-COIN_LIFETIME      = 8.0   # seconds before coin vanishes
+COIN_VALUE_ENEMY    = 5
+COIN_VALUE_SHOOTING = 8
+COIN_VALUE_BOSS     = 35
+COIN_MAGNET_RANGE   = 130   # px — auto-collect radius when Coin Magnet is purchased
+SAVE_FILE = Path(__file__).resolve().parent / "neon_drift_save.json"
 
-# Shop items: key → (label, description, cost, max_owned)
-SHOP_ITEMS = {
-    "buy_health":   ("REPAIR",      "+40 HP instantly",          30,  None),
-    "buy_shield":   ("SHIELD ×1",   "Add 1 shield to storage",   45,  10),
-    "buy_speed":    ("SPEED ×1",    "Add 1 speed to storage",    40,  10),
-    "buy_autofire": ("AUTO ×1",     "Add 1 autofire to storage", 50,  10),
-    "buy_triple":   ("TRIPLE ×1",   "Add 1 triple to storage",   55,  10),
-    "buy_maxhp":    ("MAX HP +20",  "Increase max HP by 20",     120, 5),
-}
+# ─────────────────────────────────────────────────────
+#  SHOP
+# ─────────────────────────────────────────────────────
+
+STATE_SHOP = "shop"
+
+SHOP_ITEMS = [
+    {
+        "id":    "armor",
+        "name":  "ARMOR PLATING",
+        "desc":  "+25 Max HP per tier",
+        "cost":  [60, 90, 130],
+        "max":   3,
+        "color": (255, 90, 90),
+        "icon":  "HP+",
+    },
+    {
+        "id":    "engine",
+        "name":  "ENGINE TUNER",
+        "desc":  "+12% Speed per tier",
+        "cost":  [80, 130],
+        "max":   2,
+        "color": (255, 220, 40),
+        "icon":  "SPD",
+    },
+    {
+        "id":    "lucky",
+        "name":  "LUCKY CRATE",
+        "desc":  "+15% Powerup drops",
+        "cost":  [90, 140],
+        "max":   2,
+        "color": (100, 220, 100),
+        "icon":  "LCK",
+    },
+    {
+        "id":    "magnet",
+        "name":  "COIN MAGNET",
+        "desc":  "Auto-collect nearby coins",
+        "cost":  [110],
+        "max":   1,
+        "color": (255, 210, 30),
+        "icon":  "MAG",
+    },
+    {
+        "id":    "starter_shield",
+        "name":  "STARTER SHIELD",
+        "desc":  "Begin each run with 1 Shield",
+        "cost":  [100],
+        "max":   1,
+        "color": (55, 215, 255),
+        "icon":  "SHD",
+    },
+    {
+        "id":    "double_coins",
+        "name":  "COIN DOUBLER",
+        "desc":  "Earn 50% more coins per kill",
+        "cost":  [150],
+        "max":   1,
+        "color": (255, 185, 50),
+        "icon":  "x2C",
+    },
+]
 
 # ─────────────────────────────────────────────────────
 #  DIFFICULTY PRESETS
@@ -514,63 +567,44 @@ class Powerup(arcade.Sprite):
 
 
 # ─────────────────────────────────────────────────────
-#  COIN  (currency pickup)
+#  COIN
 # ─────────────────────────────────────────────────────
 
-def _make_coin_texture(radius: int = 10) -> arcade.Texture:
-    """Generate a shiny gold coin texture procedurally."""
-    size = radius * 2 + 4
-    img  = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    cx = cy = size // 2
-    # outer ring
-    draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius),
-                 fill=(220, 170, 20, 230), outline=(255, 215, 60, 255), width=2)
-    # inner highlight
-    hi = radius - 4
-    draw.ellipse((cx-hi, cy-hi, cx+hi, cy+hi),
-                 fill=(255, 230, 80, 160))
-    # shine dot
-    draw.ellipse((cx-4, cy-4, cx-1, cy-1), fill=(255, 255, 200, 220))
-    return arcade.Texture(image=img)
-
-
-_COIN_TEXTURE: arcade.Texture | None = None
-
-
-def _get_coin_texture() -> arcade.Texture:
-    global _COIN_TEXTURE
-    if _COIN_TEXTURE is None:
-        _COIN_TEXTURE = _make_coin_texture(10)
-    return _COIN_TEXTURE
+def _make_coin_texture() -> arcade.Texture:
+    key = ("coin_tex",)
+    if key in _texture_cache:
+        return _texture_cache[key]
+    img  = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
+    drw  = ImageDraw.Draw(img)
+    drw.ellipse((1, 1, 18, 18), fill=(255, 205, 20, 255), outline=(255, 240, 100, 255), width=2)
+    drw.ellipse((5, 5, 14, 14), fill=(255, 230, 80, 180))
+    # small $ symbol in centre
+    drw.text((7, 4), "$", fill=(200, 140, 0, 220))
+    tex = arcade.Texture(image=img)
+    _texture_cache[key] = tex
+    return tex
 
 
 class Coin(arcade.Sprite):
-    def __init__(self, x: float, y: float, value: int = COIN_VALUE_ENEMY):
-        super().__init__()
-        self.texture      = _get_coin_texture()
-        self.center_x     = x + random.uniform(-18, 18)
-        self.center_y     = y + random.uniform(-8,  8)
-        self.change_x     = random.uniform(-55, 55)
-        self.change_y     = random.uniform(20,  80)   # brief upward pop
-        self.value        = value
-        self.life         = COIN_LIFETIME
-        self.wobble_phase = random.uniform(0, math.tau)
-        self._drag        = 0.88
+    _tex = None
 
-    def update(self, delta_time: float = 1/60, *args, **kwargs) -> None:
-        self.life         -= delta_time
-        self.change_y     -= COIN_FALL_SPEED * delta_time   # gravity
-        self.change_x     *= self._drag
-        self.center_x     += self.change_x * delta_time
+    def __init__(self, x: float, y: float, value: int = 5):
+        super().__init__()
+        if Coin._tex is None:
+            Coin._tex = _make_coin_texture()
+        self.texture      = Coin._tex
+        self.center_x     = x
+        self.center_y     = y
+        self.value        = value
+        self.change_y     = -POWERUP_FALL_SPEED * 0.65
+        self.wobble_phase = random.uniform(0.0, math.tau)
+        self.life         = 9.0   # disappears after 9 s if not collected
+
+    def update(self, delta_time: float = 1/60, *args, **kwargs):
         self.center_y     += self.change_y * delta_time
-        self.wobble_phase += 5.0 * delta_time
-        # Gentle horizontal wobble once settled
-        self.center_x     += math.sin(self.wobble_phase) * 6 * delta_time
-        # Fade out in last 1.5 seconds
-        ratio = max(0.0, min(1.0, self.life / COIN_LIFETIME))
-        fade  = min(1.0, self.life / 1.5)
-        self.alpha = int(255 * fade)
+        self.wobble_phase += 3.8  * delta_time
+        self.center_x     += math.sin(self.wobble_phase) * 16 * delta_time
+        self.life         -= delta_time
 
 
 # ─────────────────────────────────────────────────────
@@ -599,7 +633,8 @@ class Player(arcade.Sprite):
                           "beam360": 0, "elec360": 0}
 
     def get_speed(self):
-        return PLAYER_SPEED * (1.65 if self.speed_active else 1.0)
+        engine = getattr(self, "_engine_bonus", 1.0)
+        return PLAYER_SPEED * engine * (1.65 if self.speed_active else 1.0)
 
     def update_powerups(self, delta):
         for attr in ("shield", "autofire", "speed", "triple", "beam360", "elec360"):
@@ -881,6 +916,13 @@ class GameWindow(arcade.Window):
         self._menu_btns:  dict  = {}
         self._ship_cards: dict  = {}
         self._diff_btns:  dict  = {}
+        self._shop_btns:  dict  = {}
+
+        # ── Currency / Shop ───────────────────────────
+        self.coins:    int  = 0          # total saved coins
+        self.run_coins: int = 0          # coins earned this run
+        self.upgrades: dict = {item["id"]: 0 for item in SHOP_ITEMS}
+        self._load_progress()            # restore coins + upgrades from disk
 
         # ── HUD text objects  (Futura→Century Gothic→Arial fallback chain) ──
         FONT_UI  = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
@@ -927,10 +969,6 @@ class GameWindow(arcade.Window):
 
         # ── Runtime vars ─────────────────────────────
         self.score       = 0
-        self.credits     = 0      # persistent wallet across runs
-        self.coins       = arcade.SpriteList()  # in-world coin pickups (current run)
-        self._maxhp_upgrades = 0  # how many max-HP upgrades bought (persistent)
-        self._shop_btns: dict = {}
         self.show_hud    = True
         self.up = self.down = self.left_key = self.right_key = False
         self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0.0
@@ -983,14 +1021,27 @@ class GameWindow(arcade.Window):
 
     def setup(self):
         ship = SHIPS[self.selected_ship]
+
+        # ── Apply shop upgrades ────────────────────────
+        armor_tier  = self.upgrades.get("armor",   0)
+        engine_tier = self.upgrades.get("engine",  0)
+
         self.player           = Player()
         self.player.center_x  = self.width  // 2
         self.player.center_y  = self.height // 2
-        self.player.max_health = int(PLAYER_HEALTH * ship["hp_mult"])
-        self.player.health     = self.player.max_health
+        base_hp = int(PLAYER_HEALTH * ship["hp_mult"]) + armor_tier * 25
+        self.player.max_health = base_hp
+        self.player.health     = base_hp
         # Apply the selected ship's texture (Player.__init__ defaults to player.png)
         if ship["texture"]:
             self.player.texture = load_texture_clean(ship["texture"], ship["tex_scale"])
+        # Speed multiplier from Engine Tuner
+        self.player._engine_bonus = 1.0 + engine_tier * 0.12
+
+        # Starter Shield upgrade — give 1 free shield at run start
+        if self.upgrades.get("starter_shield", 0) >= 1:
+            self.player.inventory["shield"] = 1
+
         self.player_list       = arcade.SpriteList()
         self.player_list.append(self.player)
 
@@ -1000,6 +1051,9 @@ class GameWindow(arcade.Window):
         self.bullets          = arcade.SpriteList()
         self.enemy_bullets    = arcade.SpriteList()
         self.powerups         = arcade.SpriteList()
+        self.coins_list       = arcade.SpriteList()   # ← coin sprites on screen
+
+        self.run_coins = 0   # reset per-run coin counter
 
         self.score       = 0
         self.show_hud    = True
@@ -1015,7 +1069,6 @@ class GameWindow(arcade.Window):
         self.beams        = []
         self.elec_bolts   = arcade.SpriteList()
         self.boss_on_screen = False   # lockout flag: True while any boss lives
-        self.coins        = arcade.SpriteList()  # clear coins each new game
 
         # Cache the active preset so AI code can read it cheaply
         self._dpreset = DIFFICULTY_PRESETS[self.selected_difficulty]
@@ -1143,7 +1196,7 @@ class GameWindow(arcade.Window):
                     arcade.draw_line(0,yi+off,w,yi+off-14,(155,182,228,20),1)
 
         # ── Panel ────────────────────────────────────
-        pw = min(int(w*0.80), 650)
+        pw = min(int(w*0.88), 820)   # wider panel — 5 ship cards need room
         ph = min(int(h*0.95), 580 if is_pause else 560)
         pl = (w-pw)//2;  pr = pl+pw
         pb = (h-ph)//2;  ptop = pb+ph
@@ -1181,12 +1234,15 @@ class GameWindow(arcade.Window):
                          theme_c["text"], 13, anchor_x="center", bold=True, font_name=font_ui_local)
 
         # ── Ship cards ───────────────────────────────
-        n  = len(SHIPS)
-        cw, ch = 172, 210   # taller card gives room for all rows + badge
-        gap    = 14
-        total_cw = cw*n+gap*(n-1)
-        cx0  = (w-total_cw)//2
-        cy0  = div_y - 54 - ch        # card bottom y
+        n   = len(SHIPS)
+        gap = 14
+        # Dynamic card width: fill panel interior (22px margin each side) exactly
+        panel_inner_w = pw - 44
+        cw = (panel_inner_w - gap * (n - 1)) // n
+        ch  = min(210, int(cw * 1.22))   # keep aspect ratio proportional
+        total_cw = cw * n + gap * (n - 1)
+        cx0  = pl + 22                   # start at panel left margin
+        cy0  = div_y - 54 - ch           # card bottom y
 
         self._ship_cards = {}
         for i, ship in enumerate(SHIPS):
@@ -1285,10 +1341,10 @@ class GameWindow(arcade.Window):
                 for row_y, lbl, val in [(spd_y, "SPD", ship["stat_spd"]),
                                          (atk_y, "ATK", ship["stat_atk"]),
                                          (def_y, "DEF", ship["stat_def"])]:
-                    arcade.draw_text(lbl, cl+14, row_y, theme_c["text_dim"], 10,
+                    arcade.draw_text(lbl, cl+10, row_y, theme_c["text_dim"], 10,
                                      anchor_y="center", bold=True,
                                      font_name=("Courier New","Menlo","monospace"))
-                    self._draw_stat_pips(cl+95, row_y, val, 5,
+                    self._draw_stat_pips(cl + int(cw * 0.55), row_y, val, 5,
                                          theme_c["stat_filled"], theme_c["stat_empty"])
 
                 # SELECTED badge at very bottom of card
@@ -1373,7 +1429,19 @@ class GameWindow(arcade.Window):
                   "[ RESUME ]" if is_pause else "[ PLAY GAME ]", 20)
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
 
-        if is_pause:
+        # ── Shop button (main menu only) ─────────────
+        if not is_pause:
+            sw, sh2 = 230, 38
+            sx2 = w//2 - sw//2;  sy2 = by - sh2 - 8
+            hov_s = self._is_hovering(sx2, sx2+sw, sy2, sy2+sh2)
+            coin_label = f"[ SHOP ]  $ {self.coins:,}"
+            _draw_btn(sx2, sw, sy2, sh2,
+                      theme_c["btn_hover"] if hov_s else (*theme_c["btn_fill"][:3], 200),
+                      (255, 210, 30, 220), (255, 215, 40, 255),
+                      coin_label, 14)
+            self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
+            _theme_ref_y = sy2
+        else:
             qw, qh = 196, 40
             qx = w//2-qw//2;  qy = by-qh-10
             hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
@@ -1382,10 +1450,7 @@ class GameWindow(arcade.Window):
                       (*theme_c["btn_border"][:3], 152), theme_c["btn_text_dim"],
                       "QUIT TO MENU", 14)
             self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
-            # in pause mode, anchor toggle below quit button
             _theme_ref_y = qy
-        else:
-            _theme_ref_y = by   # in menu mode, anchor below play button
 
         # theme toggle — always a fixed gap below the lowest action button
         tw, th2 = 190, 32
@@ -1400,171 +1465,142 @@ class GameWindow(arcade.Window):
                   12)
         self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
 
-        # ── Shop panel (pause only, drawn to the right of main panel) ──
-        if is_pause:
-            self._draw_shop(pr, pb, ptop, t, theme_c)
+    # ══════════════════════════════════════════════════
+    #  SHOP DRAWING
+    # ══════════════════════════════════════════════════
 
-    # ──────────────────────────────────────────────────
-    #  SHOP PANEL
-    # ──────────────────────────────────────────────────
+    def _draw_shop(self):
+        w, h   = self.width, self.height
+        tc     = THEMES["dark"]
+        font_u = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        font_n = ("Courier New", "Menlo", "Monaco", "monospace")
 
-    def _draw_shop(self, main_pr: int, main_pb: int, main_ptop: int,
-                   t: float, theme_c: dict) -> None:
-        """Draw the shop panel to the right of the main pause panel."""
-        w, h     = self.width, self.height
-        font_ui  = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
-        font_num = ("Courier New", "Menlo", "Monaco", "monospace")
+        # Background
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
+        # Subtle animated lines
+        t = self.bg_time
+        off = (t * 14) % 28
+        for yi in range(-30, h+30, 28):
+            arcade.draw_line(0, yi+off, w, yi+off-18, (28,44,76,24), 1)
 
-        sw   = 210    # shop panel width
-        spad = 12     # gap between main panel and shop
-        sl   = main_pr + spad
-        sr   = sl + sw
-        sb   = main_pb
-        stop = main_ptop
+        # Panel
+        pw = min(int(w * 0.90), 760);  ph = min(int(h * 0.92), 560)
+        pl = (w-pw)//2;  pr = pl+pw
+        pb = (h-ph)//2;  ptop = pb+ph
 
-        # only draw if there's enough room to the right
-        if sr + 10 > w:
-            return
+        arcade.draw_lrbt_rectangle_filled(pl+7, pr+7, pb-7, ptop-7, (0,0,0,70))
+        arcade.draw_lrbt_rectangle_filled(pl, pr, pb, ptop, tc["panel_fill"])
+        arcade.draw_lrbt_rectangle_outline(pl, pr, pb, ptop, tc["panel_border"], 2)
+        arcade.draw_lrbt_rectangle_outline(pl+5, pr-5, pb+5, ptop-5, tc["panel_inner"], 1)
 
-        # panel shadow + fill
-        arcade.draw_lrbt_rectangle_filled(sl+5, sr+5, sb-5, stop-5, (0, 0, 0, 55))
-        arcade.draw_lrbt_rectangle_filled(sl, sr, sb, stop, (7, 14, 42, 225))
-        arcade.draw_lrbt_rectangle_outline(sl, sr, sb, stop, (200, 170, 30, 190), 2)
-        arcade.draw_lrbt_rectangle_outline(sl+4, sr-4, sb+4, stop-4, (200, 170, 30, 40), 1)
+        # Title
+        ty_title = ptop - 48
+        arcade.draw_text("SHOP", w//2+3, ty_title-3, tc["title_shadow"], 38,
+                         anchor_x="center", bold=True, font_name=font_u)
+        arcade.draw_text("SHOP", w//2, ty_title, tc["title"], 38,
+                         anchor_x="center", bold=True, font_name=font_u)
+        # Coin balance
+        bal_str = f"$ {self.coins:,}  coins"
+        arcade.draw_text(bal_str, w//2, ty_title-30,
+                         (255, 220, 40, 245), 14, anchor_x="center",
+                         bold=True, font_name=font_n)
 
-        # corner accents
-        csz = 16
-        for ax, ay, dx, dy in [(sl,sb,-1,-1),(sr,sb,1,-1),(sl,stop,-1,1),(sr,stop,1,1)]:
-            arcade.draw_line(ax, ay, ax+dx*csz, ay, (220, 190, 50, 200), 2)
-            arcade.draw_line(ax, ay, ax, ay+dy*csz, (220, 190, 50, 200), 2)
+        div_y = ptop - 88
+        arcade.draw_line(pl+22, div_y, pr-22, div_y, tc["divider"], 1)
 
-        # title
-        cx = sl + sw // 2
-        arcade.draw_text("SHOP", cx+2, stop-26, (0,0,0,100), 20,
-                         anchor_x="center", bold=True, font_name=font_ui)
-        arcade.draw_text("SHOP", cx, stop-25, (255, 215, 55, 255), 20,
-                         anchor_x="center", bold=True, font_name=font_ui)
-        arcade.draw_line(sl+12, stop-38, sr-12, stop-38, (200, 170, 30, 120), 1)
-
-        # credits balance
-        bal_str = f"c {self.credits:,}"
-        arcade.draw_text("CREDITS", cx, stop-52, (180, 200, 100, 180), 9,
-                         anchor_x="center", font_name=font_ui)
-        arcade.draw_text(bal_str, cx+1, stop-67, (0,0,0,120), 15,
-                         anchor_x="center", bold=True, font_name=font_num)
-        arcade.draw_text(bal_str, cx, stop-66, (255, 230, 60, 255), 15,
-                         anchor_x="center", bold=True, font_name=font_num)
-        arcade.draw_line(sl+12, stop-78, sr-12, stop-78, (200, 170, 30, 70), 1)
-
-        # item rows
-        item_keys = list(SHOP_ITEMS.keys())
-        row_h   = 52
-        row_gap = 6
-        ry      = stop - 86
-
-        if not hasattr(self, "_shop_btns"):
-            self._shop_btns: dict = {}
+        # ── Item grid ────────────────────────────────
+        n        = len(SHOP_ITEMS)
+        cols     = 3
+        rows     = (n + cols - 1) // cols
+        cw_      = (pw - 60) // cols
+        ch_      = 148
+        gap_     = 14
+        grid_top = div_y - 18
         self._shop_btns = {}
 
-        for key in item_keys:
-            label, desc, cost, max_owned = SHOP_ITEMS[key]
-            by_row = ry - row_h
-            if by_row < sb + 8:
-                break   # no more room
+        for idx, item in enumerate(SHOP_ITEMS):
+            col = idx % cols;  row = idx // cols
+            cl  = pl + 30 + col * (cw_ + gap_)
+            ct  = grid_top - row * (ch_ + gap_)
+            cr  = cl + cw_;  cb_ = ct - ch_
+            tier = self.upgrades.get(item["id"], 0)
+            maxed = (tier >= item["max"])
+            cost  = item["cost"][tier] if not maxed else 0
+            can_afford = (self.coins >= cost) and not maxed
+            ic    = item["color"]
 
-            # check if purchasable
-            can_afford  = self.credits >= cost
-            at_max      = False
-            if max_owned is not None:
-                # count current storage for inventory items
-                inv_key = key.replace("buy_", "")
-                if inv_key == "maxhp":
-                    # track maxhp upgrades via a counter attribute
-                    count_owned = getattr(self, "_maxhp_upgrades", 0)
-                    at_max = count_owned >= max_owned
-                elif inv_key in ("health",):
-                    at_max = False
-                else:
-                    count_owned = self.player.inventory.get(inv_key, 0) if self.player else 0
-                    at_max = count_owned >= max_owned
-
-            can_buy = can_afford and not at_max and self.player is not None
-
-            # row background
-            hov = self._is_hovering(sl+6, sr-6, by_row, ry)
-            if can_buy and hov:
-                row_fill = (40, 34, 8, 200)
-                row_bord = (255, 215, 40, 230)
-            elif can_buy:
-                row_fill = (20, 20, 8, 180)
-                row_bord = (180, 155, 30, 160)
+            # Card background
+            if maxed:
+                fill_c  = (20, 40, 20, 200)
+                bord_c  = (60, 160, 60, 180)
+            elif can_afford:
+                hov = self._is_hovering(cl, cr, cb_, ct)
+                fill_c  = (*ic[:3], 35) if not hov else (*ic[:3], 60)
+                bord_c  = (*ic[:3], 200)
             else:
-                row_fill = (16, 18, 28, 160)
-                row_bord = (60, 60, 70, 120)
+                fill_c  = (14, 16, 38, 180)
+                bord_c  = (38, 44, 74, 120)
 
-            arcade.draw_lrbt_rectangle_filled(sl+6, sr-6, by_row, ry, row_fill)
-            arcade.draw_lrbt_rectangle_outline(sl+6, sr-6, by_row, ry, row_bord, 1)
+            arcade.draw_lrbt_rectangle_filled(cl, cr, cb_, ct, fill_c)
+            arcade.draw_lrbt_rectangle_outline(cl, cr, cb_, ct, bord_c, 2)
 
-            tc_label = (240, 220, 90, 255) if can_buy else (100, 100, 110, 200)
-            tc_desc  = (160, 175, 145, 200) if can_buy else (70, 75, 80, 160)
-            tc_cost  = (255, 215, 40, 255) if can_afford else (200, 80, 80, 220)
-            if at_max:
-                tc_cost = (80, 200, 80, 220)
+            # Icon badge
+            icon_x = cl + 20;  icon_y = ct - 28
+            ic_alpha = 255 if (can_afford or maxed) else 110
+            arcade.draw_lrbt_rectangle_filled(icon_x-2, icon_x+38, icon_y-18, icon_y+4,
+                                               (*ic[:3], 60 if can_afford else 30))
+            arcade.draw_text(item["icon"], icon_x, icon_y-14,
+                             (*ic[:3], ic_alpha), 14, bold=True, font_name=font_u)
 
-            arcade.draw_text(label, sl+14, ry-14, tc_label, 11,
-                             bold=True, font_name=font_ui)
-            arcade.draw_text(desc,  sl+14, ry-27, tc_desc,  8,
-                             font_name=font_ui)
+            # Name
+            nc = (*ic[:3], 240) if (can_afford or maxed) else (80, 90, 120, 180)
+            arcade.draw_text(item["name"], cl + cw_//2, ct - 22,
+                             nc, 11, anchor_x="center", bold=True, font_name=font_u)
+            # Desc
+            arcade.draw_text(item["desc"], cl + cw_//2, ct - 42,
+                             (160, 180, 215, 180), 9, anchor_x="center", font_name=font_u)
 
-            cost_str = "MAX" if at_max else f"c {cost}"
-            arcade.draw_text(cost_str, sr-10, by_row+6, tc_cost, 11,
-                             anchor_x="right", bold=True, font_name=font_num)
+            # Tier dots
+            dot_y  = ct - 60
+            dot_cx = cl + cw_//2
+            dot_sp = 14
+            dot_total = item["max"] * dot_sp
+            dot_sx = dot_cx - dot_total//2
+            for d in range(item["max"]):
+                dc = (*ic[:3], 240) if d < tier else (40, 50, 75, 200)
+                arcade.draw_circle_filled(dot_sx + d*dot_sp, dot_y, 5, dc)
+                if d < tier:
+                    arcade.draw_circle_filled(dot_sx + d*dot_sp, dot_y, 2,
+                                              (255, 255, 255, 180))
 
-            if can_buy and hov:
-                pulse = 0.5 + 0.5*math.sin(t*6)
-                arcade.draw_lrbt_rectangle_outline(
-                    sl+4, sr-4, by_row-2, ry+2,
-                    (255, 215, 40, int(40+35*pulse)), 2)
-                arcade.draw_text("CLICK", sr-10, ry-14, (255,215,40,int(190*pulse)),
-                                 8, anchor_x="right", font_name=font_ui, bold=True)
+            # Buy / maxed label
+            btn_y = cb_ + 10
+            if maxed:
+                arcade.draw_text("✔ MAXED", cl + cw_//2, btn_y + 4,
+                                 (80, 220, 100, 230), 10, anchor_x="center",
+                                 bold=True, font_name=font_u)
+            else:
+                cost_c = (255, 220, 40, 240) if can_afford else (130, 140, 160, 160)
+                arcade.draw_text(f"$ {cost}  coins", cl + cw_//2, btn_y + 4,
+                                 cost_c, 11, anchor_x="center",
+                                 bold=True, font_name=font_n)
 
-            self._shop_btns[key] = (sl+6, sr-6, by_row, ry, can_buy)
-            ry -= row_h + row_gap
+            if not maxed:
+                self._shop_btns[item["id"]] = (cl, cr, cb_, ct)
 
-    def _try_buy(self, item_key: str) -> None:
-        """Attempt to purchase a shop item."""
-        if item_key not in SHOP_ITEMS:
-            return
-        label, desc, cost, max_owned = SHOP_ITEMS[item_key]
-        p = self.player
-        if p is None or self.credits < cost:
-            self.notif_text  = "NOT ENOUGH CREDITS!"
-            self.notif_color = (255, 80, 80)
-            self.notif_timer = 1.2
-            return
+        # ── Back button ─────────────────────────────
+        bkw, bkh = 160, 38
+        bkx = w//2 - bkw//2
+        bky = pb + 12
+        hov_bk = self._is_hovering(bkx, bkx+bkw, bky, bky+bkh)
+        _draw_btn(bkx, bkw, bky, bkh,
+                  tc["btn_hover"] if hov_bk else (*tc["btn_fill"][:3], 180),
+                  tc["btn_border"], tc["btn_text"], "[ BACK ]", 14)
+        self._shop_btns["__back__"] = (bkx, bkx+bkw, bky, bky+bkh)
 
-        inv_key = item_key.replace("buy_", "")
-
-        if item_key == "buy_health":
-            p.health = min(p.max_health, p.health + 40)
-        elif item_key == "buy_maxhp":
-            upgs = getattr(self, "_maxhp_upgrades", 0)
-            if upgs >= (max_owned or 999):
-                return
-            p.max_health += 20
-            p.health      = min(p.health + 20, p.max_health)
-            self._maxhp_upgrades = upgs + 1
-        elif inv_key in p.inventory:
-            if max_owned and p.inventory[inv_key] >= max_owned:
-                return
-            p.inventory[inv_key] += 1
-        else:
-            return
-
-        self.credits    -= cost
-        self.notif_text  = f"BOUGHT: {label}  (-c{cost})"
-        self.notif_color = (255, 215, 55)
-        self.notif_timer = 1.4
+    # ══════════════════════════════════════════════════
+    #  GAME-WORLD DRAW HELPERS
+    # ══════════════════════════════════════════════════
 
     def _draw_bg_space(self):
         w, h  = self.width, self.height
@@ -1782,6 +1818,13 @@ class GameWindow(arcade.Window):
         self.txt_timer.text = f"{self.time_alive:06.1f}s"
         self.txt_timer.draw()
 
+        # ── Coin counter (top-right, below timer) ───
+        coin_c = (255, 220, 40, 245)
+        self._txt_shadow(f"$ {self.coins:,}", w-18, h-46, coin_c, 14,
+                         font_num, anchor_x="right", bold=True)
+        self._txt_shadow("COINS", w-18, h-62, (200, 170, 30, 160), 9,
+                         font_ui, anchor_x="right")
+
         # ── Difficulty badge ────────────────────────
         dp  = self._dpreset
         dc  = dp["color"]
@@ -1795,13 +1838,6 @@ class GameWindow(arcade.Window):
                                             (*dc, 185), 1)
         self._txt_shadow(dlbl, bx_+bw_//2, by_+3, (*dc, 240), 10, font_ui,
                          anchor_x="center", bold=True)
-
-        # ── Credits wallet ─────────────────────────
-        cred_str = f"c {self.credits:,}"
-        self._txt_shadow("CREDITS", w-18, h-68, (180, 200, 100, 170), 9, font_ui,
-                         anchor_x="right")
-        self._txt_shadow(cred_str, w-18, h-82, (240, 220, 80, 240), 13, font_num,
-                         anchor_x="right", bold=True)
 
         # ══ COMBO (top-right below difficulty) ═══════
         if self.combo > 1 and self.combo_timer > 0:
@@ -1852,12 +1888,16 @@ class GameWindow(arcade.Window):
             self._draw_menu()
             return
 
+        if self.game_state == STATE_SHOP:
+            self._draw_shop()
+            return
+
         # Playing / paused / gameover — always draw the world
         tc = THEMES[self.menu_theme]   # pull once, use everywhere below
         self._draw_bg_space()
         self._draw_entity_glows()
         self.powerups.draw()
-        self._draw_coins()
+        self.coins_list.draw()
         self.player_list.draw()
         self.enemies.draw();  self.shooting_enemies.draw();  self.bosses.draw()
         self.bullets.draw();  self.enemy_bullets.draw()
@@ -1993,10 +2033,10 @@ class GameWindow(arcade.Window):
                              self._FONT_UI, anchor_x="center")
             self._txt_shadow(f"{self.score:,}", mid_x, num_y, score_c, 36,
                              self._FONT_NUM, anchor_x="center", bold=True)
-            # credits balance
-            cred_c = (220, 200, 60, 230) if self.menu_theme == "dark" else (160, 130, 10, 230)
-            self._txt_shadow(f"c {self.credits:,}  CREDITS", mid_x, num_y - 38,
-                             cred_c, 14, self._FONT_NUM, anchor_x="center", bold=True)
+            # Coins earned this run
+            self._txt_shadow(f"+ {self.run_coins}  coins  earned  (total: {self.coins})",
+                             mid_x, div_y_ + 14, (255, 215, 40, 210), 11,
+                             self._FONT_NUM, anchor_x="center")
             self._txt_shadow("PRESS  R  TO  RESTART", mid_x, rst_y, restart_c, 15,
                              self._FONT_UI, anchor_x="center")
 
@@ -2102,7 +2142,7 @@ class GameWindow(arcade.Window):
 
         self.bullets.update(delta);  self.enemy_bullets.update(delta)
         self.powerups.update(delta)
-        self._update_coins(delta)
+        self.coins_list.update(delta)
 
         ww, hh = self.width, self.height
         for b in list(self.bullets):
@@ -2113,6 +2153,23 @@ class GameWindow(arcade.Window):
                 b.remove_from_sprite_lists()
         for pu in list(self.powerups):
             if pu.top < -10: pu.remove_from_sprite_lists()
+        # Remove expired or off-screen coins
+        for c in list(self.coins_list):
+            if c.life <= 0 or c.top < -10:
+                c.remove_from_sprite_lists()
+
+        # Coin Magnet — pull nearby coins toward player
+        if self.upgrades.get("magnet", 0) >= 1:
+            px, py = self.player.center_x, self.player.center_y
+            for c in list(self.coins_list):
+                dist = math.hypot(c.center_x - px, c.center_y - py)
+                if dist <= COIN_MAGNET_RANGE:
+                    if dist < 12:
+                        self._collect_coin(c)
+                    else:
+                        pull = 320 * delta / max(dist, 1)
+                        c.center_x += (px - c.center_x) * pull
+                        c.center_y += (py - c.center_y) * pull
 
         dp  = self._dpreset                 # shorthand for active difficulty preset
         sim = dp["spawn_interval_mult"]     # slowdown/speedup factor for spawn timers
@@ -2327,7 +2384,7 @@ class GameWindow(arcade.Window):
                         self.score += 12 + min(24, self.combo*2)
                         self.combo += 1;  self.combo_timer = 2.0
                         self._try_drop_powerup(e.center_x, e.center_y, False)
-                        self._drop_coins(e.center_x, e.center_y, False)
+                        self._drop_coin(e.center_x, e.center_y, COIN_VALUE_SHOOTING if isinstance(e, ShootingEnemy) else COIN_VALUE_ENEMY)
                         self._burst(e.center_x, e.center_y,
                                     30, (255,140,60), 60, 260, 1.8, 4.0, .15, .40)
                         e.remove_from_sprite_lists()
@@ -2343,7 +2400,7 @@ class GameWindow(arcade.Window):
                         self.score += 70 + min(24, self.combo*2)
                         self.combo += 1;  self.combo_timer = 2.0
                         self._try_drop_powerup(boss.center_x, boss.center_y, True)
-                        self._drop_coins(boss.center_x, boss.center_y, True)
+                        self._drop_coin(boss.center_x, boss.center_y, COIN_VALUE_BOSS)
                         self._burst(boss.center_x, boss.center_y,
                                     64,(255,100,80),70,320,2.3,4.8,.25,.65)
                         boss.remove_from_sprite_lists()
@@ -2364,7 +2421,7 @@ class GameWindow(arcade.Window):
                     self.score += 12 + min(24, self.combo*2)
                     self.combo += 1;  self.combo_timer = 2.0
                     self._try_drop_powerup(enemy.center_x, enemy.center_y, False)
-                    self._drop_coins(enemy.center_x, enemy.center_y, False)
+                    self._drop_coin(enemy.center_x, enemy.center_y, COIN_VALUE_SHOOTING if isinstance(enemy, ShootingEnemy) else COIN_VALUE_ENEMY)
                     self._burst(enemy.center_x, enemy.center_y,
                                 20, (130, 90, 255), 60, 240, 1.6, 3.5, .14, .38)
                     enemy.remove_from_sprite_lists()
@@ -2382,7 +2439,7 @@ class GameWindow(arcade.Window):
                     self.score += 70 + min(24, self.combo*2)
                     self.combo += 1;  self.combo_timer = 2.0
                     self._try_drop_powerup(boss.center_x, boss.center_y, True)
-                    self._drop_coins(boss.center_x, boss.center_y, True)
+                    self._drop_coin(boss.center_x, boss.center_y, COIN_VALUE_BOSS)
                     self._burst(boss.center_x, boss.center_y,
                                 64, (255, 100, 80), 70, 320, 2.3, 4.8, .25, .65)
                     boss.remove_from_sprite_lists()
@@ -2399,7 +2456,10 @@ class GameWindow(arcade.Window):
                 self.score += (70 if is_boss else 12)+min(24,self.combo*2)
                 self.combo += 1;  self.combo_timer = 2.0
                 self._try_drop_powerup(enemy.center_x,enemy.center_y,is_boss)
-                self._drop_coins(enemy.center_x, enemy.center_y, is_boss)
+                coin_val = (COIN_VALUE_BOSS if is_boss
+                            else COIN_VALUE_SHOOTING if isinstance(enemy, ShootingEnemy)
+                            else COIN_VALUE_ENEMY)
+                self._drop_coin(enemy.center_x, enemy.center_y, coin_val)
                 if is_boss:
                     self._burst(enemy.center_x,enemy.center_y,64,(255,100,80),70,320,2.3,4.8,.25,.65)
                 else:
@@ -2434,9 +2494,15 @@ class GameWindow(arcade.Window):
                 self._burst(pu.center_x,pu.center_y,20,(c[0],c[1],c[2]),70,240,1.4,3,.12,.32)
                 pu.remove_from_sprite_lists()
 
+        # ── Coin collection ──────────────────────────
+        for coin in list(self.coins_list):
+            if arcade.check_for_collision(coin, p):
+                self._collect_coin(coin)
+
         if p.health <= 0 and self.game_state == STATE_PLAYING:
             self.game_state = STATE_GAMEOVER;  self.mouse_held = False
             self._burst(p.center_x,p.center_y,85,(255,75,75),80,360,2,5,.25,.75)
+            self._save_progress()   # persist coins + upgrades to disk
 
     # ──────────────────────────────────────────────────
     #  AUTO TRIGGERS
@@ -2477,6 +2543,13 @@ class GameWindow(arcade.Window):
         else:
             self._activate_powerup(kind, immediate=True)
 
+    def _collect_coin(self, coin: "Coin") -> None:
+        self.coins      += coin.value
+        self.run_coins  += coin.value
+        self._burst(coin.center_x, coin.center_y,
+                    8, (255, 220, 50), 55, 180, 1.0, 2.2, .06, .16)
+        coin.remove_from_sprite_lists()
+
     def _activate_powerup(self, kind: str, immediate: bool = False):
         p = self.player
         msgs = {"shield":   ("SHIELD ONLINE!",       (110, 230, 255)),
@@ -2493,7 +2566,9 @@ class GameWindow(arcade.Window):
                 if kind != "elec360" else ELECTRIC_360_DURATION)
 
     def _try_drop_powerup(self, x, y, boss=False):
-        if random.randint(1, 100) > (100 if boss else DROP_CHANCE):
+        lucky_bonus = self.upgrades.get("lucky", 0) * 15
+        threshold   = (100 if boss else DROP_CHANCE) + lucky_bonus
+        if random.randint(1, 100) > threshold:
             return
         # Build pool: universal powerups + ship-specific if applicable
         pool = [k for k in POWERUP_TYPES
@@ -2504,46 +2579,41 @@ class GameWindow(arcade.Window):
             pool += ["elec360"] * 2     # extra weight
         self.powerups.append(Powerup(x, y, random.choice(pool)))
 
-    def _drop_coins(self, x: float, y: float, boss: bool = False) -> None:
-        """Spawn coin(s) at the kill location."""
-        base_val = COIN_VALUE_BOSS if boss else COIN_VALUE_ENEMY
-        bonus    = min(self.combo, 10) * COIN_COMBO_BONUS
-        value    = base_val + bonus
-        count    = 3 if boss else 1
+    def _drop_coin(self, x: float, y: float, base_value: int) -> None:
+        """Spawn a coin at (x, y) with value adjusted for Coin Doubler upgrade."""
+        multiplier = 1.5 if self.upgrades.get("double_coins", 0) >= 1 else 1.0
+        value = max(1, int(base_value * multiplier))
+        # Scatter 1-3 coins so they fan out nicely
+        count = 3 if base_value >= COIN_VALUE_BOSS else random.randint(1, 2)
+        per   = max(1, value // count)
         for _ in range(count):
-            self.coins.append(Coin(x, y, value))
+            ox = random.uniform(-18, 18)
+            oy = random.uniform(-8,  12)
+            self.coins_list.append(Coin(x + ox, y + oy, per))
 
-    def _update_coins(self, delta: float) -> None:
-        """Update all coins and collect ones the player touches."""
-        p      = self.player
-        earned = 0
-        for coin in list(self.coins):
-            coin.update(delta)
-            if coin.life <= 0 or coin.center_y < -30:
-                coin.remove_from_sprite_lists()
-                continue
-            if math.hypot(coin.center_x - p.center_x,
-                          coin.center_y - p.center_y) < 28:
-                earned += coin.value
-                self._burst(coin.center_x, coin.center_y,
-                            8, (255, 220, 60), 60, 180, 1.2, 2.4, .08, .20)
-                coin.remove_from_sprite_lists()
-                continue
-        if earned:
-            self.credits    += earned
-            self.notif_text  = f"+ {earned} \xa2"
-            self.notif_color = (255, 215, 55)
-            self.notif_timer = 0.7
+    # ──────────────────────────────────────────────────
+    #  SAVE / LOAD
+    # ──────────────────────────────────────────────────
 
-    def _draw_coins(self) -> None:
-        self.coins.draw()
-        for coin in self.coins:
-            if coin.life > COIN_LIFETIME * 0.6:
-                arcade.draw_text(f"{coin.value}\xa2",
-                                 coin.center_x, coin.center_y + 14,
-                                 (255, 230, 80, int(coin.alpha * 0.9)), 8,
-                                 anchor_x="center",
-                                 font_name=("Futura", "Century Gothic", "Arial"))
+    def _save_progress(self) -> None:
+        try:
+            data = {"coins": self.coins, "upgrades": self.upgrades}
+            SAVE_FILE.write_text(__import__("json").dumps(data))
+        except OSError:
+            pass
+
+    def _load_progress(self) -> None:
+        try:
+            import json
+            data = json.loads(SAVE_FILE.read_text())
+            self.coins    = int(data.get("coins", 0))
+            saved_upg     = data.get("upgrades", {})
+            for item in SHOP_ITEMS:
+                iid = item["id"]
+                self.upgrades[iid] = min(
+                    int(saved_upg.get(iid, 0)), item["max"])
+        except (OSError, ValueError, KeyError):
+            pass   # first run or corrupted save — start fresh
 
     # ──────────────────────────────────────────────────
     #  SPAWNING
@@ -2590,15 +2660,6 @@ class GameWindow(arcade.Window):
                 l, r, b, t = rect
                 if l<=x<=r and b<=y<=t and SHIPS[i]["available"]:
                     self.selected_ship = i;  return
-            # shop button clicks (pause only)
-            if self.game_state == STATE_PAUSED:
-                shop_btns = getattr(self, "_shop_btns", {})
-                for skey, rect in shop_btns.items():
-                    l, r, b, t, can_buy = rect
-                    if l<=x<=r and b<=y<=t:
-                        if can_buy:
-                            self._try_buy(skey)
-                        return
             # button actions
             for name, rect in self._menu_btns.items():
                 l, r, b, t = rect

@@ -2450,8 +2450,7 @@ class GameWindow(arcade.Window):
                         tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
                         aim_x = tgt.center_x if tgt else self.mouse_x
                         aim_y = tgt.center_y if tgt else self.mouse_y
-                        ang   = math.atan2(aim_y - p.center_y, aim_x - p.center_x)
-                        self.elec_bolts.append(ElectricBolt(p.center_x, p.center_y, ang))
+                        self._fire_electric(aim_x=aim_x, aim_y=aim_y)
                     else:
                         self._fire_electric(full_360=False)
                 else:
@@ -2591,20 +2590,22 @@ class GameWindow(arcade.Window):
             # Burst particle effect
             self._burst(px, py, 24, (255,120,50), 80, 260, 1.8, 3.5, .12, .28)
         else:
-            ang = math.atan2(self.mouse_y - py, self.mouse_x - px)
-            self.beams.append(BeamRay(px, py, ang, color=bc))
-            # Small muzzle flash along beam
-            for _ in range(5):
-                off = random.uniform(-0.15, 0.15)
-                spd = random.uniform(150, 320)
-                self._add_particle(
-                    px + math.cos(ang)*random.uniform(8, 20),
-                    py + math.sin(ang)*random.uniform(8, 20),
-                    math.cos(ang+off)*spd, math.sin(ang+off)*spd,
-                    random.uniform(1.6, 2.8), random.uniform(0.06, 0.14),
-                    (255, 160, 80), 0.85)
+            base = math.atan2(self.mouse_y - py, self.mouse_x - px)
+            for ang in ([base - 0.18, base, base + 0.18]
+                        if self.player.triple_active else [base]):
+                self.beams.append(BeamRay(px, py, ang, color=bc))
+                # Small muzzle flash along each beam
+                for _ in range(5):
+                    off = random.uniform(-0.15, 0.15)
+                    spd = random.uniform(150, 320)
+                    self._add_particle(
+                        px + math.cos(ang)*random.uniform(8, 20),
+                        py + math.sin(ang)*random.uniform(8, 20),
+                        math.cos(ang+off)*spd, math.sin(ang+off)*spd,
+                        random.uniform(1.6, 2.8), random.uniform(0.06, 0.14),
+                        (255, 160, 80), 0.85)
 
-    def _fire_electric(self, full_360: bool = False) -> None:
+    def _fire_electric(self, full_360: bool = False, aim_x=None, aim_y=None) -> None:
         """Fire electric bolt(s) from the Reaper ship."""
         px, py = self.player.center_x, self.player.center_y
 
@@ -2623,20 +2624,22 @@ class GameWindow(arcade.Window):
             self.notif_color  = (150, 100, 255)
             self.notif_timer  = 1.4
         else:
-            # Single aimed bolt toward cursor
-            ang  = math.atan2(self.mouse_y - py, self.mouse_x - px)
-            bolt = ElectricBolt(px, py, ang)
-            self.elec_bolts.append(bolt)
-            # Small muzzle spark effect
-            for _ in range(6):
-                off  = random.uniform(-0.30, 0.30)
-                spd  = random.uniform(120, 260)
-                self._add_particle(
-                    px + math.cos(ang)*random.uniform(6, 16),
-                    py + math.sin(ang)*random.uniform(6, 16),
-                    math.cos(ang+off)*spd, math.sin(ang+off)*spd,
-                    random.uniform(1.2, 2.2), random.uniform(0.05, 0.12),
-                    (160, 120, 255), 0.82)
+            tx = self.mouse_x if aim_x is None else aim_x
+            ty = self.mouse_y if aim_y is None else aim_y
+            base = math.atan2(ty - py, tx - px)
+            for ang in ([base - 0.18, base, base + 0.18]
+                        if self.player.triple_active else [base]):
+                self.elec_bolts.append(ElectricBolt(px, py, ang))
+                # Small muzzle spark effect
+                for _ in range(6):
+                    off  = random.uniform(-0.30, 0.30)
+                    spd  = random.uniform(120, 260)
+                    self._add_particle(
+                        px + math.cos(ang)*random.uniform(6, 16),
+                        py + math.sin(ang)*random.uniform(6, 16),
+                        math.cos(ang+off)*spd, math.sin(ang+off)*spd,
+                        random.uniform(1.2, 2.2), random.uniform(0.05, 0.12),
+                        (160, 120, 255), 0.82)
 
     def update_enemies(self, delta: float, difficulty: float) -> None:
         p  = self.player

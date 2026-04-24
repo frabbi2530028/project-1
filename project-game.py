@@ -1799,6 +1799,189 @@ class GameWindow(arcade.Window):
                          anchor_x=anchor_x, anchor_y=anchor_y,
                          bold=bold, font_name=font_name)
 
+    def _draw_powerup_panel(self, p, t: float, font_ui, font_num) -> None:
+        """
+        Unified power-up GUI panel — bottom-left of screen.
+        Layout (bottom → top):
+          14px margin from bottom
+          Row A: inventory slot cards  (52×52 each)
+          8px gap
+          Row B: active-effect cards   (shown only when a powerup is running)
+        """
+        inv = p.inventory
+
+        # ── Slot definitions ──────────────────────────────────────────────
+        slots = [
+            ("1", "SPD",  "SPEED",   inv.get("speed",    0),
+             p.speed_active,   getattr(p, "speed_timer",    0), POWERUP_DURATION,
+             (255, 215,  40)),
+            ("2", "SHD",  "SHIELD",  inv.get("shield",   0),
+             p.shield_active,  getattr(p, "shield_timer",   0), POWERUP_DURATION,
+             ( 55, 215, 255)),
+            ("3", "AUTO", "AUTO",    inv.get("autofire",  0),
+             p.autofire_active,getattr(p, "autofire_timer", 0), POWERUP_DURATION,
+             (235,  80, 255)),
+            ("4", "TRP",  "TRIPLE",  inv.get("triple",   0),
+             p.triple_active,  getattr(p, "triple_timer",   0), POWERUP_DURATION,
+             (255, 140,  40)),
+        ]
+        if self.selected_ship in BEAM_SHIP_INDICES:
+            slots.append(
+                ("5", "360B", "360°BEAM", inv.get("beam360", 0),
+                 p.beam360_active, getattr(p, "beam360_timer", 0), POWERUP_DURATION,
+                 (255, 110,  40)))
+        elif self.selected_ship in ELECTRIC_SHIP_INDICES:
+            slots.append(
+                ("5", "⚡360", "⚡360°", inv.get("elec360", 0),
+                 p.elec360_active, getattr(p, "elec360_timer", 0), ELECTRIC_360_DURATION,
+                 (155, 100, 255)))
+
+        # ── Geometry ─────────────────────────────────────────────────────
+        SZ    = 52          # card size
+        GAP   = 8           # gap between cards
+        PAD   = 10          # inner padding inside card
+        MX    = 14          # left margin from edge
+        MY    = 14          # bottom margin from edge
+        n     = len(slots)
+        total_w = n * SZ + (n - 1) * GAP
+
+        # Panel backdrop
+        backdrop_pad = 8
+        arcade.draw_lrbt_rectangle_filled(
+            MX - backdrop_pad,
+            MX + total_w + backdrop_pad,
+            MY - backdrop_pad,
+            MY + SZ + backdrop_pad,
+            (6, 10, 26, 170))
+        arcade.draw_lrbt_rectangle_outline(
+            MX - backdrop_pad,
+            MX + total_w + backdrop_pad,
+            MY - backdrop_pad,
+            MY + SZ + backdrop_pad,
+            (60, 90, 150, 90), 1)
+
+        # ── Draw each slot card ───────────────────────────────────────────
+        for idx, (key, short, full, cnt, active, timer, max_dur, ic) in enumerate(slots):
+            cx_ = MX + idx * (SZ + GAP)        # card left x
+            cy_ = MY                            # card bottom y
+            cr_ = cx_ + SZ
+            ct_ = cy_ + SZ
+            ccx = cx_ + SZ // 2                # card centre x
+            ccy = cy_ + SZ // 2                # card centre y
+
+            has_stock = cnt > 0
+            dim       = not has_stock and not active
+            pulse     = 0.5 + 0.5 * math.sin(t * 6.0 + idx * 1.1)
+
+            # ── Card fill ────────────────────────────────────────────────
+            if active:
+                fill_a = int(80 + 40 * pulse)
+                arcade.draw_lrbt_rectangle_filled(cx_, cr_, cy_, ct_,
+                                                   (*ic, fill_a))
+            elif has_stock:
+                arcade.draw_lrbt_rectangle_filled(cx_, cr_, cy_, ct_,
+                                                   (*ic, 40))
+            else:
+                arcade.draw_lrbt_rectangle_filled(cx_, cr_, cy_, ct_,
+                                                   (12, 16, 32, 180))
+
+            # ── Card border ──────────────────────────────────────────────
+            if active:
+                brd_a = int(200 + 55 * pulse)
+                arcade.draw_lrbt_rectangle_outline(cx_, cr_, cy_, ct_,
+                                                    (*ic, brd_a), 2)
+                # outer glow ring
+                arcade.draw_lrbt_rectangle_outline(cx_-3, cr_+3, cy_-3, ct_+3,
+                                                    (*ic, int(55 * pulse)), 3)
+            elif has_stock:
+                arcade.draw_lrbt_rectangle_outline(cx_, cr_, cy_, ct_,
+                                                    (*ic, 180), 1)
+            else:
+                arcade.draw_lrbt_rectangle_outline(cx_, cr_, cy_, ct_,
+                                                    (45, 55, 80, 120), 1)
+
+            # ── Arc timer ring (active only) ─────────────────────────────
+            if active and max_dur > 0:
+                ratio = max(0.0, min(1.0, timer / max_dur))
+                arc_r = SZ // 2 - 3
+                # dim track
+                arcade.draw_arc_outline(ccx, ccy, arc_r * 2, arc_r * 2,
+                                        (50, 60, 90, 120),
+                                        90, 90 + 360, 3)
+                # filled sweep (counter-clockwise from top = 90°)
+                end_ang = 90 + 360 * ratio
+                if ratio > 0.02:
+                    arcade.draw_arc_outline(ccx, ccy, arc_r * 2, arc_r * 2,
+                                            (*ic, 220),
+                                            90, end_ang, 3)
+                # timer text in centre
+                self._txt_shadow(f"{timer:.0f}s", ccx, ccy - 5,
+                                 (*ic, 245), 11, font_num,
+                                 anchor_x="center", bold=True)
+
+            # ── Icon symbol (not active) ──────────────────────────────────
+            else:
+                icon_col = (*ic, 90) if dim else (*ic, 220)
+                icon_sz  = 14 if dim else 16
+                if short == "SPD":
+                    # Lightning bolt polygon
+                    bx, by = ccx, ccy
+                    pts = [(bx+2, by+9),(bx-1, by+1),(bx+3, by+1),
+                           (bx-2, by-9),(bx+1, by-1),(bx-3, by-1)]
+                    arcade.draw_polygon_filled(pts, icon_col)
+                elif short == "SHD":
+                    # Shield arc + bar
+                    arcade.draw_arc_filled(ccx, ccy+2, 20, 18, icon_col, 0, 180)
+                    arcade.draw_lrbt_rectangle_filled(ccx-10, ccx+10,
+                                                       ccy-8, ccy+2, icon_col)
+                elif short == "AUTO":
+                    # Crosshair
+                    arcade.draw_circle_outline(ccx, ccy, 9, icon_col, 2)
+                    arcade.draw_line(ccx-14, ccy, ccx-4, ccy, icon_col, 2)
+                    arcade.draw_line(ccx+4,  ccy, ccx+14, ccy, icon_col, 2)
+                    arcade.draw_line(ccx, ccy-14, ccx, ccy-4, icon_col, 2)
+                    arcade.draw_line(ccx, ccy+4,  ccx, ccy+14, icon_col, 2)
+                elif short == "TRP":
+                    # Three bullet dots
+                    for ox in (-8, 0, 8):
+                        arcade.draw_circle_filled(ccx + ox, ccy, 4, icon_col)
+                elif "360" in short or "⚡" in short:
+                    # Star burst
+                    for ang_i in range(8):
+                        a = math.radians(ang_i * 45)
+                        arcade.draw_line(ccx + math.cos(a)*4, ccy + math.sin(a)*4,
+                                         ccx + math.cos(a)*12, ccy + math.sin(a)*12,
+                                         icon_col, 2)
+
+            # ── Hotkey badge (top-left corner) ───────────────────────────
+            key_col = (*ic, 110) if dim else (*ic, 220)
+            arcade.draw_text(f"[{key}]", cx_ + 4, ct_ - 12,
+                             key_col, 8, font_name=font_num)
+
+            # ── Name label (bottom centre) ───────────────────────────────
+            if not active:
+                name_col = (*ic, 80) if dim else (*ic, 200)
+                self._txt_shadow(short, ccx, cy_ + 4, name_col, 8,
+                                 font_ui, anchor_x="center", bold=True)
+
+            # ── Stock count badge (top-right corner) ─────────────────────
+            badge_x = cr_ - 4
+            badge_y = ct_ - 4
+            if cnt > 0:
+                # filled circle badge
+                arcade.draw_circle_filled(badge_x, badge_y, 9, (*ic, 210))
+                arcade.draw_circle_outline(badge_x, badge_y, 9, (255,255,255,80), 1)
+                arcade.draw_text(str(cnt), badge_x, badge_y - 5,
+                                 (10, 10, 20, 255), 10, anchor_x="center",
+                                 bold=True, font_name=font_num)
+            elif not active:
+                # empty badge
+                arcade.draw_circle_filled(badge_x, badge_y, 8, (20, 25, 45, 200))
+                arcade.draw_circle_outline(badge_x, badge_y, 8, (50, 60, 90, 150), 1)
+                arcade.draw_text("0", badge_x, badge_y - 5,
+                                 (60, 70, 100, 160), 9, anchor_x="center",
+                                 bold=True, font_name=font_num)
+
     @staticmethod
     def _draw_seg_bar(x: int, y: int, width: int, height: int, ratio: float,
                       color_fill: tuple, segs: int = 20, gap: int = 2) -> None:
@@ -1868,72 +2051,8 @@ class GameWindow(arcade.Window):
             arcade.draw_lrbt_rectangle_filled(22, 22+gw, h-72, h-71,
                                                (*hc[:3], int(155*hr)))
 
-        # ── Active power-ups ───────────────────────
-        active_pills = []
-        if p.shield_active:   active_pills.append(("SHIELD",  p.shield_timer,   (55,  215, 255)))
-        if p.autofire_active: active_pills.append(("AUTO",    p.autofire_timer,  (235, 80,  255)))
-        if p.speed_active:    active_pills.append(("SPEED",   p.speed_timer,     (255, 215, 40)))
-        if p.triple_active:   active_pills.append(("TRIPLE",  p.triple_timer,    (255, 140, 40)))
-        if p.beam360_active:  active_pills.append(("360°BEAM",p.beam360_timer,   (255, 110, 40)))
-        if p.elec360_active:  active_pills.append(("⚡360°",  p.elec360_timer,   (155, 100, 255)))
-
-        pill_x = 22
-        pill_y = h - 108   # 26px clear gap below bar bottom (h-82)
-        pill_h = 20
-        for label, timer, pc in active_pills:
-            pw = len(label)*8 + 50
-            # glow bg
-            arcade.draw_lrbt_rectangle_filled(pill_x-2, pill_x+pw+2,
-                                               pill_y-2, pill_y+pill_h+2,
-                                               (*pc, 22))
-            arcade.draw_lrbt_rectangle_filled(pill_x, pill_x+pw,
-                                               pill_y, pill_y+pill_h,
-                                               (*pc, 55))
-            arcade.draw_lrbt_rectangle_outline(pill_x, pill_x+pw,
-                                                pill_y, pill_y+pill_h,
-                                                (*pc, 220), 1)
-            self._txt_shadow(f"{label}  {timer:.0f}s", pill_x+8, pill_y+4,
-                             (*pc, 255), 11, font_ui, bold=True)
-            pill_x += pw + 8
-
-        # ── Inventory ──────────────────────────────
-        inv  = p.inventory
-        # Base badges always shown
-        inv_data = [
-            ("1", "SPD", "SPEED",   inv["speed"],    (255, 215, 40)),
-            ("2", "SHD", "SHIELD",  inv["shield"],   (55,  215, 255)),
-            ("3", "AUT", "AUTO",    inv["autofire"], (235, 80,  255)),
-            ("4", "TRP", "TRIPLE",  inv["triple"],   (255, 140, 40)),
-        ]
-        # Ship-specific badge
-        if self.selected_ship in ELECTRIC_SHIP_INDICES:
-            inv_data.append(("5", "⚡360", "ELEC360", inv.get("elec360", 0), (155, 100, 255)))
-        ix = 22
-        iy = h - 142   # below pills (pill_y=h-108, pill_h=20 → pill bottom=h-128, +14 gap)
-        badge_w = 64
-        badge_h = 22
-        for key, short, full, cnt, ic in inv_data:
-            dim = cnt == 0
-            fc  = (*ic, 38 if dim else 110)
-            bc  = (*ic, 55 if dim else 200)
-            tc  = (*ic, 110 if dim else 255)
-            # badge background
-            arcade.draw_lrbt_rectangle_filled(ix, ix+badge_w, iy, iy+badge_h, fc)
-            arcade.draw_lrbt_rectangle_outline(ix, ix+badge_w, iy, iy+badge_h, bc, 1)
-            # key hotkey label (top-left corner)
-            arcade.draw_text(f"[{key}]", ix+4, iy+badge_h-10,
-                             (*ic, 175 if dim else 255), 8,
-                             font_name=font_num)
-            # short name centre
-            self._txt_shadow(short, ix+badge_w//2, iy+6,
-                             (*ic, 120 if dim else 240), 9,
-                             font_ui, anchor_x="center", bold=True)
-            # count bottom-right
-            count_c = (180, 180, 180, 140) if dim else (*ic, 255)
-            arcade.draw_text(str(cnt), ix+badge_w-5, iy+1,
-                             count_c, 11,
-                             anchor_x="right", font_name=font_num, bold=True)
-            ix += badge_w + 6
+        # ══ POWER-UP PANEL (bottom-left) ══════════════
+        self._draw_powerup_panel(p, t, font_ui, font_num)
 
         # ══ TOP-RIGHT ════════════════════════════════
 

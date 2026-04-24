@@ -27,11 +27,13 @@ BOSS_HEALTH         = 220
 BULLET_SPEED        = 660
 ENEMY_BULLET_SPEED  = 430
 POWERUP_FALL_SPEED  = 105
+POWERUP_SCREEN_LIFE = 4.0   # seconds before an uncollected powerup fades out
+POWERUP_DURATION    = 6.0   # seconds the active effect lasts (was 10)
 
 NORMAL_FIRE_RATE    = 0.22
 AUTO_FIRE_RATE      = 0.075
 
-POWERUP_DURATION    = 10.0
+POWERUP_DURATION    = 6.0   # seconds the active effect lasts
 DROP_CHANCE         = 40
 
 STAR_COUNT          = 145
@@ -621,19 +623,111 @@ BEAM_ONLY_POWERUPS     = {"beam360"}
 ELECTRIC_ONLY_POWERUPS = {"elec360"}
 
 
+# ─────────────────────────────────────────────────────
+#  POWERUP TEXTURES  (procedural, PIL-generated)
+# ─────────────────────────────────────────────────────
+
+def _make_powerup_texture(kind: str) -> arcade.Texture:
+    key = ("pu_tex_v2", kind)
+    if key in _texture_cache:
+        return _texture_cache[key]
+
+    S   = 40          # icon canvas size
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d   = ImageDraw.Draw(img)
+    cx  = S // 2
+
+    col = POWERUP_COLORS.get(kind, (200, 200, 200))
+    r, g, b = col[0], col[1], col[2]
+
+    # ── Outer glow ring ──────────────────────────────
+    d.ellipse((1, 1, S-2, S-2),    fill=(r, g, b, 35))
+    d.ellipse((4, 4, S-5, S-5),    fill=(r, g, b, 55))
+    # ── Panel background ─────────────────────────────
+    d.rounded_rectangle((5, 5, S-6, S-6), radius=5, fill=(8, 12, 30, 220))
+    # ── Coloured border ──────────────────────────────
+    d.rounded_rectangle((5, 5, S-6, S-6), radius=5,
+                        outline=(r, g, b, 230), width=2)
+
+    # ── Per-type symbol ──────────────────────────────
+    if kind == "speed":
+        # Lightning bolt
+        pts = [(cx+3, 6), (cx-3, cx+1), (cx+2, cx+1), (cx-3, S-6), (cx+3, cx-1), (cx-2, cx-1)]
+        d.polygon(pts, fill=(r, g, b, 255))
+
+    elif kind == "shield":
+        # Shield silhouette
+        sw = 12
+        d.polygon([(cx, 8), (cx+sw, 14), (cx+sw, 24), (cx, S-7), (cx-sw, 24), (cx-sw, 14)],
+                  fill=(r, g, b, 200))
+        d.polygon([(cx, 11), (cx+sw-3, 15), (cx+sw-3, 23), (cx, S-10), (cx-sw+3, 23), (cx-sw+3, 15)],
+                  fill=(8, 12, 30, 200))
+        # centre cross
+        d.rectangle((cx-1, 14, cx+1, 26), fill=(r, g, b, 255))
+        d.rectangle((cx-5, 19, cx+5, 21), fill=(r, g, b, 255))
+
+    elif kind == "autofire":
+        # Crosshair
+        d.ellipse((cx-10, cx-10, cx+10, cx+10), outline=(r, g, b, 255), width=2)
+        d.ellipse((cx-4,  cx-4,  cx+4,  cx+4),  fill=(r, g, b, 255))
+        for ox, oy, ex, ey in [(-18,0,-12,0),(12,0,18,0),(0,-18,0,-12),(0,12,0,18)]:
+            d.line((cx+ox, cx+oy, cx+ex, cx+ey), fill=(r, g, b, 255), width=2)
+
+    elif kind == "triple":
+        # Three bullets stacked
+        for ox in (-9, 0, 9):
+            d.rounded_rectangle((cx+ox-3, 9, cx+ox+3, S-9),
+                                 radius=3, fill=(r, g, b, 220))
+
+    elif kind in ("beam360", "elec360"):
+        # Star burst  — 8 spokes
+        for i in range(8):
+            a = math.radians(i * 45)
+            x1 = cx + math.cos(a) * 5;   y1 = cx + math.sin(a) * 5
+            x2 = cx + math.cos(a) * 14;  y2 = cx + math.sin(a) * 14
+            d.line((x1, y1, x2, y2), fill=(r, g, b, 240), width=2)
+        d.ellipse((cx-4, cx-4, cx+4, cx+4), fill=(r, g, b, 255))
+
+    elif kind == "health":
+        # Plus / cross
+        d.rectangle((cx-2, 10, cx+2, S-11), fill=(r, g, b, 255))
+        d.rectangle((10, cx-2, S-11, cx+2), fill=(r, g, b, 255))
+
+    # ── Inner highlight dot ───────────────────────────
+    d.ellipse((S-13, 7, S-8, 12), fill=(255, 255, 255, 80))
+
+    tex = arcade.Texture(image=img)
+    _texture_cache[key] = tex
+    return tex
+
+
+# Preload all powerup textures at startup so there's no hitch mid-game
+def _preload_powerup_textures():
+    for k in POWERUP_TYPES:
+        _make_powerup_texture(k)
+    _make_powerup_texture("health")
+
+
 class Powerup(arcade.Sprite):
-    def __init__(self, x, y, kind: str):
+    def __init__(self, x: float, y: float, kind: str):
         super().__init__()
-        self.texture      = solid_texture(22, POWERUP_COLORS[kind])
-        self.center_x     = x;  self.center_y = y
+        self.texture      = _make_powerup_texture(kind)
+        self.center_x     = x
+        self.center_y     = y
         self.kind         = kind
         self.change_y     = -POWERUP_FALL_SPEED
         self.wobble_phase = random.uniform(0.0, math.tau)
+        self.life         = POWERUP_SCREEN_LIFE   # fade + auto-remove timer
+        self.alpha        = 255
 
-    def update(self, delta_time=1/60, *args, **kwargs):
+    def update(self, delta_time: float = 1/60, *args, **kwargs):
         self.center_y     += self.change_y * delta_time
         self.wobble_phase += 4.0 * delta_time
         self.center_x     += math.sin(self.wobble_phase) * 18.0 * delta_time
+        self.life         -= delta_time
+        # fade out in the last 1.2 seconds
+        if self.life < 1.2:
+            self.alpha = max(0, int(255 * (self.life / 1.2)))
 
 
 # ─────────────────────────────────────────────────────
@@ -1031,6 +1125,8 @@ class GameWindow(arcade.Window):
                 pass   # image not yet in place — handled gracefully at runtime
         for k in POWERUP_TYPES:
             solid_texture(22, POWERUP_COLORS[k])
+
+        _preload_powerup_textures()
 
         # ── UI/menu state ─────────────────────────────
         self.game_state    = STATE_MENU
@@ -2204,9 +2300,7 @@ class GameWindow(arcade.Window):
                     arcade.draw_line(sx, sy, sx + dx*bk, sy, c_, 2)
                     arcade.draw_line(sx, sy, sx, sy - dy*bk, c_, 2)
 
-        for pu in self.powerups:
-            arcade.draw_text(POWERUP_LABELS[pu.kind], pu.center_x, pu.center_y-8,
-                             tc["powerup_label"], 9, anchor_x="center")
+        # powerup sprites draw their own icon — no text label needed
 
         self._draw_enemy_health_bars()
         self._draw_particles()
@@ -2393,7 +2487,8 @@ class GameWindow(arcade.Window):
             if b.life<=0 or b.right<-30 or b.left>ww+30 or b.top<-30 or b.bottom>hh+30:
                 b.remove_from_sprite_lists()
         for pu in list(self.powerups):
-            if pu.top < -10: pu.remove_from_sprite_lists()
+            if pu.top < -10 or pu.life <= 0:
+                pu.remove_from_sprite_lists()
         # Remove expired or off-screen coins
         for c in list(self.coins_list):
             if c.life <= 0 or c.top < -10:

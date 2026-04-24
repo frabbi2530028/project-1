@@ -1021,7 +1021,7 @@ ELECTRIC_BOSS_DAMAGE  = 90      # damage to boss per bolt hit
 ELECTRIC_BOLT_LIFE    = 1.8     # seconds
 ELECTRIC_FIRE_RATE    = 0.14    # seconds between bolts (faster than normal)
 ELECTRIC_360_COUNT    = 16      # bolts in 360° burst
-ELECTRIC_360_DURATION = 8.0     # how long 360° mode lasts
+ELECTRIC_360_DURATION = 7.0     # how long 360° mode lasts
 
 
 class ElectricBolt(arcade.Sprite):
@@ -2434,7 +2434,7 @@ class GameWindow(arcade.Window):
         is_beam_ship     = (self.selected_ship in BEAM_SHIP_INDICES)
         is_electric_ship = (self.selected_ship in ELECTRIC_SHIP_INDICES)
 
-        firing = self.mouse_held or p.autofire_active
+        firing = self.mouse_held or p.autofire_active or p.elec360_active
         if firing:
             rate = (ELECTRIC_FIRE_RATE if is_electric_ship
                     else AUTO_FIRE_RATE if p.autofire_active
@@ -2444,7 +2444,6 @@ class GameWindow(arcade.Window):
                 if is_beam_ship:
                     self._fire_beam(p.beam360_active)
                 elif is_electric_ship:
-                    # 360° mode active → burst every shot; aim mode → track cursor
                     if p.elec360_active:
                         self._fire_electric(full_360=True)
                     elif p.autofire_active:
@@ -2877,7 +2876,11 @@ class GameWindow(arcade.Window):
             self.notif_text  = f"{POWERUP_LABELS[kind]} STORED  [{p.inventory[kind]}/{MAX_POWERUP_STORAGE}]"
             self.notif_color = _notif_color(kind);  self.notif_timer = 1.0
         else:
-            self._activate_powerup(kind, immediate=True)
+            if kind == "elec360":
+                self.notif_text  = f"{POWERUP_LABELS[kind]} STORAGE FULL!"
+                self.notif_color = _notif_color(kind);  self.notif_timer = 1.0
+            else:
+                self._activate_powerup(kind, immediate=True)
 
     def _collect_coin(self, coin: "Coin") -> None:
         self.coins      += coin.value
@@ -3079,6 +3082,11 @@ class GameWindow(arcade.Window):
             self.notif_color = (220,100,100);  self.notif_timer = 0.9
             return
         p.inventory[kind] -= 1
+        if kind == "elec360":
+            self._activate_powerup(kind)
+            self._fire_electric(full_360=True)
+            self.fire_timer = 0.0
+            return
         self._activate_powerup(kind)
 
 

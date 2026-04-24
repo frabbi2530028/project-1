@@ -752,19 +752,72 @@ class BossEnemy(arcade.Sprite):
 
 
 # ─────────────────────────────────────────────────────
-#  BULLETS
+#  BULLETS  — drawn with arcade-generated textures
+#  (no external image files required)
 # ─────────────────────────────────────────────────────
+
+def _make_bullet_texture(size: int, core: tuple, mid: tuple, glow: tuple) -> arcade.Texture:
+    """Create a glowing bullet texture using PIL — cached by args."""
+    key = ("bullet_tex", size, core, mid, glow)
+    if key in _texture_cache:
+        return _texture_cache[key]
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d   = ImageDraw.Draw(img)
+    cx  = size // 2
+    # outer soft glow
+    d.ellipse((1, 1, size-2, size-2), fill=(*glow[:3], 60))
+    # mid ring
+    m = size // 4
+    d.ellipse((m, m, size-m-1, size-m-1), fill=(*mid[:3], 160))
+    # bright core
+    c = size // 3
+    d.ellipse((c, c, size-c-1, size-c-1), fill=(*core[:3], 255))
+    tex = arcade.Texture(image=img)
+    _texture_cache[key] = tex
+    return tex
+
+
+# Pre-baked textures (created once at import time after PIL is available)
+_PLAYER_BULLET_TEX  = None
+_ENEMY_BULLET_TEX   = None
+
+
+def _get_player_bullet_tex() -> arcade.Texture:
+    global _PLAYER_BULLET_TEX
+    if _PLAYER_BULLET_TEX is None:
+        # Cyan/white glowing energy shot
+        _PLAYER_BULLET_TEX = _make_bullet_texture(
+            22,
+            core=(220, 250, 255),   # bright white-blue core
+            mid =(80,  200, 255),   # cyan mid ring
+            glow=(30,  120, 255),   # blue outer glow
+        )
+    return _PLAYER_BULLET_TEX
+
+
+def _get_enemy_bullet_tex() -> arcade.Texture:
+    global _ENEMY_BULLET_TEX
+    if _ENEMY_BULLET_TEX is None:
+        # Red/orange hostile shot
+        _ENEMY_BULLET_TEX = _make_bullet_texture(
+            20,
+            core=(255, 240, 200),   # hot white core
+            mid =(255, 120,  40),   # orange mid ring
+            glow=(200,  30,  20),   # deep red glow
+        )
+    return _ENEMY_BULLET_TEX
 
 
 class Bullet(arcade.Sprite):
     def __init__(self, sx, sy, angle_rad, speed=BULLET_SPEED):
         super().__init__()
-        self.texture  = load_texture_clean("image/bullet.png", 0.1)
+        self.texture  = _get_player_bullet_tex()
         self.center_x = sx;  self.center_y = sy
         self.change_x = math.cos(angle_rad) * speed
         self.change_y = math.sin(angle_rad) * speed
-        self.angle    = math.degrees(angle_rad)
+        self.angle    = math.degrees(angle_rad) - 90   # nose-forward
         self.life     = 2.5
+        self.scale    = 0.85
 
     def update(self, delta_time=1/60, *args, **kwargs):
         self.center_x += self.change_x * delta_time
@@ -776,14 +829,15 @@ class EnemyBullet(arcade.Sprite):
     def __init__(self, sx, sy, dest_x=None, dest_y=None,
                  angle_rad=None, speed=ENEMY_BULLET_SPEED):
         super().__init__()
-        self.texture  = load_texture_clean("image/enemy_bullet.png", 0.1)
+        self.texture  = _get_enemy_bullet_tex()
         self.center_x = sx;  self.center_y = sy
         if angle_rad is None:
             angle_rad = math.atan2(dest_y - sy, dest_x - sx)
         self.change_x = math.cos(angle_rad) * speed
         self.change_y = math.sin(angle_rad) * speed
-        self.angle    = math.degrees(angle_rad)
+        self.angle    = math.degrees(angle_rad) - 90
         self.life     = 3.4
+        self.scale    = 0.80
 
     def update(self, delta_time=1/60, *args, **kwargs):
         self.center_x += self.change_x * delta_time
@@ -1973,10 +2027,7 @@ class GameWindow(arcade.Window):
         self.enemies.draw();  self.shooting_enemies.draw();  self.bosses.draw()
         self.bullets.draw();  self.enemy_bullets.draw()
 
-        for b in self.bullets:
-            arcade.draw_circle_filled(b.center_x, b.center_y, 6, tc["bullet_glow"])
-        for b in self.enemy_bullets:
-            arcade.draw_circle_filled(b.center_x, b.center_y, 7, tc["ebullet_glow"])
+        # Bullets draw their own glow via arcade-generated textures — no overlay needed
 
         # ── Beams (beam-ship) ────────────────────────────────────────
         for beam in self.beams:

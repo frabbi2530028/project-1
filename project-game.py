@@ -199,64 +199,56 @@ def _level_boss_hp(regular: int, shooting: int, difficulty_mult: float = 1.0) ->
     """Boss HP = combined HP of every enemy in the level."""
     return int((regular * ENEMY_HEALTH + shooting * ENEMY_HEALTH * 1.4) * difficulty_mult)
 
-LEVELS = [
-    {
-        "number":    1,
-        "name":      "DAWN PATROL",
-        "subtitle":  "The first wave — easy targets, one titan",
-        "color":     (80, 220, 130),
-        "bg_nebula": [(38, 80, 185, 42), (145, 40, 165, 36)],
-        "regular_enemies":  160,
-        "shooting_enemies":  40,   # total = 200 enemies
-        "spawn_rate":   0.55,      # seconds between spawns
-        "shoot_rate":   2.2,
-        "boss_hp_mult": 1.0,       # boss HP = combined HP of all 200 enemies
-        "reward_coins": 250,
-        "unlock_score": 0,         # always unlocked
-    },
-    {
-        "number":    2,
-        "name":      "NOVA SURGE",
-        "subtitle":  "Faster enemies, denser waves",
-        "color":     (90, 180, 255),
-        "bg_nebula": [(30, 90, 200, 50), (40, 160, 200, 30)],
-        "regular_enemies":  220,
-        "shooting_enemies":  80,
-        "spawn_rate":   0.40,
-        "shoot_rate":   1.8,
-        "boss_hp_mult": 1.15,
-        "reward_coins": 400,
-        "unlock_score": 3000,
-    },
-    {
-        "number":    3,
-        "name":      "CRIMSON TIDE",
-        "subtitle":  "Elite fighters & heavy fire",
-        "color":     (255, 100, 80),
-        "bg_nebula": [(180, 30, 60, 45), (200, 80, 20, 35)],
-        "regular_enemies":  280,
-        "shooting_enemies": 120,
-        "spawn_rate":   0.28,
-        "shoot_rate":   1.4,
-        "boss_hp_mult": 1.30,
-        "reward_coins": 600,
-        "unlock_score": 8000,
-    },
-    {
-        "number":    4,
-        "name":      "VOID STORM",
-        "subtitle":  "Maximum aggression — survive or die",
-        "color":     (200, 100, 255),
-        "bg_nebula": [(110, 20, 180, 50), (60, 20, 120, 40)],
-        "regular_enemies":  360,
-        "shooting_enemies": 160,
-        "spawn_rate":   0.18,
-        "shoot_rate":   1.0,
-        "boss_hp_mult": 1.50,
-        "reward_coins": 900,
-        "unlock_score": 18000,
-    },
-]
+def _build_levels() -> list:
+    """
+    Generate 10 levels.  Enemy count scales logarithmically from 200 (L1) to 600 (L10).
+    total(n) = 200 + round(400 * log10(n))    n = 1..10
+    Shooting enemies = ~30% of total, rest regular.
+    Spawn rate tightens with each level.  Boss HP = combined enemy HP.
+    """
+    names = [
+        (1,  "DAWN PATROL",   "First contact — rookies in the dark",          (80,  220, 130)),
+        (2,  "NOVA SURGE",    "Faster waves, denser skies",                    (90,  180, 255)),
+        (3,  "IRON CROSS",    "Shielded interceptors join the fray",           (255, 200,  50)),
+        (4,  "CRIMSON TIDE",  "Elite fighters & coordinated fire",             (255, 100,  80)),
+        (5,  "SOLAR FLARE",   "Relentless sun-scorched assault",               (255, 165,  40)),
+        (6,  "NEBULA RIFT",   "Dense formations & heavy artillery",            (140, 100, 255)),
+        (7,  "OBSIDIAN GATE", "Elite guard — precision or death",              (80,  210, 220)),
+        (8,  "VOID STORM",    "Maximum aggression — bullets everywhere",       (200, 100, 255)),
+        (9,  "SINGULARITY",   "The abyss opens — no mercy",                   (255,  60, 120)),
+        (10, "FINAL HORIZON", "Last stand — the combined fleet arrives",       (255, 220,  80)),
+    ]
+    levels = []
+    for i, (num, name, subtitle, color) in enumerate(names):
+        n = i + 1
+        if n == 1:
+            total = 200
+        else:
+            total = 200 + round(400 * math.log10(n))
+        shooting = round(total * 0.30)
+        regular  = total - shooting
+        # spawn rate: fast at L1, gets tighter each level (min 0.12s)
+        spawn_rate  = max(0.12, 0.55 - 0.04 * i)
+        shoot_rate  = max(0.60, 2.2  - 0.17 * i)
+        boss_mult   = 1.0 + 0.12 * i
+        reward      = 250 + i * 120
+        # unlock: completed (beat the boss of) previous level
+        levels.append({
+            "number":           num,
+            "name":             name,
+            "subtitle":         subtitle,
+            "color":            color,
+            "regular_enemies":  regular,
+            "shooting_enemies": shooting,
+            "spawn_rate":       spawn_rate,
+            "shoot_rate":       shoot_rate,
+            "boss_hp_mult":     boss_mult,
+            "reward_coins":     reward,
+            "requires_level":   i - 1,   # index of level that must be completed (-1 = none)
+        })
+    return levels
+
+LEVELS = _build_levels()
 
 # ─────────────────────────────────────────────────────
 #  UI THEMES
@@ -1209,13 +1201,14 @@ class GameWindow(arcade.Window):
         self._shop_btns:  dict  = {}
 
         # ── Level system ──────────────────────────────
-        self.selected_level:    int  = 0          # index into LEVELS
-        self.level_enemies_remaining: int = 0     # enemies left before boss spawns
+        self.selected_level:    int  = 0
+        self.level_enemies_remaining: int = 0
         self.level_shooting_remaining: int = 0
         self.level_boss_spawned: bool = False
         self.level_complete:     bool = False
-        self._level_clear_timer: float = 0.0      # auto-advance after clear screen
-        self.best_scores: dict = {}               # level_index → best score
+        self._level_clear_timer: float = 0.0
+        self.best_scores:  dict = {}          # level_index → best score
+        self.completed_levels: set = set()    # indices of boss-beaten levels
 
         # ── Currency / Shop ───────────────────────────
         self.coins:    int  = 0          # total saved coins
@@ -1778,183 +1771,216 @@ class GameWindow(arcade.Window):
     # ══════════════════════════════════════════════════
 
     def _draw_level_select(self):
-        w, h  = self.width, self.height
-        tc    = THEMES["dark"]
-        font_u = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
-        font_n = ("Courier New", "Menlo", "Monaco", "monospace")
+        w, h   = self.width, self.height
+        tc     = THEMES["dark"]
+        FU     = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        FN     = ("Courier New", "Menlo", "Monaco", "monospace")
+        t      = self.bg_time
 
-        # Background
+        # ── Background ───────────────────────────────
         arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
-        t = self.bg_time
         off = (t * 14) % 28
         for yi in range(-30, h+30, 28):
             arcade.draw_line(0, yi+off, w, yi+off-18, (28,44,76,24), 1)
         for s in self.stars:
-            tw2 = 0.55+0.45*math.sin(t*s["twinkle"]+s["phase"])
+            tw2 = 0.55 + 0.45*math.sin(t*s["twinkle"]+s["phase"])
             al  = max(20, min(255, int(s["alpha"]*tw2)))
             arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
 
-        # Panel
-        pw = min(int(w*0.92), 840);  ph = min(int(h*0.90), 540)
-        pl = (w-pw)//2;  pr = pl+pw
-        pb = (h-ph)//2;  ptop = pb+ph
-        arcade.draw_lrbt_rectangle_filled(pl+7,pr+7,pb-7,ptop-7,(0,0,0,70))
+        # ── Outer panel ──────────────────────────────
+        PAD  = 18
+        pw   = w - PAD*2
+        ph   = h - PAD*2
+        pl   = PAD;  pr = pl+pw
+        pb   = PAD;  ptop = pb+ph
+        arcade.draw_lrbt_rectangle_filled(pl+6,pr+6,pb-6,ptop-6,(0,0,0,80))
         arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop,tc["panel_fill"])
         arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop,tc["panel_border"],2)
-        arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5,tc["panel_inner"],1)
+        arcade.draw_lrbt_rectangle_outline(pl+4,pr-4,pb+4,ptop-4,tc["panel_inner"],1)
 
-        # Title
-        arcade.draw_text("SELECT LEVEL", w//2+2, ptop-44,
-                         tc["title_shadow"], 30, anchor_x="center", bold=True,
-                         font_name=font_u)
-        arcade.draw_text("SELECT LEVEL", w//2, ptop-42,
-                         tc["title"], 30, anchor_x="center", bold=True,
-                         font_name=font_u)
-        arcade.draw_text(f"$ {self.coins:,}  coins", w//2, ptop-66,
-                         (255,220,40,220), 12, anchor_x="center",
-                         bold=True, font_name=font_n)
-        arcade.draw_line(pl+22, ptop-82, pr-22, ptop-82, tc["divider"], 1)
+        # corner accents
+        ac = tc["panel_border"]; sz = 18
+        for cx2,cy2,sx,sy in [(pl,ptop,1,-1),(pr,ptop,-1,-1),(pl,pb,1,1),(pr,pb,-1,1)]:
+            arcade.draw_line(cx2,cy2,cx2+sx*sz,cy2,ac,2)
+            arcade.draw_line(cx2,cy2,cx2,cy2+sy*sz,ac,2)
 
-        # Level cards
-        n   = len(LEVELS)
-        cw  = (pw - 50 - (n-1)*14) // n
-        ch  = min(int(ph*0.62), 300)
-        cy0 = pb + int(ph*0.22)
-        cx0 = pl + 25
+        # ── Header ───────────────────────────────────
+        HEADER_H = 54
+        header_y  = ptop - HEADER_H
+        arcade.draw_text("SELECT LEVEL", w//2+2, ptop-34,
+                         tc["title_shadow"], 26, anchor_x="center", bold=True,
+                         font_name=FU)
+        arcade.draw_text("SELECT LEVEL", w//2, ptop-32,
+                         tc["title"], 26, anchor_x="center", bold=True,
+                         font_name=FU)
+        # coin balance right-aligned
+        arcade.draw_text(f"$ {self.coins:,}", pr-14, ptop-30,
+                         (255,220,40,230), 12, anchor_x="right",
+                         bold=True, font_name=FN)
+        arcade.draw_line(pl+14, header_y, pr-14, header_y, tc["divider"], 1)
 
-        self._level_cards = {}   # reset click targets
+        # ── Bottom bar (diff + play + back) ──────────
+        BOT_H = 46
+        bot_y  = pb + BOT_H         # top of bottom bar
+        arcade.draw_line(pl+14, bot_y, pr-14, bot_y, tc["divider"], 1)
+
+        # Difficulty pills
+        arcade.draw_text("DIFFICULTY", pl+14, pb+14, tc["text_dim"],
+                         9, font_name=FU)
+        dx = pl + 104
+        self._ls_diff_btns = {}
+        for dkey, dlabel in [("easy","EASY"),("medium","MED"),("hard","HARD")]:
+            dw2 = 72;  dh2 = 24
+            sel_d = (dkey == self.selected_difficulty)
+            dc = {"easy":(60,200,80),"medium":(220,180,20),"hard":(220,60,60)}[dkey]
+            hov_d = self._is_hovering(dx, dx+dw2, pb+10, pb+10+dh2)
+            fill = (*dc, 190 if sel_d else (70 if hov_d else 35))
+            arcade.draw_lrbt_rectangle_filled(dx,dx+dw2,pb+10,pb+10+dh2,fill)
+            arcade.draw_lrbt_rectangle_outline(dx,dx+dw2,pb+10,pb+10+dh2,
+                                                (*dc,255 if sel_d else 110),
+                                                2 if sel_d else 1)
+            arcade.draw_text(dlabel, dx+dw2//2, pb+14,
+                             (255,255,255) if sel_d else (*dc,210),
+                             9, anchor_x="center", bold=sel_d, font_name=FU)
+            self._ls_diff_btns[dkey] = (dx, dx+dw2, pb+10, pb+10+dh2)
+            dx += dw2 + 6
+
+        # Play button (centre bottom)
+        bw = 160;  bh = 32
+        bx = w//2 - bw//2;  by = pb+7
+        hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
+        arcade.draw_lrbt_rectangle_filled(bx,bx+bw,by,by+bh,
+                                           tc["btn_hover"] if hov_p else tc["btn_fill"])
+        arcade.draw_lrbt_rectangle_outline(bx,bx+bw,by,by+bh,tc["btn_border"],2)
+        arcade.draw_text("[ PLAY LEVEL ]", bx+bw//2, by+8,
+                         tc["btn_text"], 13, anchor_x="center",
+                         bold=True, font_name=FU)
+        self._ls_play_btn = (bx, bx+bw, by, by+bh)
+
+        # Back button (right bottom)
+        bkw = 80;  bkx = pr - bkw - 12
+        hov_bk = self._is_hovering(bkx, bkx+bkw, by, by+bh)
+        arcade.draw_lrbt_rectangle_filled(bkx,bkx+bkw,by,by+bh,
+                                           (*tc["btn_fill"][:3], 160 if hov_bk else 100))
+        arcade.draw_lrbt_rectangle_outline(bkx,bkx+bkw,by,by+bh,
+                                            (*tc["btn_border"][:3],130),1)
+        arcade.draw_text("[ BACK ]", bkx+bkw//2, by+8,
+                         tc["btn_text_dim"], 10, anchor_x="center",
+                         bold=True, font_name=FU)
+        self._ls_back_btn = (bkx, bkx+bkw, by, by+bh)
+
+        # ── 2 × 5 Card Grid ──────────────────────────
+        GRID_COLS  = 5
+        GRID_ROWS  = 2
+        CARD_GAP   = 10
+        grid_top   = ptop - HEADER_H - 8
+        grid_bot   = bot_y + 8
+        grid_h     = grid_top - grid_bot
+        grid_w     = pw - 28
+
+        cw = (grid_w - CARD_GAP*(GRID_COLS-1)) // GRID_COLS
+        ch = (grid_h - CARD_GAP*(GRID_ROWS-1)) // GRID_ROWS
+
+        self._level_cards = {}
 
         for idx, lvl in enumerate(LEVELS):
-            cl = cx0 + idx*(cw+14)
-            cr = cl + cw
-            cb_ = cy0
-            ct  = cy0 + ch
+            row = idx // GRID_COLS
+            col = idx  % GRID_COLS
+            cl  = pl + 14 + col*(cw+CARD_GAP)
+            cr  = cl + cw
+            ct  = grid_top - row*(ch+CARD_GAP)
+            cb_ = ct - ch
             lc  = lvl["color"]
             sel = (idx == self.selected_level)
             hov = self._is_hovering(cl, cr, cb_, ct)
-
-            # Unlock check
-            best = self.best_scores.get(idx-1, 0) if idx > 0 else 99999
-            unlocked = (idx == 0) or (best >= LEVELS[idx]["unlock_score"])
-
-            # Card fill
-            if sel:
-                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (*lc[:3],55))
-                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],255), 3)
-                # glow
-                arcade.draw_lrbt_rectangle_outline(cl-4,cr+4,cb_-4,ct+4,
-                                                    (*lc[:3],70), 4)
-            elif hov and unlocked:
-                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (*lc[:3],30))
-                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],180), 2)
-            elif unlocked:
-                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (10,16,42,200))
-                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],110), 1)
-            else:
-                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (8,10,24,200))
-                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (40,46,74,100), 1)
-
+            req = lvl["requires_level"]
+            unlocked = (req < 0) or (req in self.completed_levels)
+            completed = idx in self.completed_levels
             ccx = cl + cw//2
+            ccy = cb_ + ch//2
 
+            pulse = 0.5 + 0.5*math.sin(t*2.8 + idx*0.7)
+
+            # ── Card background ───────────────────────
+            if sel and unlocked:
+                arcade.draw_lrbt_rectangle_filled(cl-3,cr+3,cb_-3,ct+3,
+                                                   (*lc[:3], int(55+25*pulse)))
+                arcade.draw_lrbt_rectangle_outline(cl-3,cr+3,cb_-3,ct+3,
+                                                    (*lc[:3], int(180+75*pulse)), 3)
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (*lc[:3],45))
+            elif hov and unlocked:
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (*lc[:3],28))
+                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],160), 2)
+            elif unlocked:
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (10,16,42,210))
+                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],90), 1)
+            else:
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (7,9,22,210))
+                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (35,42,68,90), 1)
+
+            # ── Completed tick (top-left) ─────────────
+            if completed:
+                arcade.draw_circle_filled(cl+10, ct-10, 8, (50,200,80,220))
+                arcade.draw_text("✔", cl+6, ct-17, (255,255,255,255), 9,
+                                 font_name=FU)
+
+            # ── Content ───────────────────────────────
             if not unlocked:
-                # Lock icon
-                arcade.draw_text("🔒", ccx, cy0+ch//2+6, (80,90,120,200),
-                                 22, anchor_x="center", anchor_y="center")
-                arcade.draw_text(f"Score {lvl['unlock_score']:,}", ccx, cy0+ch//2-26,
-                                 (70,80,110,180), 9, anchor_x="center",
-                                 font_name=font_n)
+                arcade.draw_text("🔒", ccx, ccy+8, (60,70,105,200),
+                                 20, anchor_x="center", anchor_y="center")
+                need = LEVELS[req]["name"] if req >= 0 else ""
+                arcade.draw_text(f"Beat  {need}", ccx, ccy-18,
+                                 (55,65,100,200), 7, anchor_x="center",
+                                 font_name=FN)
             else:
                 # Level number badge
-                arcade.draw_circle_filled(ccx, ct-28, 20, (*lc[:3],160))
-                arcade.draw_circle_outline(ccx, ct-28, 20, (*lc[:3],255), 2)
-                arcade.draw_text(str(lvl["number"]), ccx, ct-35,
-                                 (255,255,255,255), 16, anchor_x="center",
-                                 bold=True, font_name=font_u)
+                badge_r = min(16, ch//7)
+                arcade.draw_circle_filled(ccx, ct-badge_r-4,
+                                           badge_r, (*lc[:3],180))
+                arcade.draw_circle_outline(ccx, ct-badge_r-4,
+                                            badge_r, (*lc[:3],255), 2)
+                arcade.draw_text(str(lvl["number"]), ccx, ct-badge_r*2-2,
+                                 (255,255,255), max(9,badge_r-2),
+                                 anchor_x="center", bold=True, font_name=FU)
 
                 # Name
-                arcade.draw_text(lvl["name"], ccx, ct-58,
-                                 (*lc[:3],240) if sel else (*lc[:3],190),
-                                 11, anchor_x="center", bold=True,
-                                 font_name=font_u)
-                # Subtitle
-                arcade.draw_text(lvl["subtitle"], ccx, ct-74,
-                                 (160,180,215,180), 8, anchor_x="center",
-                                 font_name=font_u)
+                name_sz = max(8, min(11, cw//12))
+                arcade.draw_text(lvl["name"], ccx, ct-badge_r*2-16,
+                                 (*lc[:3],230) if sel else (*lc[:3],180),
+                                 name_sz, anchor_x="center", bold=True,
+                                 font_name=FU)
 
-                arcade.draw_line(cl+10, ct-86, cr-10, ct-86,
-                                 (*lc[:3],60), 1)
+                # Divider
+                div_y2 = ct - badge_r*2 - 28
+                arcade.draw_line(cl+8, div_y2, cr-8, div_y2,
+                                 (*lc[:3],50), 1)
 
-                # Stats
+                # Stats (compact)
                 total_e = lvl["regular_enemies"]+lvl["shooting_enemies"]
                 boss_hp = _level_boss_hp(lvl["regular_enemies"],
                                           lvl["shooting_enemies"],
                                           lvl["boss_hp_mult"])
-                stats = [
-                    ("ENEMIES", f"{total_e}"),
-                    ("BOSS HP",  f"{boss_hp:,}"),
-                    ("REWARD",  f"$ {lvl['reward_coins']}"),
-                ]
-                sy = ct - 102
-                for label, val in stats:
-                    arcade.draw_text(label, cl+10, sy, (130,150,200,180), 8,
-                                     font_name=font_n)
-                    arcade.draw_text(val, cr-8, sy, (*lc[:3],220), 9,
-                                     anchor_x="right", bold=True,
-                                     font_name=font_n)
-                    sy -= 18
+                stat_sz = max(7, min(9, cw//15))
+                sy      = div_y2 - 4
+                for lbl2, val2 in [("ENEMIES", f"{total_e}"),
+                                    ("BOSS HP",  f"{boss_hp:,}"),
+                                    ("REWARD",  f"${lvl['reward_coins']}")]:
+                    if sy < cb_ + 26: break
+                    arcade.draw_text(lbl2, cl+6, sy-stat_sz,
+                                     (110,130,185,170), stat_sz-1, font_name=FN)
+                    arcade.draw_text(val2, cr-5, sy-stat_sz,
+                                     (*lc[:3],210), stat_sz,
+                                     anchor_x="right", bold=True, font_name=FN)
+                    sy -= stat_sz + 6
 
-                # Best score
+                # Best score at bottom
                 best_s = self.best_scores.get(idx, 0)
                 if best_s > 0:
-                    arcade.draw_text(f"BEST  {best_s:,}", ccx, cb_+22,
-                                     (255,220,40,210), 9, anchor_x="center",
-                                     bold=True, font_name=font_n)
+                    arcade.draw_text(f"BEST {best_s:,}", ccx, cb_+5,
+                                     (255,220,40,210), 7, anchor_x="center",
+                                     bold=True, font_name=FN)
 
             self._level_cards[idx] = (cl, cr, cb_, ct)
-
-        # Difficulty row
-        diff_y = pb + 56
-        arcade.draw_text("DIFFICULTY:", pl+28, diff_y+4,
-                         tc["text_dim"], 10, font_name=font_u)
-        dx = pl + 130
-        self._ls_diff_btns = {}
-        for dkey, dlabel in [("easy","EASY"),("medium","MEDIUM"),("hard","HARD")]:
-            dw2 = 90;  dh2 = 28
-            sel_d = (dkey == self.selected_difficulty)
-            dc = {"easy":(60,200,80),"medium":(220,180,20),"hard":(220,60,60)}[dkey]
-            hov_d = self._is_hovering(dx, dx+dw2, diff_y, diff_y+dh2)
-            fill = (*dc, 180 if sel_d else (80 if hov_d else 40))
-            arcade.draw_lrbt_rectangle_filled(dx, dx+dw2, diff_y, diff_y+dh2, fill)
-            arcade.draw_lrbt_rectangle_outline(dx, dx+dw2, diff_y, diff_y+dh2,
-                                                (*dc, 255 if sel_d else 130), 2 if sel_d else 1)
-            arcade.draw_text(dlabel, dx+dw2//2, diff_y+5, (255,255,255,255) if sel_d else (*dc,200),
-                             10, anchor_x="center", bold=sel_d, font_name=font_u)
-            self._ls_diff_btns[dkey] = (dx, dx+dw2, diff_y, diff_y+dh2)
-            dx += dw2 + 8
-
-        # Play and Back buttons
-        bw = 180;  bh = 42
-        bx = w//2 - bw//2;  by = pb + 14
-        hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
-        arcade.draw_lrbt_rectangle_filled(bx, bx+bw, by, by+bh,
-                                           tc["btn_hover"] if hov_p else tc["btn_fill"])
-        arcade.draw_lrbt_rectangle_outline(bx, bx+bw, by, by+bh,
-                                            tc["btn_border"], 2)
-        arcade.draw_text("[ PLAY LEVEL ]", bx+bw//2, by+11, tc["btn_text"],
-                         16, anchor_x="center", bold=True, font_name=font_u)
-        self._ls_play_btn = (bx, bx+bw, by, by+bh)
-
-        bkw = 100;  bkx = pr - bkw - 14
-        hov_bk = self._is_hovering(bkx, bkx+bkw, by, by+bh)
-        arcade.draw_lrbt_rectangle_filled(bkx, bkx+bkw, by, by+bh,
-                                           tc["btn_hover"] if hov_bk else
-                                           (*tc["btn_fill"][:3], 160))
-        arcade.draw_lrbt_rectangle_outline(bkx, bkx+bkw, by, by+bh,
-                                            (*tc["btn_border"][:3], 140), 1)
-        arcade.draw_text("[ BACK ]", bkx+bkw//2, by+11,
-                         tc["btn_text_dim"], 13, anchor_x="center",
-                         bold=True, font_name=font_u)
-        self._ls_back_btn = (bkx, bkx+bkw, by, by+bh)
 
     # ══════════════════════════════════════════════════
     #  LEVEL CLEAR OVERLAY
@@ -2888,13 +2914,15 @@ class GameWindow(arcade.Window):
             if all_sent and reg_on_screen == 0:
                 self.spawn_level_boss()
                 self.level_boss_spawned = True
+                self.boss_on_screen = True  # prevent same-frame false clear trigger
 
         # ── Level clear detection ─────────────────────────────────────────
         if (self.level_boss_spawned
                 and not self.boss_on_screen
                 and not self.level_complete):
             self.level_complete = True
-            self._level_clear_timer = 4.5   # show clear screen for 4.5 s
+            self._level_clear_timer = 4.5
+            self.completed_levels.add(self.selected_level)   # unlock next
             reward = lvl["reward_coins"]
             self.coins     += reward
             self.run_coins += reward
@@ -3313,9 +3341,10 @@ class GameWindow(arcade.Window):
     def _save_progress(self) -> None:
         try:
             data = {
-                "coins":       self.coins,
-                "upgrades":    self.upgrades,
-                "best_scores": {str(k): v for k, v in self.best_scores.items()},
+                "coins":            self.coins,
+                "upgrades":         self.upgrades,
+                "best_scores":      {str(k): v for k, v in self.best_scores.items()},
+                "completed_levels": list(self.completed_levels),
             }
             SAVE_FILE.write_text(__import__("json").dumps(data))
         except OSError:
@@ -3329,10 +3358,10 @@ class GameWindow(arcade.Window):
             saved_upg     = data.get("upgrades", {})
             for item in SHOP_ITEMS:
                 iid = item["id"]
-                self.upgrades[iid] = min(
-                    int(saved_upg.get(iid, 0)), item["max"])
-            self.best_scores = {int(k): v
-                                for k, v in data.get("best_scores", {}).items()}
+                self.upgrades[iid] = min(int(saved_upg.get(iid, 0)), item["max"])
+            self.best_scores      = {int(k): v for k, v in
+                                     data.get("best_scores", {}).items()}
+            self.completed_levels = set(data.get("completed_levels", []))
         except (OSError, ValueError, KeyError):
             pass
 
@@ -3421,11 +3450,10 @@ class GameWindow(arcade.Window):
 
         # ── Level select clicks ───────────────────────────────────────────
         if self.game_state == STATE_LEVEL_SELECT:
-            # Level card selection
             for idx, (cl, cr, cb_, ct) in getattr(self, "_level_cards", {}).items():
                 if cl<=x<=cr and cb_<=y<=ct:
-                    best = self.best_scores.get(idx-1, 0) if idx > 0 else 99999
-                    unlocked = (idx == 0) or (best >= LEVELS[idx]["unlock_score"])
+                    req = LEVELS[idx]["requires_level"]
+                    unlocked = (req < 0) or (req in self.completed_levels)
                     if unlocked:
                         self.selected_level = idx
                     return

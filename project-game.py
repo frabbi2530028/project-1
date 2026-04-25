@@ -183,10 +183,80 @@ DIFFICULTY_ORDER = ["easy", "medium", "hard"]
 #  GAME STATES
 # ─────────────────────────────────────────────────────
 
-STATE_MENU     = "menu"
-STATE_PLAYING  = "playing"
-STATE_PAUSED   = "paused"
-STATE_GAMEOVER = "gameover"
+STATE_MENU        = "menu"
+STATE_PLAYING     = "playing"
+STATE_PAUSED      = "paused"
+STATE_GAMEOVER    = "gameover"
+STATE_LEVEL_SELECT = "level_select"
+STATE_LEVEL_CLEAR  = "level_clear"
+
+# ─────────────────────────────────────────────────────
+#  LEVEL DEFINITIONS
+#  boss_hp = sum of all enemy HP in that level
+# ─────────────────────────────────────────────────────
+
+def _level_boss_hp(regular: int, shooting: int, difficulty_mult: float = 1.0) -> int:
+    """Boss HP = combined HP of every enemy in the level."""
+    return int((regular * ENEMY_HEALTH + shooting * ENEMY_HEALTH * 1.4) * difficulty_mult)
+
+LEVELS = [
+    {
+        "number":    1,
+        "name":      "DAWN PATROL",
+        "subtitle":  "The first wave — easy targets, one titan",
+        "color":     (80, 220, 130),
+        "bg_nebula": [(38, 80, 185, 42), (145, 40, 165, 36)],
+        "regular_enemies":  160,
+        "shooting_enemies":  40,   # total = 200 enemies
+        "spawn_rate":   0.55,      # seconds between spawns
+        "shoot_rate":   2.2,
+        "boss_hp_mult": 1.0,       # boss HP = combined HP of all 200 enemies
+        "reward_coins": 250,
+        "unlock_score": 0,         # always unlocked
+    },
+    {
+        "number":    2,
+        "name":      "NOVA SURGE",
+        "subtitle":  "Faster enemies, denser waves",
+        "color":     (90, 180, 255),
+        "bg_nebula": [(30, 90, 200, 50), (40, 160, 200, 30)],
+        "regular_enemies":  220,
+        "shooting_enemies":  80,
+        "spawn_rate":   0.40,
+        "shoot_rate":   1.8,
+        "boss_hp_mult": 1.15,
+        "reward_coins": 400,
+        "unlock_score": 3000,
+    },
+    {
+        "number":    3,
+        "name":      "CRIMSON TIDE",
+        "subtitle":  "Elite fighters & heavy fire",
+        "color":     (255, 100, 80),
+        "bg_nebula": [(180, 30, 60, 45), (200, 80, 20, 35)],
+        "regular_enemies":  280,
+        "shooting_enemies": 120,
+        "spawn_rate":   0.28,
+        "shoot_rate":   1.4,
+        "boss_hp_mult": 1.30,
+        "reward_coins": 600,
+        "unlock_score": 8000,
+    },
+    {
+        "number":    4,
+        "name":      "VOID STORM",
+        "subtitle":  "Maximum aggression — survive or die",
+        "color":     (200, 100, 255),
+        "bg_nebula": [(110, 20, 180, 50), (60, 20, 120, 40)],
+        "regular_enemies":  360,
+        "shooting_enemies": 160,
+        "spawn_rate":   0.18,
+        "shoot_rate":   1.0,
+        "boss_hp_mult": 1.50,
+        "reward_coins": 900,
+        "unlock_score": 18000,
+    },
+]
 
 # ─────────────────────────────────────────────────────
 #  UI THEMES
@@ -1132,11 +1202,20 @@ class GameWindow(arcade.Window):
         self.game_state    = STATE_MENU
         self.menu_theme         = "dark"
         self.selected_ship      = 0
-        self.selected_difficulty = "medium"   # default
+        self.selected_difficulty = "medium"
         self._menu_btns:  dict  = {}
         self._ship_cards: dict  = {}
         self._diff_btns:  dict  = {}
         self._shop_btns:  dict  = {}
+
+        # ── Level system ──────────────────────────────
+        self.selected_level:    int  = 0          # index into LEVELS
+        self.level_enemies_remaining: int = 0     # enemies left before boss spawns
+        self.level_shooting_remaining: int = 0
+        self.level_boss_spawned: bool = False
+        self.level_complete:     bool = False
+        self._level_clear_timer: float = 0.0      # auto-advance after clear screen
+        self.best_scores: dict = {}               # level_index → best score
 
         # ── Currency / Shop ───────────────────────────
         self.coins:    int  = 0          # total saved coins
@@ -1274,6 +1353,14 @@ class GameWindow(arcade.Window):
         self.coins_list       = arcade.SpriteList()   # ← coin sprites on screen
 
         self.run_coins = 0   # reset per-run coin counter
+
+        # ── Level counters ────────────────────────────
+        lvl = LEVELS[self.selected_level]
+        self.level_enemies_remaining  = lvl["regular_enemies"]
+        self.level_shooting_remaining = lvl["shooting_enemies"]
+        self.level_boss_spawned  = False
+        self.level_complete      = False
+        self._level_clear_timer  = 0.0
 
         self.score       = 0
         self.show_hud    = True
@@ -1685,6 +1772,233 @@ class GameWindow(arcade.Window):
                   "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]",
                   12)
         self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
+
+    # ══════════════════════════════════════════════════
+    #  LEVEL SELECT SCREEN
+    # ══════════════════════════════════════════════════
+
+    def _draw_level_select(self):
+        w, h  = self.width, self.height
+        tc    = THEMES["dark"]
+        font_u = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        font_n = ("Courier New", "Menlo", "Monaco", "monospace")
+
+        # Background
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
+        t = self.bg_time
+        off = (t * 14) % 28
+        for yi in range(-30, h+30, 28):
+            arcade.draw_line(0, yi+off, w, yi+off-18, (28,44,76,24), 1)
+        for s in self.stars:
+            tw2 = 0.55+0.45*math.sin(t*s["twinkle"]+s["phase"])
+            al  = max(20, min(255, int(s["alpha"]*tw2)))
+            arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
+
+        # Panel
+        pw = min(int(w*0.92), 840);  ph = min(int(h*0.90), 540)
+        pl = (w-pw)//2;  pr = pl+pw
+        pb = (h-ph)//2;  ptop = pb+ph
+        arcade.draw_lrbt_rectangle_filled(pl+7,pr+7,pb-7,ptop-7,(0,0,0,70))
+        arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop,tc["panel_fill"])
+        arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop,tc["panel_border"],2)
+        arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5,tc["panel_inner"],1)
+
+        # Title
+        arcade.draw_text("SELECT LEVEL", w//2+2, ptop-44,
+                         tc["title_shadow"], 30, anchor_x="center", bold=True,
+                         font_name=font_u)
+        arcade.draw_text("SELECT LEVEL", w//2, ptop-42,
+                         tc["title"], 30, anchor_x="center", bold=True,
+                         font_name=font_u)
+        arcade.draw_text(f"$ {self.coins:,}  coins", w//2, ptop-66,
+                         (255,220,40,220), 12, anchor_x="center",
+                         bold=True, font_name=font_n)
+        arcade.draw_line(pl+22, ptop-82, pr-22, ptop-82, tc["divider"], 1)
+
+        # Level cards
+        n   = len(LEVELS)
+        cw  = (pw - 50 - (n-1)*14) // n
+        ch  = min(int(ph*0.62), 300)
+        cy0 = pb + int(ph*0.22)
+        cx0 = pl + 25
+
+        self._level_cards = {}   # reset click targets
+
+        for idx, lvl in enumerate(LEVELS):
+            cl = cx0 + idx*(cw+14)
+            cr = cl + cw
+            cb_ = cy0
+            ct  = cy0 + ch
+            lc  = lvl["color"]
+            sel = (idx == self.selected_level)
+            hov = self._is_hovering(cl, cr, cb_, ct)
+
+            # Unlock check
+            best = self.best_scores.get(idx-1, 0) if idx > 0 else 99999
+            unlocked = (idx == 0) or (best >= LEVELS[idx]["unlock_score"])
+
+            # Card fill
+            if sel:
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (*lc[:3],55))
+                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],255), 3)
+                # glow
+                arcade.draw_lrbt_rectangle_outline(cl-4,cr+4,cb_-4,ct+4,
+                                                    (*lc[:3],70), 4)
+            elif hov and unlocked:
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (*lc[:3],30))
+                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],180), 2)
+            elif unlocked:
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (10,16,42,200))
+                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (*lc[:3],110), 1)
+            else:
+                arcade.draw_lrbt_rectangle_filled(cl,cr,cb_,ct, (8,10,24,200))
+                arcade.draw_lrbt_rectangle_outline(cl,cr,cb_,ct, (40,46,74,100), 1)
+
+            ccx = cl + cw//2
+
+            if not unlocked:
+                # Lock icon
+                arcade.draw_text("🔒", ccx, cy0+ch//2+6, (80,90,120,200),
+                                 22, anchor_x="center", anchor_y="center")
+                arcade.draw_text(f"Score {lvl['unlock_score']:,}", ccx, cy0+ch//2-26,
+                                 (70,80,110,180), 9, anchor_x="center",
+                                 font_name=font_n)
+            else:
+                # Level number badge
+                arcade.draw_circle_filled(ccx, ct-28, 20, (*lc[:3],160))
+                arcade.draw_circle_outline(ccx, ct-28, 20, (*lc[:3],255), 2)
+                arcade.draw_text(str(lvl["number"]), ccx, ct-35,
+                                 (255,255,255,255), 16, anchor_x="center",
+                                 bold=True, font_name=font_u)
+
+                # Name
+                arcade.draw_text(lvl["name"], ccx, ct-58,
+                                 (*lc[:3],240) if sel else (*lc[:3],190),
+                                 11, anchor_x="center", bold=True,
+                                 font_name=font_u)
+                # Subtitle
+                arcade.draw_text(lvl["subtitle"], ccx, ct-74,
+                                 (160,180,215,180), 8, anchor_x="center",
+                                 font_name=font_u)
+
+                arcade.draw_line(cl+10, ct-86, cr-10, ct-86,
+                                 (*lc[:3],60), 1)
+
+                # Stats
+                total_e = lvl["regular_enemies"]+lvl["shooting_enemies"]
+                boss_hp = _level_boss_hp(lvl["regular_enemies"],
+                                          lvl["shooting_enemies"],
+                                          lvl["boss_hp_mult"])
+                stats = [
+                    ("ENEMIES", f"{total_e}"),
+                    ("BOSS HP",  f"{boss_hp:,}"),
+                    ("REWARD",  f"$ {lvl['reward_coins']}"),
+                ]
+                sy = ct - 102
+                for label, val in stats:
+                    arcade.draw_text(label, cl+10, sy, (130,150,200,180), 8,
+                                     font_name=font_n)
+                    arcade.draw_text(val, cr-8, sy, (*lc[:3],220), 9,
+                                     anchor_x="right", bold=True,
+                                     font_name=font_n)
+                    sy -= 18
+
+                # Best score
+                best_s = self.best_scores.get(idx, 0)
+                if best_s > 0:
+                    arcade.draw_text(f"BEST  {best_s:,}", ccx, cb_+22,
+                                     (255,220,40,210), 9, anchor_x="center",
+                                     bold=True, font_name=font_n)
+
+            self._level_cards[idx] = (cl, cr, cb_, ct)
+
+        # Difficulty row
+        diff_y = pb + 56
+        arcade.draw_text("DIFFICULTY:", pl+28, diff_y+4,
+                         tc["text_dim"], 10, font_name=font_u)
+        dx = pl + 130
+        self._ls_diff_btns = {}
+        for dkey, dlabel in [("easy","EASY"),("medium","MEDIUM"),("hard","HARD")]:
+            dw2 = 90;  dh2 = 28
+            sel_d = (dkey == self.selected_difficulty)
+            dc = {"easy":(60,200,80),"medium":(220,180,20),"hard":(220,60,60)}[dkey]
+            hov_d = self._is_hovering(dx, dx+dw2, diff_y, diff_y+dh2)
+            fill = (*dc, 180 if sel_d else (80 if hov_d else 40))
+            arcade.draw_lrbt_rectangle_filled(dx, dx+dw2, diff_y, diff_y+dh2, fill)
+            arcade.draw_lrbt_rectangle_outline(dx, dx+dw2, diff_y, diff_y+dh2,
+                                                (*dc, 255 if sel_d else 130), 2 if sel_d else 1)
+            arcade.draw_text(dlabel, dx+dw2//2, diff_y+5, (255,255,255,255) if sel_d else (*dc,200),
+                             10, anchor_x="center", bold=sel_d, font_name=font_u)
+            self._ls_diff_btns[dkey] = (dx, dx+dw2, diff_y, diff_y+dh2)
+            dx += dw2 + 8
+
+        # Play and Back buttons
+        bw = 180;  bh = 42
+        bx = w//2 - bw//2;  by = pb + 14
+        hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
+        arcade.draw_lrbt_rectangle_filled(bx, bx+bw, by, by+bh,
+                                           tc["btn_hover"] if hov_p else tc["btn_fill"])
+        arcade.draw_lrbt_rectangle_outline(bx, bx+bw, by, by+bh,
+                                            tc["btn_border"], 2)
+        arcade.draw_text("[ PLAY LEVEL ]", bx+bw//2, by+11, tc["btn_text"],
+                         16, anchor_x="center", bold=True, font_name=font_u)
+        self._ls_play_btn = (bx, bx+bw, by, by+bh)
+
+        bkw = 100;  bkx = pr - bkw - 14
+        hov_bk = self._is_hovering(bkx, bkx+bkw, by, by+bh)
+        arcade.draw_lrbt_rectangle_filled(bkx, bkx+bkw, by, by+bh,
+                                           tc["btn_hover"] if hov_bk else
+                                           (*tc["btn_fill"][:3], 160))
+        arcade.draw_lrbt_rectangle_outline(bkx, bkx+bkw, by, by+bh,
+                                            (*tc["btn_border"][:3], 140), 1)
+        arcade.draw_text("[ BACK ]", bkx+bkw//2, by+11,
+                         tc["btn_text_dim"], 13, anchor_x="center",
+                         bold=True, font_name=font_u)
+        self._ls_back_btn = (bkx, bkx+bkw, by, by+bh)
+
+    # ══════════════════════════════════════════════════
+    #  LEVEL CLEAR OVERLAY
+    # ══════════════════════════════════════════════════
+
+    def _draw_level_clear_overlay(self):
+        w, h  = self.width, self.height
+        lvl   = LEVELS[self.selected_level]
+        lc    = lvl["color"]
+        font_u = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        font_n = ("Courier New", "Menlo", "Monaco", "monospace")
+
+        # Dark overlay
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (0, 0, 0, 160))
+
+        pw = 420;  ph = 240
+        pl = w//2 - pw//2;  pr = pl+pw
+        pb = h//2 - ph//2;  pt = pb+ph
+
+        arcade.draw_lrbt_rectangle_filled(pl+6,pr+6,pb-6,pt-6,(0,0,0,80))
+        arcade.draw_lrbt_rectangle_filled(pl,pr,pb,pt, (*lc[:3],22))
+        arcade.draw_lrbt_rectangle_outline(pl,pr,pb,pt, (*lc[:3],255), 3)
+        arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,pt-5,(*lc[:3],60),1)
+
+        arcade.draw_text("LEVEL CLEAR!", w//2+2, pt-50,
+                         (*lc[:3],60), 36, anchor_x="center", bold=True,
+                         font_name=font_u)
+        arcade.draw_text("LEVEL CLEAR!", w//2, pt-48,
+                         (*lc[:3],255), 36, anchor_x="center", bold=True,
+                         font_name=font_u)
+        arcade.draw_text(lvl["name"], w//2, pt-78,
+                         (200,220,255,210), 14, anchor_x="center",
+                         font_name=font_u)
+        arcade.draw_line(pl+20, h//2+20, pr-20, h//2+20, (*lc[:3],80), 1)
+        arcade.draw_text(f"SCORE   {self.score:,}", w//2, h//2+8,
+                         (255,255,255,240), 14, anchor_x="center",
+                         bold=True, font_name=font_n)
+        arcade.draw_text(f"COINS + {lvl['reward_coins']}", w//2, h//2-14,
+                         (255,220,40,240), 13, anchor_x="center",
+                         bold=True, font_name=font_n)
+        secs = max(0, self._level_clear_timer)
+        arcade.draw_text(f"Returning to level select in {secs:.0f}s ...",
+                         w//2, pb+22, (160,180,215,200), 10,
+                         anchor_x="center", font_name=font_u)
 
     # ══════════════════════════════════════════════════
     #  SHOP DRAWING
@@ -2123,6 +2437,35 @@ class GameWindow(arcade.Window):
         self.txt_score.draw()
         self._txt_shadow("SCORE", 22, h-12, (120,165,230,180), 9, font_ui)
 
+        # ── Level progress bar (top-centre) ──────────
+        lvl  = LEVELS[self.selected_level]
+        lc   = lvl["color"]
+        total_e = lvl["regular_enemies"] + lvl["shooting_enemies"]
+        sent_e  = total_e - self.level_enemies_remaining - self.level_shooting_remaining
+        sent_e  = max(0, min(total_e, sent_e))
+        prog_ratio = sent_e / max(1, total_e)
+
+        bar_w = 220;  bar_h = 8
+        bar_x = w//2 - bar_w//2;  bar_y = h - 18
+        # track
+        arcade.draw_lrbt_rectangle_filled(bar_x, bar_x+bar_w, bar_y, bar_y+bar_h,
+                                           (20, 26, 60, 180))
+        arcade.draw_lrbt_rectangle_outline(bar_x, bar_x+bar_w, bar_y, bar_y+bar_h,
+                                            (*lc[:3], 120), 1)
+        # fill
+        fill_w = int(bar_w * prog_ratio)
+        if fill_w > 0:
+            arcade.draw_lrbt_rectangle_filled(bar_x, bar_x+fill_w, bar_y, bar_y+bar_h,
+                                               (*lc[:3], 210))
+        # label
+        if self.level_boss_spawned:
+            prog_label = f"LVL {lvl['number']}  ⚠ BOSS"
+        else:
+            remaining = self.level_enemies_remaining + self.level_shooting_remaining
+            prog_label = f"LVL {lvl['number']}  {sent_e}/{total_e}"
+        self._txt_shadow(prog_label, w//2, h-30, (*lc[:3], 230), 10,
+                         font_ui, anchor_x="center", bold=True)
+
         # ── HP section ─────────────────────────────
         # Row positions (all from h, spaced so nothing overlaps):
         #   h-46 : "HEALTH" small label
@@ -2232,6 +2575,10 @@ class GameWindow(arcade.Window):
             self._draw_shop()
             return
 
+        if self.game_state == STATE_LEVEL_SELECT:
+            self._draw_level_select()
+            return
+
         # Playing / paused / gameover — always draw the world
         tc = THEMES[self.menu_theme]   # pull once, use everywhere below
         self._draw_bg_space()
@@ -2313,6 +2660,9 @@ class GameWindow(arcade.Window):
                 (df_r, df_g, df_b, int(df_base_a * self.damage_flash)))
 
         self._draw_crosshair()
+
+        if self.level_complete:
+            self._draw_level_clear_overlay()
 
         if self.game_state == STATE_GAMEOVER:
             # ── Full-screen overlay ──────────────────────────────────────
@@ -2505,39 +2855,62 @@ class GameWindow(arcade.Window):
                         c.center_x += (px - c.center_x) * pull
                         c.center_y += (py - c.center_y) * pull
 
-        dp  = self._dpreset                 # shorthand for active difficulty preset
-        sim = dp["spawn_interval_mult"]     # slowdown/speedup factor for spawn timers
+        dp  = self._dpreset
+        lvl = LEVELS[self.selected_level]
 
-        # ── Boss lockout: while any boss lives, freeze all other spawns ──────
+        # ── Boss lockout: while any boss lives, freeze all other spawns ──
         self.boss_on_screen = len(self.bosses) > 0
 
-        # base intervals (time-scaled) then multiplied by difficulty preset
-        ei = max(0.10, (1.0 -0.58*min(difficulty,1)-0.16*max(0,difficulty-1)
-                        -0.08*max(0,difficulty-2)) * sim)
-        si = max(0.45, (3.0 -2.30*min(difficulty,1)-0.40*max(0,difficulty-1)) * sim)
-        bi = max(6.0,  (22.0-9.0 *min(difficulty,1)-3.0 *max(0,difficulty-1)) * sim)
+        reg_on_screen = len(self.enemies) + len(self.shooting_enemies)
 
-        # batch sizes — medium caps at max_regular_enemies
-        reg_on_screen = len(self.enemies)+len(self.shooting_enemies)
-        eb = max(1, min(1+int(difficulty*1.8),
-                        dp["max_regular_enemies"] - reg_on_screen))
-        sb = max(1, min(1+int(difficulty*0.9),
-                        dp["max_regular_enemies"] - reg_on_screen))
-
-        if not self.boss_on_screen:
+        if not self.boss_on_screen and not self.level_boss_spawned:
+            # ── Regular enemy spawning (quota-based) ─────────────────────
             self.enemy_spawn += delta
-            if self.enemy_spawn >= ei and reg_on_screen < dp["max_regular_enemies"]:
-                for _ in range(eb): self.spawn_enemy(difficulty)
+            if (self.enemy_spawn >= lvl["spawn_rate"]
+                    and self.level_enemies_remaining > 0
+                    and reg_on_screen < dp["max_regular_enemies"]):
+                self.spawn_enemy(difficulty)
+                self.level_enemies_remaining -= 1
                 self.enemy_spawn = 0.0
 
+            # ── Shooting enemy spawning ───────────────────────────────────
             self.shooting_spawn += delta
-            if self.shooting_spawn >= si and reg_on_screen < dp["max_regular_enemies"]:
-                for _ in range(sb): self.spawn_shooting_enemy(difficulty)
+            if (self.shooting_spawn >= lvl["shoot_rate"]
+                    and self.level_shooting_remaining > 0
+                    and reg_on_screen < dp["max_regular_enemies"]):
+                self.spawn_shooting_enemy(difficulty)
+                self.level_shooting_remaining -= 1
                 self.shooting_spawn = 0.0
 
-        self.boss_spawn += delta
-        if self.boss_spawn >= bi and not self.boss_on_screen:
-            self.spawn_boss(difficulty);  self.boss_spawn = 0.0
+            # ── Boss spawns only when ALL enemies have been sent AND screen clear ──
+            all_sent = (self.level_enemies_remaining == 0
+                        and self.level_shooting_remaining == 0)
+            if all_sent and reg_on_screen == 0:
+                self.spawn_level_boss()
+                self.level_boss_spawned = True
+
+        # ── Level clear detection ─────────────────────────────────────────
+        if (self.level_boss_spawned
+                and not self.boss_on_screen
+                and not self.level_complete):
+            self.level_complete = True
+            self._level_clear_timer = 4.5   # show clear screen for 4.5 s
+            reward = lvl["reward_coins"]
+            self.coins     += reward
+            self.run_coins += reward
+            # record best score
+            prev = self.best_scores.get(self.selected_level, 0)
+            if self.score > prev:
+                self.best_scores[self.selected_level] = self.score
+            self._save_progress()
+            self.notif_text  = f"LEVEL CLEAR!  +{reward} coins"
+            self.notif_color = (120, 255, 130)
+            self.notif_timer = 3.5
+
+        if self.level_complete:
+            self._level_clear_timer -= delta
+            if self._level_clear_timer <= 0:
+                self.game_state = STATE_LEVEL_SELECT
 
         self.update_enemies(delta, difficulty)
         self.check_collisions()
@@ -2939,7 +3312,11 @@ class GameWindow(arcade.Window):
 
     def _save_progress(self) -> None:
         try:
-            data = {"coins": self.coins, "upgrades": self.upgrades}
+            data = {
+                "coins":       self.coins,
+                "upgrades":    self.upgrades,
+                "best_scores": {str(k): v for k, v in self.best_scores.items()},
+            }
             SAVE_FILE.write_text(__import__("json").dumps(data))
         except OSError:
             pass
@@ -2954,8 +3331,10 @@ class GameWindow(arcade.Window):
                 iid = item["id"]
                 self.upgrades[iid] = min(
                     int(saved_upg.get(iid, 0)), item["max"])
+            self.best_scores = {int(k): v
+                                for k, v in data.get("best_scores", {}).items()}
         except (OSError, ValueError, KeyError):
-            pass   # first run or corrupted save — start fresh
+            pass
 
     # ──────────────────────────────────────────────────
     #  SPAWNING
@@ -2977,6 +3356,24 @@ class GameWindow(arcade.Window):
         dlabel = dp["label"]
         self.notif_text  = f"BOSS INCOMING!  [{dlabel}]"
         self.notif_color = (255,120,120);  self.notif_timer = 1.8
+
+    def spawn_level_boss(self):
+        """Spawn the level boss whose HP equals the combined HP of all level enemies."""
+        lvl  = LEVELS[self.selected_level]
+        dp   = self._dpreset
+        difficulty = min(3.0, self.time_alive / 90.0)
+        # Combined HP of every enemy in the level
+        boss_hp = _level_boss_hp(
+            lvl["regular_enemies"],
+            lvl["shooting_enemies"],
+            lvl["boss_hp_mult"] * dp["boss_health_mult"] * (1 + 0.2 * difficulty)
+        )
+        boss = BossEnemy(self.width // 2, self.height + 55, boss_hp)
+        self.bosses.append(boss)
+        lc = lvl["color"]
+        self.notif_text  = f"⚠  LEVEL {lvl['number']} BOSS  —  {boss_hp:,} HP!"
+        self.notif_color = lc
+        self.notif_timer = 3.0
 
     # ══════════════════════════════════════════════════
     #  INPUT
@@ -3008,15 +3405,47 @@ class GameWindow(arcade.Window):
                 if l<=x<=r and b<=y<=t:
                     if name == "play":
                         if self.game_state == STATE_MENU:
-                            self.setup()
+                            self.game_state = STATE_LEVEL_SELECT
                         else:
                             self.game_state = STATE_PLAYING
                             self.set_mouse_visible(False)
+                    elif name == "shop":
+                        self.game_state = STATE_SHOP
                     elif name == "quit":
                         self.game_state = STATE_MENU
                         self.set_mouse_visible(True)
                     elif name == "theme":
                         self.menu_theme = "light" if self.menu_theme=="dark" else "dark"
+                    return
+            return
+
+        # ── Level select clicks ───────────────────────────────────────────
+        if self.game_state == STATE_LEVEL_SELECT:
+            # Level card selection
+            for idx, (cl, cr, cb_, ct) in getattr(self, "_level_cards", {}).items():
+                if cl<=x<=cr and cb_<=y<=ct:
+                    best = self.best_scores.get(idx-1, 0) if idx > 0 else 99999
+                    unlocked = (idx == 0) or (best >= LEVELS[idx]["unlock_score"])
+                    if unlocked:
+                        self.selected_level = idx
+                    return
+            # Difficulty buttons
+            for dkey, (l, r, b, t) in getattr(self, "_ls_diff_btns", {}).items():
+                if l<=x<=r and b<=y<=t:
+                    self.selected_difficulty = dkey
+                    self._dpreset = DIFFICULTY_PRESETS[dkey]
+                    return
+            # Play level
+            if hasattr(self, "_ls_play_btn"):
+                l, r, b, t = self._ls_play_btn
+                if l<=x<=r and b<=y<=t:
+                    self.setup()
+                    return
+            # Back
+            if hasattr(self, "_ls_back_btn"):
+                l, r, b, t = self._ls_back_btn
+                if l<=x<=r and b<=y<=t:
+                    self.game_state = STATE_MENU
                     return
             return
 
@@ -3041,7 +3470,8 @@ class GameWindow(arcade.Window):
             elif self.game_state == STATE_PAUSED:
                 self.game_state = STATE_PLAYING
                 self.set_mouse_visible(False)
-            # no ESC action in STATE_MENU or STATE_GAMEOVER
+            elif self.game_state == STATE_LEVEL_SELECT:
+                self.game_state = STATE_MENU
 
         elif key == arcade.key.H:
             if self.game_state in (STATE_PLAYING, STATE_PAUSED):

@@ -1262,6 +1262,7 @@ class GameWindow(arcade.Window):
         # ── Runtime vars ─────────────────────────────
         self.score       = 0
         self.show_hud    = True
+        self._held_move_keys: set[int] = set()
         self.up = self.down = self.left_key = self.right_key = False
         self.enemy_spawn = self.shooting_spawn = self.boss_spawn = 0.0
         self.mouse_held  = False
@@ -1361,7 +1362,7 @@ class GameWindow(arcade.Window):
         self.mouse_held  = False;  self.fire_timer = 0.0
         self.notif_text  = "";  self.notif_timer = 0.0
         self.notif_color = (255,255,110)
-        self.up = self.down = self.left_key = self.right_key = False
+        self._clear_movement_input()
         self.damage_flash = 0.0;  self.contact_damage_timer = 0.0
         self.time_alive   = 0.0
         self.combo        = 0;  self.combo_timer = 0.0
@@ -3485,15 +3486,30 @@ class GameWindow(arcade.Window):
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.mouse_held = False
 
-    def on_key_press(self, key, modifiers):
-        if   key == arcade.key.W: self.up        = True
-        elif key == arcade.key.S: self.down      = True
-        elif key == arcade.key.A: self.left_key  = True
-        elif key == arcade.key.D: self.right_key = True
+    def _sync_movement_flags(self):
+        self.up        = any(k in self._held_move_keys for k in (arcade.key.W, arcade.key.UP))
+        self.down      = any(k in self._held_move_keys for k in (arcade.key.S, arcade.key.DOWN))
+        self.left_key  = any(k in self._held_move_keys for k in (arcade.key.A, arcade.key.LEFT))
+        self.right_key = any(k in self._held_move_keys for k in (arcade.key.D, arcade.key.RIGHT))
 
-        elif key == arcade.key.ESCAPE:
+    def _clear_movement_input(self):
+        self._held_move_keys.clear()
+        self.up = self.down = self.left_key = self.right_key = False
+        if self.player is not None:
+            self.player.change_x = 0.0
+            self.player.change_y = 0.0
+
+    def on_key_press(self, key, modifiers):
+        if key in {arcade.key.W, arcade.key.A, arcade.key.S, arcade.key.D,
+                   arcade.key.UP, arcade.key.DOWN, arcade.key.LEFT, arcade.key.RIGHT}:
+            self._held_move_keys.add(key)
+            self._sync_movement_flags()
+            return
+
+        if key == arcade.key.ESCAPE:
             if self.game_state == STATE_PLAYING:
                 self.game_state = STATE_PAUSED
+                self._clear_movement_input()
                 self.set_mouse_visible(True)
             elif self.game_state == STATE_PAUSED:
                 self.game_state = STATE_PLAYING
@@ -3516,10 +3532,13 @@ class GameWindow(arcade.Window):
                 self._use_stored_powerup(POWERUP_KEYS[key])
 
     def on_key_release(self, key, modifiers):
-        if   key == arcade.key.W: self.up        = False
-        elif key == arcade.key.S: self.down      = False
-        elif key == arcade.key.A: self.left_key  = False
-        elif key == arcade.key.D: self.right_key = False
+        if key in {arcade.key.W, arcade.key.A, arcade.key.S, arcade.key.D,
+                   arcade.key.UP, arcade.key.DOWN, arcade.key.LEFT, arcade.key.RIGHT}:
+            self._held_move_keys.discard(key)
+            self._sync_movement_flags()
+
+    def on_deactivate(self):
+        self._clear_movement_input()
 
     # ──────────────────────────────────────────────────
     #  FULLSCREEN

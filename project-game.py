@@ -408,8 +408,8 @@ SHIPS = [
         "stat_spd":  1, "stat_atk": 5, "stat_def": 5,
         "color":     (255, 155, 70),
         "available": True,
-        "texture":   "__titan__",
-        "tex_scale": 1.0,
+        "texture":   "image/titan.png",
+        "tex_scale": 0.11,
         "spd_mult":  0.68,
         "hp_mult":   1.65,
     },
@@ -3462,10 +3462,18 @@ class GameWindow(arcade.Window):
     #  INPUT
     # ══════════════════════════════════════════════════
 
+    def _update_mouse_pos(self, x: float, y: float) -> None:
+        self.mouse_x = max(0, min(self.width, x))
+        self.mouse_y = max(0, min(self.height, y))
+
     def on_mouse_motion(self, x, y, dx, dy):
-        self.mouse_x = x;  self.mouse_y = y
+        self._update_mouse_pos(x, y)
+
+    def on_mouse_drag(self, x, y, dx, dy, buttons, modifiers):
+        self._update_mouse_pos(x, y)
 
     def on_mouse_press(self, x, y, button, modifiers):
+        self._update_mouse_pos(x, y)
         if button != arcade.MOUSE_BUTTON_LEFT:
             return
 
@@ -3543,10 +3551,10 @@ class GameWindow(arcade.Window):
             return
 
         if self.game_state == STATE_PLAYING:
-            self.mouse_x = x
-            self.mouse_y = y
+            self._update_mouse_pos(x, y)
 
     def on_mouse_release(self, x, y, button, modifiers):
+        self._update_mouse_pos(x, y)
         if button == arcade.MOUSE_BUTTON_LEFT:
             self.mouse_held = False
 

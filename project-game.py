@@ -397,8 +397,8 @@ SHIPS = [
         "stat_spd":  5, "stat_atk": 2, "stat_def": 1,
         "color":     (192, 120, 255),
         "available": True,
-        "texture":   "__phantom__",
-        "tex_scale": 1.0,
+        "texture":   "image/phantom.png",
+        "tex_scale": 0.20,
         "spd_mult":  1.45,
         "hp_mult":   0.65,
     },
@@ -2047,6 +2047,46 @@ class GameWindow(arcade.Window):
     #  SHOP DRAWING
     # ══════════════════════════════════════════════════
 
+    def _shop_layout(self):
+        w, h = self.width, self.height
+        pw = min(int(w * 0.90), 760)
+        ph = min(int(h * 0.92), 560)
+        pl = (w - pw) // 2
+        pr = pl + pw
+        pb = (h - ph) // 2
+        ptop = pb + ph
+
+        div_y = ptop - 88
+        cols = 3
+        cw_ = (pw - 60) // cols
+        ch_ = 148
+        gap_ = 14
+        grid_top = div_y - 18
+
+        item_rects = {}
+        for idx, item in enumerate(SHOP_ITEMS):
+            col = idx % cols
+            row = idx // cols
+            cl = pl + 30 + col * (cw_ + gap_)
+            ct = grid_top - row * (ch_ + gap_)
+            cr = cl + cw_
+            cb_ = ct - ch_
+            item_rects[item["id"]] = (cl, cr, cb_, ct)
+
+        bkw, bkh = 160, 38
+        bkx = w // 2 - bkw // 2
+        bky = pb + 12
+        back_rect = (bkx, bkx + bkw, bky, bky + bkh)
+
+        return {
+            "panel": (pl, pr, pb, ptop),
+            "divider_y": div_y,
+            "card_w": cw_,
+            "card_h": ch_,
+            "items": item_rects,
+            "back": back_rect,
+        }
+
     def _draw_shop(self):
         w, h   = self.width, self.height
         tc     = THEMES["dark"]
@@ -2062,9 +2102,11 @@ class GameWindow(arcade.Window):
             arcade.draw_line(0, yi+off, w, yi+off-18, (28,44,76,24), 1)
 
         # Panel
-        pw = min(int(w * 0.90), 760);  ph = min(int(h * 0.92), 560)
-        pl = (w-pw)//2;  pr = pl+pw
-        pb = (h-ph)//2;  ptop = pb+ph
+        layout = self._shop_layout()
+        pl, pr, pb, ptop = layout["panel"]
+        cw_ = layout["card_w"]
+        ch_ = layout["card_h"]
+        div_y = layout["divider_y"]
 
         arcade.draw_lrbt_rectangle_filled(pl+7, pr+7, pb-7, ptop-7, (0,0,0,70))
         arcade.draw_lrbt_rectangle_filled(pl, pr, pb, ptop, tc["panel_fill"])
@@ -2086,24 +2128,13 @@ class GameWindow(arcade.Window):
                          self.shop_feedback_color, 10, anchor_x="center",
                          bold=True, font_name=font_u)
 
-        div_y = ptop - 88
         arcade.draw_line(pl+22, div_y, pr-22, div_y, tc["divider"], 1)
 
         # ── Item grid ────────────────────────────────
-        n        = len(SHOP_ITEMS)
-        cols     = 3
-        rows     = (n + cols - 1) // cols
-        cw_      = (pw - 60) // cols
-        ch_      = 148
-        gap_     = 14
-        grid_top = div_y - 18
         self._shop_btns = {}
 
-        for idx, item in enumerate(SHOP_ITEMS):
-            col = idx % cols;  row = idx // cols
-            cl  = pl + 30 + col * (cw_ + gap_)
-            ct  = grid_top - row * (ch_ + gap_)
-            cr  = cl + cw_;  cb_ = ct - ch_
+        for item in SHOP_ITEMS:
+            cl, cr, cb_, ct = layout["items"][item["id"]]
             tier = self.upgrades.get(item["id"], 0)
             maxed = (tier >= item["max"])
             cost  = item["cost"][tier] if not maxed else 0
@@ -2170,20 +2201,22 @@ class GameWindow(arcade.Window):
                 self._shop_btns[item["id"]] = (cl, cr, cb_, ct)
 
         # ── Back button ─────────────────────────────
-        bkw, bkh = 160, 38
-        bkx = w//2 - bkw//2
-        bky = pb + 12
+        bkx, _, bky, _ = layout["back"]
+        bkw = 160
+        bkh = 38
         hov_bk = self._is_hovering(bkx, bkx+bkw, bky, bky+bkh)
         _draw_btn(bkx, bkw, bky, bkh,
                   tc["btn_hover"] if hov_bk else (*tc["btn_fill"][:3], 180),
                   tc["btn_border"], tc["btn_text"], "[ BACK ]", 14)
-        self._shop_btns["__back__"] = (bkx, bkx+bkw, bky, bky+bkh)
+        self._shop_btns["__back__"] = layout["back"]
 
     def _open_shop(self, return_state: str) -> None:
         self._shop_return_state = return_state
         self.shop_feedback = "CLICK A CARD TO BUY OR UPGRADE"
         self.shop_feedback_color = (160, 180, 215, 180)
+        self._shop_btns = {**self._shop_layout()["items"], "__back__": self._shop_layout()["back"]}
         self.game_state = STATE_SHOP
+        self.set_mouse_visible(True)
 
     def _close_shop(self) -> None:
         self.game_state = self._shop_return_state

@@ -42,14 +42,12 @@ CONTACT_DAMAGE      = 14
 CONTACT_DAMAGE_COOLDOWN = 0.35
 
 MAX_POWERUP_STORAGE = 10
-AUTO_FIRE_ENEMY_THRESHOLD = 5
 AUTO_SHIELD_HEALTH_RATIO  = 0.50
 
 POWERUP_KEYS = {
     arcade.key.KEY_1: "speed",
     arcade.key.KEY_2: "shield",
-    arcade.key.KEY_3: "autofire",
-    arcade.key.KEY_4: "triple",
+    arcade.key.KEY_3: "triple",
     arcade.key.KEY_5: "elec360",   # Reaper special
 }
 
@@ -664,18 +662,17 @@ def solid_texture(size: int, color: tuple) -> arcade.Texture:
 #  POWERUPS
 # ─────────────────────────────────────────────────────
 
-POWERUP_TYPES  = ["health", "shield", "autofire", "speed", "triple", "beam360", "elec360"]
+POWERUP_TYPES  = ["health", "shield", "speed", "triple", "beam360", "elec360"]
 POWERUP_COLORS = {
     "health":   (0,   255, 90,  220),
     "shield":   (0,   190, 255, 220),
-    "autofire": (255, 70,  255, 220),
     "speed":    (255, 220, 0,   220),
     "triple":   (255, 130, 0,   220),
     "beam360":  (255, 60,  20,  220),   # fiery orange-red
     "elec360":  (120, 80,  255, 220),   # electric violet
 }
 POWERUP_LABELS = {
-    "health":  "+HP",   "shield":  "SHIELD",  "autofire": "AUTO",
+    "health":  "+HP",   "shield":  "SHIELD",
     "speed":   "SPEED", "triple":  "TRIPLE",  "beam360":  "360°",
     "elec360": "⚡360°",
 }
@@ -727,13 +724,6 @@ def _make_powerup_texture(kind: str) -> arcade.Texture:
         # centre cross
         d.rectangle((cx-1, 14, cx+1, 26), fill=(r, g, b, 255))
         d.rectangle((cx-5, 19, cx+5, 21), fill=(r, g, b, 255))
-
-    elif kind == "autofire":
-        # Crosshair
-        d.ellipse((cx-10, cx-10, cx+10, cx+10), outline=(r, g, b, 255), width=2)
-        d.ellipse((cx-4,  cx-4,  cx+4,  cx+4),  fill=(r, g, b, 255))
-        for ox, oy, ex, ey in [(-18,0,-12,0),(12,0,18,0),(0,-18,0,-12),(0,12,0,18)]:
-            d.line((cx+ox, cx+oy, cx+ex, cx+ey), fill=(r, g, b, 255), width=2)
 
     elif kind == "triple":
         # Three bullets stacked
@@ -849,13 +839,12 @@ class Player(arcade.Sprite):
         self.change_x   = 0.0;  self.change_y = 0.0
 
         self.shield_active   = False;  self.shield_timer   = 0.0
-        self.autofire_active = False;  self.autofire_timer = 0.0
         self.speed_active    = False;  self.speed_timer    = 0.0
         self.triple_active   = False;  self.triple_timer   = 0.0
         self.beam360_active  = False;  self.beam360_timer  = 0.0
         self.elec360_active  = False;  self.elec360_timer  = 0.0
 
-        self.inventory = {"speed": 0, "shield": 0, "autofire": 0, "triple": 0,
+        self.inventory = {"speed": 0, "shield": 0, "triple": 0,
                           "beam360": 0, "elec360": 0}
 
     def get_speed(self):
@@ -863,7 +852,7 @@ class Player(arcade.Sprite):
         return PLAYER_SPEED * engine * (1.65 if self.speed_active else 1.0)
 
     def update_powerups(self, delta):
-        for attr in ("shield", "autofire", "speed", "triple", "beam360", "elec360"):
+        for attr in ("shield", "speed", "triple", "beam360", "elec360"):
             if getattr(self, f"{attr}_active"):
                 new_t = getattr(self, f"{attr}_timer") - delta
                 if new_t <= 0:
@@ -1082,8 +1071,12 @@ ELECTRIC_DAMAGE       = 35      # damage per bolt hit
 ELECTRIC_BOSS_DAMAGE  = 90      # damage to boss per bolt hit
 ELECTRIC_BOLT_LIFE    = 1.8     # seconds
 ELECTRIC_FIRE_RATE    = 0.14    # seconds between bolts (faster than normal)
-ELECTRIC_360_COUNT    = 16      # bolts in 360° burst
+ELECTRIC_360_FIRE_RATE = 0.08   # dense storm pulses while 360° mode is active
+ELECTRIC_360_COUNT    = 24      # bolts in each 360° storm pulse
 ELECTRIC_360_DURATION = 7.0     # how long 360° mode lasts
+ELECTRIC_360_RADIUS   = 185     # storm only reaches this far from the ship
+ELECTRIC_360_DAMAGE   = 46      # stronger than the normal electric bolt
+ELECTRIC_360_BOSS_DAMAGE = 115
 
 
 class ElectricBolt(arcade.Sprite):
@@ -1094,7 +1087,10 @@ class ElectricBolt(arcade.Sprite):
     """
 
     def __init__(self, sx: float, sy: float, angle_rad: float,
-                 speed: float = ELECTRIC_SPEED):
+                 speed: float = ELECTRIC_SPEED,
+                 damage: int = ELECTRIC_DAMAGE,
+                 boss_damage: int = ELECTRIC_BOSS_DAMAGE,
+                 max_range: float | None = None):
         super().__init__()
         # Use a tiny 1×1 transparent texture so arcade collision still works
         img = Image.new("RGBA", (6, 6), (0, 0, 0, 0))
@@ -1105,6 +1101,10 @@ class ElectricBolt(arcade.Sprite):
         self.change_y = math.sin(angle_rad) * speed
         self.angle_rad = angle_rad
         self.life      = ELECTRIC_BOLT_LIFE
+        self.damage    = damage
+        self.boss_damage = boss_damage
+        self.max_range = max_range
+        self.distance_travelled = 0.0
         # pre-generate zigzag offsets (regenerated each draw for flicker)
         self._segs     = 8     # number of zigzag segments
         self._length   = 28.0  # length of each segment
@@ -1114,6 +1114,9 @@ class ElectricBolt(arcade.Sprite):
         self.center_x += self.change_x * delta_time
         self.center_y += self.change_y * delta_time
         self.life     -= delta_time
+        self.distance_travelled += math.hypot(self.change_x, self.change_y) * delta_time
+        if self.max_range is not None and self.distance_travelled >= self.max_range:
+            self.life = 0.0
         # Re-randomise jitter every frame → flickering effect
         self._offsets = [random.uniform(-6, 6) for _ in range(self._segs)]
 
@@ -1159,7 +1162,7 @@ def _draw_btn(x, w, y, h, fill, border, text_color, label, font_size):
 
 def _notif_color(kind: str) -> tuple:
     return {"speed":(255,220,120),"shield":(110,230,255),
-            "autofire":(255,130,255),"triple":(255,180,120),
+            "triple":(255,180,120),
             "health":(130,255,130)}.get(kind,(255,255,255))
 
 
@@ -1199,6 +1202,9 @@ class GameWindow(arcade.Window):
         self._ship_cards: dict  = {}
         self._diff_btns:  dict  = {}
         self._shop_btns:  dict  = {}
+        self._shop_return_state = STATE_MENU
+        self.shop_feedback      = ""
+        self.shop_feedback_color = (160, 180, 215, 180)
 
         # ── Level system ──────────────────────────────
         self.selected_level:    int  = 0
@@ -1232,7 +1238,7 @@ class GameWindow(arcade.Window):
                                         (255,255,110,255), 26, anchor_x="center",
                                         bold=True, font_name=FONT_UI)
         self.txt_hint    = arcade.Text(
-            "WASD · LMB Shoot · 1-4 Power-ups · H HUD · F11 Fullscreen · R Restart · ESC Menu",
+            "WASD · Mouse Aim · 1-3 Power-ups · 5 Reaper Special · H HUD · F11 Fullscreen · R Restart · ESC Menu",
             SCREEN_WIDTH//2, 11, (100, 125, 175, 140), 9,
             anchor_x="center", font_name=FONT_UI)
         self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+18,
@@ -1744,8 +1750,18 @@ class GameWindow(arcade.Window):
             self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
             _theme_ref_y = sy2
         else:
+            sw, sh2 = 230, 38
+            sx2 = w//2 - sw//2;  sy2 = by - sh2 - 8
+            hov_s = self._is_hovering(sx2, sx2+sw, sy2, sy2+sh2)
+            coin_label = f"[ SHOP ]  $ {self.coins:,}"
+            _draw_btn(sx2, sw, sy2, sh2,
+                      theme_c["btn_hover"] if hov_s else (*theme_c["btn_fill"][:3], 200),
+                      (255, 210, 30, 220), (255, 215, 40, 255),
+                      coin_label, 14)
+            self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
+
             qw, qh = 196, 40
-            qx = w//2-qw//2;  qy = by-qh-10
+            qx = w//2-qw//2;  qy = sy2-qh-10
             hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
             _draw_btn(qx, qw, qy, qh,
                       theme_c["btn_hover"] if hov_q else (*theme_c["btn_fill"][:3], 145),
@@ -2066,6 +2082,9 @@ class GameWindow(arcade.Window):
         arcade.draw_text(bal_str, w//2, ty_title-30,
                          (255, 220, 40, 245), 14, anchor_x="center",
                          bold=True, font_name=font_n)
+        arcade.draw_text(self.shop_feedback, w//2, ty_title-54,
+                         self.shop_feedback_color, 10, anchor_x="center",
+                         bold=True, font_name=font_u)
 
         div_y = ptop - 88
         arcade.draw_line(pl+22, div_y, pr-22, div_y, tc["divider"], 1)
@@ -2159,6 +2178,64 @@ class GameWindow(arcade.Window):
                   tc["btn_hover"] if hov_bk else (*tc["btn_fill"][:3], 180),
                   tc["btn_border"], tc["btn_text"], "[ BACK ]", 14)
         self._shop_btns["__back__"] = (bkx, bkx+bkw, bky, bky+bkh)
+
+    def _open_shop(self, return_state: str) -> None:
+        self._shop_return_state = return_state
+        self.shop_feedback = "CLICK A CARD TO BUY OR UPGRADE"
+        self.shop_feedback_color = (160, 180, 215, 180)
+        self.game_state = STATE_SHOP
+
+    def _close_shop(self) -> None:
+        self.game_state = self._shop_return_state
+        if self.game_state == STATE_PLAYING:
+            self.set_mouse_visible(False)
+        else:
+            self.set_mouse_visible(True)
+
+    def _apply_shop_upgrade_runtime(self, item_id: str) -> None:
+        if self.player is None:
+            return
+
+        if item_id == "armor":
+            self.player.max_health += 25
+            self.player.health = min(self.player.max_health, self.player.health + 25)
+        elif item_id == "engine":
+            tier = self.upgrades.get("engine", 0)
+            self.player._engine_bonus = 1.0 + tier * 0.12
+        elif item_id == "starter_shield":
+            self.player.inventory["shield"] = max(self.player.inventory.get("shield", 0), 1)
+
+    def _purchase_shop_item(self, item_id: str) -> None:
+        item = next((shop_item for shop_item in SHOP_ITEMS if shop_item["id"] == item_id), None)
+        if item is None:
+            return
+
+        tier = self.upgrades.get(item_id, 0)
+        if tier >= item["max"]:
+            self.shop_feedback = f"{item['name']} IS ALREADY MAXED"
+            self.shop_feedback_color = (80, 220, 100, 220)
+            return
+
+        cost = item["cost"][tier]
+        if self.coins < cost:
+            self.shop_feedback = f"NOT ENOUGH COINS FOR {item['name']}"
+            self.shop_feedback_color = (255, 110, 110, 220)
+            return
+
+        self.coins -= cost
+        self.upgrades[item_id] = tier + 1
+        self._save_progress()
+
+        if self._shop_return_state == STATE_PAUSED:
+            self._apply_shop_upgrade_runtime(item_id)
+
+        new_tier = self.upgrades[item_id]
+        if new_tier >= item["max"]:
+            self.shop_feedback = f"{item['name']} MAXED OUT"
+            self.shop_feedback_color = (80, 220, 100, 220)
+        else:
+            self.shop_feedback = f"{item['name']} UPGRADED TO TIER {new_tier}"
+            self.shop_feedback_color = (255, 220, 40, 230)
 
     # ══════════════════════════════════════════════════
     #  GAME-WORLD DRAW HELPERS
@@ -2255,10 +2332,7 @@ class GameWindow(arcade.Window):
             ("2", "SHD",  "SHIELD",  inv.get("shield",   0),
              p.shield_active,  getattr(p, "shield_timer",   0), POWERUP_DURATION,
              ( 55, 215, 255)),
-            ("3", "AUTO", "AUTO",    inv.get("autofire",  0),
-             p.autofire_active,getattr(p, "autofire_timer", 0), POWERUP_DURATION,
-             (235,  80, 255)),
-            ("4", "TRP",  "TRIPLE",  inv.get("triple",   0),
+            ("3", "TRP",  "TRIPLE",  inv.get("triple",   0),
              p.triple_active,  getattr(p, "triple_timer",   0), POWERUP_DURATION,
              (255, 140,  40)),
         ]
@@ -2629,10 +2703,10 @@ class GameWindow(arcade.Window):
         # ── 360° electric aura ring while elec360 is active ──────────
         if self.player.elec360_active:
             t_pulse = self.bg_time
-            ring_r  = 48 + 12*math.sin(t_pulse*11)
+            ring_r  = ELECTRIC_360_RADIUS + 8*math.sin(t_pulse*8)
             for layer, (col, width) in enumerate([
-                    ((80,  50, 255, 38), 20),
-                    ((140, 90, 255, 80), 8),
+                    ((80,  50, 255, 30), 22),
+                    ((140, 90, 255, 72), 9),
                     ((220, 180, 255, 200), 2)]):
                 arcade.draw_circle_outline(
                     self.player.center_x, self.player.center_y,
@@ -2653,26 +2727,6 @@ class GameWindow(arcade.Window):
             rr = 38 + 2.5*math.sin(self.bg_time*9)
             arcade.draw_circle_outline(self.player.center_x, self.player.center_y,
                                         rr, tc["shield_ring"], 3)
-
-        # ── Auto-fire target lock ring ───────────────
-        if self.player.autofire_active:
-            tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
-            if tgt:
-                pulse = 0.55 + 0.45*math.sin(self.bg_time*9)
-                ring_r = max(tgt.width, tgt.height)*0.65 + 8
-                arcade.draw_circle_outline(tgt.center_x, tgt.center_y,
-                                            ring_r, (255, 80, 255, int(210*pulse)), 2)
-                # corner brackets
-                bk = ring_r * 0.55
-                for (sx, sy) in [(tgt.center_x-ring_r, tgt.center_y+ring_r),
-                                  (tgt.center_x+ring_r, tgt.center_y+ring_r),
-                                  (tgt.center_x-ring_r, tgt.center_y-ring_r),
-                                  (tgt.center_x+ring_r, tgt.center_y-ring_r)]:
-                    dx = 1 if sx > tgt.center_x else -1
-                    dy = 1 if sy > tgt.center_y else -1
-                    c_ = (255, 80, 255, int(230*pulse))
-                    arcade.draw_line(sx, sy, sx + dx*bk, sy, c_, 2)
-                    arcade.draw_line(sx, sy, sx, sy - dy*bk, c_, 2)
 
         # powerup sprites draw their own icon — no text label needed
 
@@ -2811,11 +2865,12 @@ class GameWindow(arcade.Window):
         is_beam_ship     = (self.selected_ship in BEAM_SHIP_INDICES)
         is_electric_ship = (self.selected_ship in ELECTRIC_SHIP_INDICES)
 
-        firing = self.mouse_held or p.autofire_active or p.elec360_active
+        firing = True
         if firing:
-            rate = (ELECTRIC_FIRE_RATE if is_electric_ship
-                    else AUTO_FIRE_RATE if p.autofire_active
-                    else NORMAL_FIRE_RATE)
+            if is_electric_ship and p.elec360_active:
+                rate = ELECTRIC_360_FIRE_RATE
+            else:
+                rate = ELECTRIC_FIRE_RATE if is_electric_ship else AUTO_FIRE_RATE
             self.fire_timer += delta
             while self.fire_timer >= rate:
                 if is_beam_ship:
@@ -2823,20 +2878,10 @@ class GameWindow(arcade.Window):
                 elif is_electric_ship:
                     if p.elec360_active:
                         self._fire_electric(full_360=True)
-                    elif p.autofire_active:
-                        tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
-                        aim_x = tgt.center_x if tgt else self.mouse_x
-                        aim_y = tgt.center_y if tgt else self.mouse_y
-                        self._fire_electric(aim_x=aim_x, aim_y=aim_y)
                     else:
                         self._fire_electric(full_360=False)
                 else:
-                    if p.autofire_active:
-                        tgt = self._targeted_enemy(self.mouse_x, self.mouse_y)
-                        self._shoot_toward(tgt.center_x if tgt else self.mouse_x,
-                                           tgt.center_y if tgt else self.mouse_y)
-                    else:
-                        self._shoot_toward(self.mouse_x, self.mouse_y)
+                    self._shoot_toward(self.mouse_x, self.mouse_y)
                 self.fire_timer -= rate
 
         # Update beams
@@ -2949,28 +2994,6 @@ class GameWindow(arcade.Window):
     #  ENEMY AI
     # ──────────────────────────────────────────────────
 
-    def _nearest_enemy(self):
-        """Returns the enemy closest to the player (fallback for auto-fire)."""
-        all_e = list(self.enemies)+list(self.shooting_enemies)+list(self.bosses)
-        if not all_e: return None
-        px, py = self.player.center_x, self.player.center_y
-        return min(all_e, key=lambda e: math.hypot(e.center_x-px, e.center_y-py))
-
-    def _targeted_enemy(self, cursor_x: float, cursor_y: float):
-        """
-        Returns the enemy closest to the cursor position.
-        Used by auto-fire so the player can steer which enemy gets shot.
-        Falls back to nearest-to-player if no enemy is within 220 px of cursor.
-        """
-        all_e = list(self.enemies)+list(self.shooting_enemies)+list(self.bosses)
-        if not all_e: return None
-        # find closest to cursor
-        best = min(all_e, key=lambda e: math.hypot(e.center_x-cursor_x, e.center_y-cursor_y))
-        dist = math.hypot(best.center_x-cursor_x, best.center_y-cursor_y)
-        if dist <= 220:
-            return best          # cursor is near this enemy — lock on
-        return self._nearest_enemy()  # cursor is in open space — pick nearest
-
     def _shoot_toward(self, tx, ty):
         px, py = self.player.center_x, self.player.center_y
         base   = math.atan2(ty-py, tx-px)
@@ -3012,17 +3035,22 @@ class GameWindow(arcade.Window):
         px, py = self.player.center_x, self.player.center_y
 
         if full_360:
-            # 360° burst — fire ELECTRIC_360_COUNT bolts evenly around the ship
+            # Short-range 360° storm around the ship.
             for i in range(ELECTRIC_360_COUNT):
                 ang  = i * (math.tau / ELECTRIC_360_COUNT)
-                bolt = ElectricBolt(px, py, ang)
+                bolt = ElectricBolt(
+                    px, py, ang,
+                    damage=ELECTRIC_360_DAMAGE,
+                    boss_damage=ELECTRIC_360_BOSS_DAMAGE,
+                    max_range=ELECTRIC_360_RADIUS
+                )
                 self.elec_bolts.append(bolt)
-            # Big electric burst effect
-            self._burst(px, py, 40, (130, 90, 255), 90, 310, 2.0, 4.5, .12, .35)
+            # Dense local storm effect
+            self._burst(px, py, 44, (130, 90, 255), 100, 330, 2.0, 4.5, .12, .35)
             self._burst(px, py, 20, (210, 180, 255), 50, 180, 1.2, 2.8, .08, .22)
             # Screen flash
             self.damage_flash = max(self.damage_flash, 0.45)
-            self.notif_text   = "⚡ 360° ELECTRIC BLAST!"
+            self.notif_text   = "⚡ 360° ELECTRIC STORM!"
             self.notif_color  = (150, 100, 255)
             self.notif_timer  = 1.4
         else:
@@ -3150,7 +3178,7 @@ class GameWindow(arcade.Window):
                 bolt, [self.enemies, self.shooting_enemies])
             if hits:
                 enemy = hits[0]
-                enemy.health -= ELECTRIC_DAMAGE
+                enemy.health -= bolt.damage
                 # Electric spark burst on hit
                 self._burst(bolt.center_x, bolt.center_y,
                             10, (140, 100, 255), 55, 200, 1.2, 2.6, .06, .18)
@@ -3171,7 +3199,7 @@ class GameWindow(arcade.Window):
             boss_hits = arcade.check_for_collision_with_list(bolt, self.bosses)
             if boss_hits:
                 boss = boss_hits[0]
-                boss.health -= ELECTRIC_BOSS_DAMAGE
+                boss.health -= bolt.boss_damage
                 self._burst(bolt.center_x, bolt.center_y,
                             12, (150, 110, 255), 60, 220, 1.4, 3.0, .08, .20)
                 bolt.remove_from_sprite_lists()
@@ -3250,13 +3278,6 @@ class GameWindow(arcade.Window):
 
     def _check_auto_triggers(self):
         p  = self.player
-        ne = len(self.enemies)+len(self.shooting_enemies)+len(self.bosses)
-        if (not p.autofire_active and ne > AUTO_FIRE_ENEMY_THRESHOLD
-                and p.inventory.get("autofire",0) > 0):
-            p.inventory["autofire"] -= 1
-            self._activate_powerup("autofire")
-            self.notif_text  = f"AUTO-FIRE TRIGGERED  ({ne} enemies!)"
-            self.notif_color = (255,130,255);  self.notif_timer = 1.6
         if (not p.shield_active
                 and (p.health/p.max_health) <= AUTO_SHIELD_HEALTH_RATIO
                 and p.inventory.get("shield",0) > 0):
@@ -3297,7 +3318,6 @@ class GameWindow(arcade.Window):
     def _activate_powerup(self, kind: str, immediate: bool = False):
         p = self.player
         msgs = {"shield":   ("SHIELD ONLINE!",       (110, 230, 255)),
-                "autofire": ("AUTO-FIRE!",            (255, 130, 255)),
                 "speed":    ("SPEED BOOST!",          (255, 220, 120)),
                 "triple":   ("TRIPLE SHOT!",          (255, 180, 120)),
                 "beam360":  ("360° BEAM BURST!",      (255, 120,  50)),
@@ -3440,12 +3460,23 @@ class GameWindow(arcade.Window):
                             self.game_state = STATE_PLAYING
                             self.set_mouse_visible(False)
                     elif name == "shop":
-                        self.game_state = STATE_SHOP
+                        self._open_shop(self.game_state)
                     elif name == "quit":
                         self.game_state = STATE_MENU
                         self.set_mouse_visible(True)
                     elif name == "theme":
                         self.menu_theme = "light" if self.menu_theme=="dark" else "dark"
+                    return
+            return
+
+        if self.game_state == STATE_SHOP:
+            for name, rect in self._shop_btns.items():
+                l, r, b, t = rect
+                if l<=x<=r and b<=y<=t:
+                    if name == "__back__":
+                        self._close_shop()
+                    else:
+                        self._purchase_shop_item(name)
                     return
             return
 
@@ -3479,8 +3510,8 @@ class GameWindow(arcade.Window):
             return
 
         if self.game_state == STATE_PLAYING:
-            self.mouse_held = True;  self.mouse_x = x;  self.mouse_y = y
-            self._shoot_toward(x, y);  self.fire_timer = 0.0
+            self.mouse_x = x
+            self.mouse_y = y
 
     def on_mouse_release(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_LEFT:
@@ -3514,6 +3545,8 @@ class GameWindow(arcade.Window):
             elif self.game_state == STATE_PAUSED:
                 self.game_state = STATE_PLAYING
                 self.set_mouse_visible(False)
+            elif self.game_state == STATE_SHOP:
+                self._close_shop()
             elif self.game_state == STATE_LEVEL_SELECT:
                 self.game_state = STATE_MENU
 

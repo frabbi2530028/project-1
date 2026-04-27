@@ -197,6 +197,19 @@ def _level_boss_hp(regular: int, shooting: int, difficulty_mult: float = 1.0) ->
     """Boss HP = combined HP of every enemy in the level."""
     return int((regular * ENEMY_HEALTH + shooting * ENEMY_HEALTH * 1.4) * difficulty_mult)
 
+
+def _campaign_total_boss_hp(difficulty_mult: float = 1.0) -> int:
+    """
+    Final level boss HP = every level's enemies combined plus every level boss combined.
+    This makes level 10 the full campaign boss.
+    """
+    total = 0
+    for lvl in LEVELS:
+        enemy_hp = _level_boss_hp(lvl["regular_enemies"], lvl["shooting_enemies"], 1.0)
+        boss_hp = _level_boss_hp(lvl["regular_enemies"], lvl["shooting_enemies"], lvl["boss_hp_mult"])
+        total += enemy_hp + boss_hp
+    return int(total * difficulty_mult)
+
 def _build_levels() -> list:
     """
     Generate 10 levels.  Enemy count scales logarithmically from 200 (L1) to 600 (L10).
@@ -894,6 +907,8 @@ class BossEnemy(arcade.Sprite):
         self.center_x      = x;  self.center_y  = y
         self.health        = health;  self.max_health = health
         self.normal_timer  = 0.0;  self.special_timer = 0.0
+        self.electric_timer = 0.0
+        self.is_final_boss = False
 
 
 # ─────────────────────────────────────────────────────
@@ -1077,6 +1092,12 @@ ELECTRIC_360_DURATION = 7.0     # how long 360° mode lasts
 ELECTRIC_360_RADIUS   = 185     # storm only reaches this far from the ship
 ELECTRIC_360_DAMAGE   = 46      # stronger than the normal electric bolt
 ELECTRIC_360_BOSS_DAMAGE = 115
+
+FINAL_BOSS_ELECTRIC_RANGE = 230
+FINAL_BOSS_ELECTRIC_RADIUS = 245
+FINAL_BOSS_ELECTRIC_COUNT = 36
+FINAL_BOSS_ELECTRIC_FIRE_RATE = 0.90
+FINAL_BOSS_ELECTRIC_DAMAGE = 16
 
 
 class ElectricBolt(arcade.Sprite):
@@ -1263,7 +1284,7 @@ class GameWindow(arcade.Window):
         # ── Game object handles ───────────────────────
         self.player = self.player_list = None
         self.enemies = self.shooting_enemies = self.bosses = None
-        self.bullets = self.enemy_bullets = self.powerups = None
+        self.bullets = self.enemy_bullets = self.enemy_elec_bolts = self.powerups = None
 
         # ── Runtime vars ─────────────────────────────
         self.score       = 0
@@ -1349,6 +1370,7 @@ class GameWindow(arcade.Window):
         self.bosses           = arcade.SpriteList()
         self.bullets          = arcade.SpriteList()
         self.enemy_bullets    = arcade.SpriteList()
+        self.enemy_elec_bolts = arcade.SpriteList()
         self.powerups         = arcade.SpriteList()
         self.coins_list       = arcade.SpriteList()   # ← coin sprites on screen
 
@@ -1974,9 +1996,12 @@ class GameWindow(arcade.Window):
 
                 # Stats (compact)
                 total_e = lvl["regular_enemies"]+lvl["shooting_enemies"]
-                boss_hp = _level_boss_hp(lvl["regular_enemies"],
-                                          lvl["shooting_enemies"],
-                                          lvl["boss_hp_mult"])
+                if idx == len(LEVELS) - 1:
+                    boss_hp = _campaign_total_boss_hp()
+                else:
+                    boss_hp = _level_boss_hp(lvl["regular_enemies"],
+                                              lvl["shooting_enemies"],
+                                              lvl["boss_hp_mult"])
                 stat_sz = max(7, min(9, cw//15))
                 sy      = div_y2 - 4
                 for lbl2, val2 in [("ENEMIES", f"{total_e}"),
@@ -2732,6 +2757,22 @@ class GameWindow(arcade.Window):
         # ── Electric bolts (Reaper) ───────────────────────────────────
         for bolt in self.elec_bolts:
             bolt.draw_bolt()
+        for bolt in self.enemy_elec_bolts:
+            bolt.draw_bolt()
+
+        # Final boss electric danger radius
+        for boss in self.bosses:
+            if getattr(boss, "is_final_boss", False):
+                pulse = 0.65 + 0.35 * math.sin(self.bg_time * 6.5)
+                rr = FINAL_BOSS_ELECTRIC_RANGE + 6 * math.sin(self.bg_time * 5.0)
+                arcade.draw_circle_outline(
+                    boss.center_x, boss.center_y, rr,
+                    (130, 90, 255, int(95 * pulse)), 4
+                )
+                arcade.draw_circle_outline(
+                    boss.center_x, boss.center_y, rr + 4,
+                    (220, 180, 255, int(45 * pulse)), 1
+                )
 
         # ── 360° electric aura ring while elec360 is active ──────────
         if self.player.elec360_active:
@@ -2924,7 +2965,11 @@ class GameWindow(arcade.Window):
 
         # Update electric bolts
         self.elec_bolts.update(delta)
+        self.enemy_elec_bolts.update(delta)
         for bolt in list(self.elec_bolts):
+            if bolt.life <= 0:
+                bolt.remove_from_sprite_lists()
+        for bolt in list(self.enemy_elec_bolts):
             if bolt.life <= 0:
                 bolt.remove_from_sprite_lists()
 
@@ -2938,6 +2983,9 @@ class GameWindow(arcade.Window):
                 b.remove_from_sprite_lists()
         for b in list(self.enemy_bullets):
             if b.life<=0 or b.right<-30 or b.left>ww+30 or b.top<-30 or b.bottom>hh+30:
+                b.remove_from_sprite_lists()
+        for b in list(self.enemy_elec_bolts):
+            if b.life<=0 or b.right<-40 or b.left>ww+40 or b.top<-40 or b.bottom>hh+40:
                 b.remove_from_sprite_lists()
         for pu in list(self.powerups):
             if pu.top < -10 or pu.life <= 0:
@@ -3104,6 +3152,21 @@ class GameWindow(arcade.Window):
                         random.uniform(1.2, 2.2), random.uniform(0.05, 0.12),
                         (160, 120, 255), 0.82)
 
+    def _fire_final_boss_electric_storm(self, boss: BossEnemy) -> None:
+        px, py = boss.center_x, boss.center_y
+        for i in range(FINAL_BOSS_ELECTRIC_COUNT):
+            ang = i * (math.tau / FINAL_BOSS_ELECTRIC_COUNT)
+            self.enemy_elec_bolts.append(
+                ElectricBolt(
+                    px, py, ang,
+                    damage=FINAL_BOSS_ELECTRIC_DAMAGE,
+                    boss_damage=0,
+                    max_range=FINAL_BOSS_ELECTRIC_RADIUS
+                )
+            )
+        self._burst(px, py, 56, (150, 95, 255), 110, 360, 2.1, 4.8, .12, .34)
+        self._burst(px, py, 24, (220, 200, 255), 60, 200, 1.3, 2.8, .08, .20)
+
     def update_enemies(self, delta: float, difficulty: float) -> None:
         p  = self.player
         dp = self._dpreset
@@ -3146,6 +3209,7 @@ class GameWindow(arcade.Window):
 
             boss.normal_timer  += delta
             boss.special_timer += delta
+            boss.electric_timer += delta
 
             # regular single shot
             if boss.normal_timer >= dp["boss_normal_rate"]:
@@ -3167,6 +3231,12 @@ class GameWindow(arcade.Window):
                 self._burst(boss.center_x, boss.center_y,
                             16, (255,100,100), 60, 170, 2, 3.8, .15, .35)
                 boss.special_timer = 0.0
+
+            if getattr(boss, "is_final_boss", False):
+                dist = math.hypot(p.center_x - boss.center_x, p.center_y - boss.center_y)
+                if dist <= FINAL_BOSS_ELECTRIC_RANGE and boss.electric_timer >= FINAL_BOSS_ELECTRIC_FIRE_RATE:
+                    self._fire_final_boss_electric_storm(boss)
+                    boss.electric_timer = 0.0
 
     # ──────────────────────────────────────────────────
     #  COLLISIONS
@@ -3276,6 +3346,19 @@ class GameWindow(arcade.Window):
                 p.health -= 10;  self.combo = 0
                 self.damage_flash = max(self.damage_flash,0.95)
                 self._burst(hx,hy,18,(255,95,95),90,260,1.6,3.4,.15,.32)
+
+        for bolt in list(self.enemy_elec_bolts):
+            if not arcade.check_for_collision(bolt, p):
+                continue
+            hx, hy = bolt.center_x, bolt.center_y
+            bolt.remove_from_sprite_lists()
+            if p.shield_active:
+                self._burst(hx, hy, 12, (120, 220, 255), 90, 240, 1.3, 2.8, .08, .20)
+            else:
+                p.health -= bolt.damage
+                self.combo = 0
+                self.damage_flash = max(self.damage_flash, 1.0)
+                self._burst(hx, hy, 22, (160, 110, 255), 95, 280, 1.7, 3.8, .12, .26)
 
         touching = arcade.check_for_collision_with_lists(
             p, [self.enemies, self.shooting_enemies, self.bosses])
@@ -3445,13 +3528,19 @@ class GameWindow(arcade.Window):
         lvl  = LEVELS[self.selected_level]
         dp   = self._dpreset
         difficulty = min(3.0, self.time_alive / 90.0)
-        # Combined HP of every enemy in the level
-        boss_hp = _level_boss_hp(
-            lvl["regular_enemies"],
-            lvl["shooting_enemies"],
-            lvl["boss_hp_mult"] * dp["boss_health_mult"] * (1 + 0.2 * difficulty)
-        )
+        mult = dp["boss_health_mult"] * (1 + 0.2 * difficulty)
+        if self.selected_level == len(LEVELS) - 1:
+            boss_hp = _campaign_total_boss_hp(mult)
+        else:
+            # Combined HP of every enemy in the level
+            boss_hp = _level_boss_hp(
+                lvl["regular_enemies"],
+                lvl["shooting_enemies"],
+                lvl["boss_hp_mult"] * mult
+            )
         boss = BossEnemy(self.width // 2, self.height + 55, boss_hp)
+        if self.selected_level == len(LEVELS) - 1:
+            boss.is_final_boss = True
         self.bosses.append(boss)
         lc = lvl["color"]
         self.notif_text  = f"⚠  LEVEL {lvl['number']} BOSS  —  {boss_hp:,} HP!"

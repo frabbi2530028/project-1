@@ -433,7 +433,7 @@ SHIPS = [
         "color":     (255, 90, 60),
         "available": True,
         "texture":   "image/interceptor.png",
-        "tex_scale": 0.18,
+        "tex_scale": 0.17,
         "spd_mult":  1.15,
         "hp_mult":   0.80,
         # unique trait flags
@@ -1782,8 +1782,17 @@ class GameWindow(arcade.Window):
                       coin_label, 14)
             self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
 
+            rw, rh = 196, 40
+            rx = w//2-rw//2;  ry = sy2-rh-10
+            hov_r = self._is_hovering(rx, rx+rw, ry, ry+rh)
+            _draw_btn(rx, rw, ry, rh,
+                      theme_c["btn_hover"] if hov_r else (145, 40, 40, 145),
+                      (255, 110, 110, 190), theme_c["btn_text_dim"],
+                      "RESET RUN", 14)
+            self._menu_btns["reset"] = (rx, rx+rw, ry, ry+rh)
+
             qw, qh = 196, 40
-            qx = w//2-qw//2;  qy = sy2-qh-10
+            qx = w//2-qw//2;  qy = ry-qh-10
             hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
             _draw_btn(qx, qw, qy, qh,
                       theme_c["btn_hover"] if hov_q else (*theme_c["btn_fill"][:3], 145),
@@ -3591,6 +3600,8 @@ class GameWindow(arcade.Window):
                             self.set_mouse_visible(False)
                     elif name == "shop":
                         self._open_shop(self.game_state)
+                    elif name == "reset":
+                        self.setup()
                     elif name == "quit":
                         self.game_state = STATE_MENU
                         self.set_mouse_visible(True)

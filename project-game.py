@@ -1489,6 +1489,79 @@ class GameWindow(arcade.Window):
                 arcade.draw_circle_outline(sx + i*spacing, y, 6,
                                            (*color[:3], 120), 1)
 
+    def _draw_pause_ship_summary(self, left: int, right: int, bottom: int, top: int,
+                                 theme_c: dict, t: float) -> None:
+        ship = SHIPS[self.selected_ship]
+        width = right - left
+        height = top - bottom
+        font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        header_size = 10 if height >= 86 else 9
+        name_size = 17 if height >= 96 else 14
+        tag_size = 10 if height >= 86 else 9
+        stat_label_size = 9 if height >= 86 else 8
+        preview_radius = min(32, max(22, int(height * 0.30)))
+        preview_offset_top = min(48, int(height * 0.42))
+        tagline_offset_top = min(70, int(height * 0.64))
+        stat_y = bottom + max(20, int(height * 0.24))
+
+        arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, theme_c["card_fill"])
+        arcade.draw_lrbt_rectangle_outline(left, right, bottom, top, theme_c["card_sel_border"], 2)
+
+        pulse = 0.5 + 0.5 * math.sin(t * 4.0)
+        arcade.draw_lrbt_rectangle_outline(
+            left - 2, right + 2, bottom - 2, top + 2,
+            (*ship["color"], int(45 + 35 * pulse)), 2
+        )
+
+        preview_x = left + min(58, width * 0.12)
+        preview_y = bottom + height * 0.52
+        arcade.draw_circle_filled(preview_x, preview_y, preview_radius, (*ship["color"], 32))
+
+        if ship["texture"]:
+            tex = load_texture_clean(ship["texture"], ship["tex_scale"])
+            draw_y = preview_y + math.sin(t * 2.8) * 3
+            try:
+                arcade.draw_texture_rect(
+                    tex,
+                    arcade.XYWH(preview_x, draw_y, tex.width, tex.height)
+                )
+            except (AttributeError, TypeError):
+                _sl = arcade.SpriteList()
+                _sp = arcade.Sprite()
+                _sp.texture = tex
+                _sp.center_x = preview_x
+                _sp.center_y = draw_y
+                _sl.append(_sp)
+                _sl.draw()
+
+        separator_x = left + min(108, width * 0.24)
+        arcade.draw_line(separator_x, bottom + 14, separator_x, top - 14, theme_c["divider"], 1)
+
+        name_x = separator_x + 16
+        arcade.draw_text("CURRENT SHIP", name_x, top - 24, theme_c["text_dim"], header_size,
+                         bold=True, font_name=font_ui_local)
+        arcade.draw_text(ship["name"], name_x + 1, top - preview_offset_top - 1, (0, 0, 0, 95), name_size,
+                         bold=True, font_name=font_ui_local)
+        arcade.draw_text(ship["name"], name_x, top - preview_offset_top, theme_c["card_sel_border"], name_size,
+                         bold=True, font_name=font_ui_local)
+        arcade.draw_text(ship["tagline"], name_x, top - tagline_offset_top, theme_c["text"], tag_size,
+                         font_name=font_ui_local)
+
+        stats_left = max(name_x + 20, left + width * 0.46)
+        stats_right = right - 26
+        stat_step = (stats_right - stats_left) / 3
+        for idx, (label, value) in enumerate((
+            ("SPD", ship["stat_spd"]),
+            ("ATK", ship["stat_atk"]),
+            ("DEF", ship["stat_def"]),
+        )):
+            cx = stats_left + stat_step * (idx + 0.5)
+            arcade.draw_text(label, cx, stat_y + 16, theme_c["text_dim"], stat_label_size,
+                             anchor_x="center", bold=True,
+                             font_name=("Courier New", "Menlo", "monospace"))
+            self._draw_stat_pips(cx, stat_y, value, 5,
+                                 theme_c["stat_filled"], theme_c["stat_empty"])
+
     def _draw_menu(self):
         is_pause = (self.game_state == STATE_PAUSED)
         # Pause overlay always uses the dark theme for a clean dark panel look.
@@ -1557,6 +1630,137 @@ class GameWindow(arcade.Window):
 
         div_y = ptop - 97
         arcade.draw_line(pl+22, div_y, pr-22, div_y, theme_c["divider"], 1)
+        self._ship_cards = {}
+        self._menu_btns = {}
+        self._diff_btns = {}
+
+        if is_pause:
+            pause_scale = max(0.78, min(1.0, ph / 580))
+            pad_bottom = max(12, int(16 * pause_scale))
+            gap_small = max(8, int(10 * pause_scale))
+            gap_medium = max(10, int(12 * pause_scale))
+            diff_label_gap = max(12, int(16 * pause_scale))
+            info_gap = max(14, int(18 * pause_scale))
+            info_top = div_y - info_gap
+
+            tw, th2 = 190, max(26, int(32 * pause_scale))
+            tx = w//2 - tw//2
+            ty2 = pb + pad_bottom
+
+            qw, qh = 196, max(32, int(40 * pause_scale))
+            qx = w//2 - qw//2
+            qy = ty2 + th2 + gap_small
+
+            rw, rh = 196, max(32, int(40 * pause_scale))
+            rx = w//2 - rw//2
+            ry = qy + qh + gap_small
+
+            sw, sh2 = 230, max(30, int(38 * pause_scale))
+            sx2 = w//2 - sw//2
+            sy2 = ry + rh + gap_small
+
+            bw, bh = 230, max(40, int(50 * pause_scale))
+            bx = w//2 - bw//2
+            by = sy2 + sh2 + gap_medium
+
+            dw, dh = max(96, int(118 * pause_scale)), max(30, int(38 * pause_scale))
+            dgap = 10
+            dtotal = dw * 3 + dgap * 2
+            dx0 = (w - dtotal) // 2
+            diff_by = by + bh + info_gap
+            diff_label_y = diff_by + dh + diff_label_gap
+
+            info_bottom = diff_label_y + info_gap
+            self._draw_pause_ship_summary(pl + 22, pr - 22, info_bottom, info_top, theme_c, t)
+
+            diff_font_size = 12 if pause_scale > 0.9 else 11
+            diff_btn_font = 14 if pause_scale > 0.9 else 13
+
+            arcade.draw_text("RUN DIFFICULTY", w//2 + 1, diff_label_y - 1, (0, 0, 0, 90), diff_font_size,
+                             anchor_x="center", bold=True, font_name=font_ui_local)
+            arcade.draw_text("RUN DIFFICULTY", w//2, diff_label_y,
+                             theme_c["text"], diff_font_size, anchor_x="center", bold=True, font_name=font_ui_local)
+
+            for di, dkey in enumerate(DIFFICULTY_ORDER):
+                preset = DIFFICULTY_PRESETS[dkey]
+                dleft = dx0 + di * (dw + dgap)
+                dright = dleft + dw
+                dtop = diff_by + dh
+                sel_d = (dkey == self.selected_difficulty)
+                hov_d = self._is_hovering(dleft, dright, diff_by, dtop)
+
+                dc = preset["color"]
+                if sel_d:
+                    fill = (*dc, 210)
+                    border = (*dc, 255)
+                    bthk = 3
+                    tcolor = (255, 255, 255)
+                elif hov_d:
+                    fill = (*dc[:3], 80)
+                    border = (*dc, 200)
+                    bthk = 2
+                    tcolor = (255, 255, 255)
+                else:
+                    fill = (*dc[:3], 30)
+                    border = (*dc[:3], 110)
+                    bthk = 1
+                    tcolor = (*dc[:3], 200)
+
+                arcade.draw_lrbt_rectangle_filled(dleft, dright, diff_by, dtop, fill)
+                arcade.draw_lrbt_rectangle_outline(dleft, dright, diff_by, dtop, border, bthk)
+                if sel_d:
+                    pulse = 0.5 + 0.5 * math.sin(t * 4.0)
+                    arcade.draw_lrbt_rectangle_outline(
+                        dleft - 3, dright + 3, diff_by - 3, dtop + 3, (*dc, int(50 + 45 * pulse)), 2
+                    )
+                sa_ = min(175, int((tcolor[3] if len(tcolor) == 4 else 255) * 0.4))
+                arcade.draw_text(preset["label"], dleft + dw//2 + 1, diff_by + dh//2 - 1,
+                                 (0, 0, 0, sa_), diff_btn_font, anchor_x="center", anchor_y="center",
+                                 bold=True, font_name=font_ui_local)
+                arcade.draw_text(preset["label"], dleft + dw//2, diff_by + dh//2,
+                                 tcolor, diff_btn_font, anchor_x="center", anchor_y="center",
+                                 bold=True, font_name=font_ui_local)
+                self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
+
+            hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
+            _draw_btn(bx, bw, by, bh,
+                      theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
+                      theme_c["btn_border"], theme_c["btn_text"],
+                      "[ RESUME ]", 20 if pause_scale > 0.9 else 18)
+            self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
+
+            hov_s = self._is_hovering(sx2, sx2+sw, sy2, sy2+sh2)
+            coin_label = f"[ SHOP ]  $ {self.coins:,}"
+            _draw_btn(sx2, sw, sy2, sh2,
+                      theme_c["btn_hover"] if hov_s else (*theme_c["btn_fill"][:3], 200),
+                      (255, 210, 30, 220), (255, 215, 40, 255),
+                      coin_label, 14 if pause_scale > 0.9 else 13)
+            self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
+
+            hov_r = self._is_hovering(rx, rx+rw, ry, ry+rh)
+            _draw_btn(rx, rw, ry, rh,
+                      theme_c["btn_hover"] if hov_r else (145, 40, 40, 145),
+                      (255, 110, 110, 190), theme_c["btn_text_dim"],
+                      "RESET RUN", 14 if pause_scale > 0.9 else 13)
+            self._menu_btns["reset"] = (rx, rx+rw, ry, ry+rh)
+
+            hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
+            _draw_btn(qx, qw, qy, qh,
+                      theme_c["btn_hover"] if hov_q else (*theme_c["btn_fill"][:3], 145),
+                      (*theme_c["btn_border"][:3], 152), theme_c["btn_text_dim"],
+                      "QUIT TO MENU", 14 if pause_scale > 0.9 else 13)
+            self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
+
+            hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
+            _draw_btn(tx, tw, ty2, th2,
+                      theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 145),
+                      (*theme_c["btn_border"][:3], 158),
+                      theme_c["toggle_text"],
+                      "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]",
+                      12 if pause_scale > 0.9 else 11)
+            self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
+            return
+
         arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-23, (0,0,0,90), 13,
                          anchor_x="center", bold=True, font_name=font_ui_local)
         arcade.draw_text("SELECT YOUR SHIP", w//2, div_y-22,
@@ -1573,7 +1777,6 @@ class GameWindow(arcade.Window):
         cx0  = pl + 22                   # start at panel left margin
         cy0  = div_y - 54 - ch           # card bottom y
 
-        self._ship_cards = {}
         for i, ship in enumerate(SHIPS):
             cl  = cx0+i*(cw+gap);  cr = cl+cw
             cb  = cy0;             ct = cy0+ch
@@ -1691,8 +1894,6 @@ class GameWindow(arcade.Window):
             self._ship_cards[i] = (cl, cr, cb, ct)
 
         # ── Buttons ──────────────────────────────────
-        self._menu_btns = {}
-        self._diff_btns = {}
         btn_top = cy0 - 12
 
         # ── Difficulty selector ──────────────────────

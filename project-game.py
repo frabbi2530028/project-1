@@ -590,7 +590,7 @@ def _make_phantom_texture() -> arcade.Texture:
     # Wing edge glow
     d.line([(cx, 20), (cx+40, S-28)], fill=(230, 180, 255, 255), width=2)
     d.line([(cx, 20), (cx-40, S-28)], fill=(230, 180, 255, 255), width=2)
-    # Cockpit glow
+    # Cockpit glowff
     d.ellipse((cx-5, 10, cx+5, 24), fill=(240, 200, 255, 255))
     # Engine exhaust
     d.ellipse((cx-4, S-18, cx+4, S-8), fill=(180, 100, 255, 200))
@@ -669,6 +669,26 @@ def solid_texture(size: int, color: tuple) -> arcade.Texture:
     tex = arcade.Texture(image=Image.new("RGBA", (size, size), color))
     _texture_cache[key] = tex
     return tex
+
+
+def _draw_texture_fitted(texture: arcade.Texture, center_x: float, center_y: float,
+                         max_width: float, max_height: float) -> None:
+    """Draw a texture scaled to fit inside a bounded box."""
+    if texture.width <= 0 or texture.height <= 0:
+        return
+
+    scale = min(max_width / texture.width, max_height / texture.height)
+    draw_w = max(1, texture.width * scale)
+    draw_h = max(1, texture.height * scale)
+    try:
+        arcade.draw_texture_rect(texture, arcade.XYWH(center_x, center_y, draw_w, draw_h))
+    except (AttributeError, TypeError):
+        sprite = arcade.Sprite()
+        sprite.texture = texture
+        sprite.center_x = center_x
+        sprite.center_y = center_y
+        sprite.scale = scale
+        sprite.draw()
 
 
 # ─────────────────────────────────────────────────────
@@ -1473,8 +1493,10 @@ class GameWindow(arcade.Window):
 
     @staticmethod
     def _draw_stat_pips(cx: int, y: int, value: int, max_v: int,
-                        c_on: tuple, c_off: tuple) -> None:
-        spacing = 18   # was 14 — wider spacing between pips
+                        c_on: tuple, c_off: tuple, max_width: int | None = None) -> None:
+        spacing = 18
+        if max_width is not None and max_v > 1:
+            spacing = min(spacing, max(12, int(max_width / (max_v - 1))))
         total   = spacing * (max_v - 1)
         sx      = cx - total // 2
         for i in range(max_v):
@@ -1520,19 +1542,7 @@ class GameWindow(arcade.Window):
         if ship["texture"]:
             tex = load_texture_clean(ship["texture"], ship["tex_scale"])
             draw_y = preview_y + math.sin(t * 2.8) * 3
-            try:
-                arcade.draw_texture_rect(
-                    tex,
-                    arcade.XYWH(preview_x, draw_y, tex.width, tex.height)
-                )
-            except (AttributeError, TypeError):
-                _sl = arcade.SpriteList()
-                _sp = arcade.Sprite()
-                _sp.texture = tex
-                _sp.center_x = preview_x
-                _sp.center_y = draw_y
-                _sl.append(_sp)
-                _sl.draw()
+            _draw_texture_fitted(tex, preview_x, draw_y, preview_radius * 1.75, preview_radius * 1.75)
 
         separator_x = left + min(108, width * 0.24)
         arcade.draw_line(separator_x, bottom + 14, separator_x, top - 14, theme_c["divider"], 1)
@@ -1560,7 +1570,7 @@ class GameWindow(arcade.Window):
                              anchor_x="center", bold=True,
                              font_name=("Courier New", "Menlo", "monospace"))
             self._draw_stat_pips(cx, stat_y, value, 5,
-                                 theme_c["stat_filled"], theme_c["stat_empty"])
+                                 theme_c["stat_filled"], theme_c["stat_empty"], 72)
 
     def _draw_menu(self):
         is_pause = (self.game_state == STATE_PAUSED)
@@ -1803,51 +1813,37 @@ class GameWindow(arcade.Window):
                 arcade.draw_lrbt_rectangle_outline(
                     cl-3,cr+3,cb-3,ct+3, (*g,int(55+50*pulse)), 2)
 
-            # ship preview — centred in top 48% of card (above text zone at 52%)
-            pcx = cl + cw//2
-            pcy = cb + int(ch * 0.76)   # 76% up from bottom = centre of top 48%
+            content_pad = max(8, int(cw * 0.06))
+            fname_sz = max(9, min(12, cw // 14))
+            ftag_sz  = max(7, min(9, cw // 17))
+            fstat_sz = max(7, min(9, cw // 17))
+
+            badge_y  = cb + int(ch * 0.05)
+            def_y    = cb + int(ch * 0.14)
+            atk_y    = cb + int(ch * 0.23)
+            spd_y    = cb + int(ch * 0.32)
+            tag_y    = cb + int(ch * 0.41)
+            name_y   = cb + int(ch * 0.50)
+
+            preview_bottom = name_y + fname_sz + 10
+            preview_top = ct - content_pad
+            preview_height = max(24, preview_top - preview_bottom)
+            preview_width = max(24, cw - content_pad * 2)
+
+            pcx = cl + cw // 2
+            pcy = preview_bottom + preview_height * 0.55
 
             if avl and ship["texture"]:
                 tex  = load_texture_clean(ship["texture"], ship["tex_scale"])
                 draw_y = pcy + (math.sin(t*2.8)*4 if sel else 0)
-                # draw_texture_rect works across arcade versions; fall back to SpriteList if needed
-                try:
-                    arcade.draw_texture_rect(
-                        tex,
-                        arcade.XYWH(pcx, draw_y, tex.width, tex.height)
-                    )
-                except (AttributeError, TypeError):
-                    # Older arcade versions don't have draw_texture_rect — use SpriteList
-                    _sl = arcade.SpriteList()
-                    _sp = arcade.Sprite()
-                    _sp.texture  = tex
-                    _sp.center_x = pcx
-                    _sp.center_y = draw_y
-                    _sl.append(_sp)
-                    _sl.draw()
-                arcade.draw_circle_filled(pcx, pcy, 30,
+                arcade.draw_circle_filled(pcx, pcy, min(30, preview_width * 0.24),
                                           (*ship["color"], 35+int(20*math.sin(t*3))))
+                _draw_texture_fitted(tex, pcx, draw_y, preview_width, preview_height)
             else:
                 arcade.draw_circle_outline(pcx,pcy,28, theme_c["locked_border"],2)
                 arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 28,
                                  anchor_x="center", anchor_y="center", bold=True,
                                  font_name=("Futura","Century Gothic","Arial"))
-
-            # ── Ship name / stats — proportional layout ──
-            # All Y positions relative to ch so they scale with card height.
-            # Text zone = bottom 52% of card; preview zone = top 48%.
-            # Gap of at least 8px kept between preview bottom and name top.
-            badge_y  = cb + int(ch * 0.04)
-            def_y    = cb + int(ch * 0.14)
-            atk_y    = cb + int(ch * 0.24)
-            spd_y    = cb + int(ch * 0.34)
-            tag_y    = cb + int(ch * 0.43)
-            name_y   = cb + int(ch * 0.52)
-
-            # scale font size with card width so text doesn't overflow
-            fname_sz = max(8, min(12, cw // 13))
-            ftag_sz  = max(7, min(10, cw // 16))
-            fstat_sz = max(7, min(10, cw // 16))
 
             nc = theme_c["locked_text"] if not avl else \
                  (theme_c["card_sel_border"] if sel else theme_c["text"])
@@ -1870,15 +1866,16 @@ class GameWindow(arcade.Window):
                                  (*theme_c["divider"][:3], 80), 1)
 
                 # stat rows — SPD / ATK / DEF
-                pip_x = cl + int(cw * 0.42)   # pips start at 42% of card width
+                pip_x = cl + int(cw * 0.68)
+                pip_span = max(54, int(cw * 0.32))
                 for row_y, lbl, val in [(spd_y, "SPD", ship["stat_spd"]),
                                          (atk_y, "ATK", ship["stat_atk"]),
                                          (def_y, "DEF", ship["stat_def"])]:
-                    arcade.draw_text(lbl, cl+6, row_y, theme_c["text_dim"], fstat_sz,
+                    arcade.draw_text(lbl, cl + content_pad, row_y, theme_c["text_dim"], fstat_sz,
                                      anchor_y="center", bold=True,
                                      font_name=("Courier New","Menlo","monospace"))
                     self._draw_stat_pips(pip_x, row_y, val, 5,
-                                         theme_c["stat_filled"], theme_c["stat_empty"])
+                                         theme_c["stat_filled"], theme_c["stat_empty"], pip_span)
 
                 # SELECTED badge
                 if sel:
@@ -2025,6 +2022,7 @@ class GameWindow(arcade.Window):
         FU     = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
         FN     = ("Courier New", "Menlo", "Monaco", "monospace")
         t      = self.bg_time
+        ui_scale = max(0.82, min(1.35, min(w / 1360, h / 920)))
 
         # ── Background ───────────────────────────────
         arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
@@ -2037,7 +2035,7 @@ class GameWindow(arcade.Window):
             arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
 
         # ── Outer panel ──────────────────────────────
-        PAD  = 18
+        PAD  = max(12, int(18 * ui_scale))
         pw   = w - PAD*2
         ph   = h - PAD*2
         pl   = PAD;  pr = pl+pw
@@ -2054,78 +2052,96 @@ class GameWindow(arcade.Window):
             arcade.draw_line(cx2,cy2,cx2,cy2+sy*sz,ac,2)
 
         # ── Header ───────────────────────────────────
-        HEADER_H = 54
+        HEADER_H = max(54, int(58 * ui_scale))
+        title_size = max(24, int(28 * ui_scale))
+        coin_size = max(11, int(12 * ui_scale))
         header_y  = ptop - HEADER_H
-        arcade.draw_text("SELECT LEVEL", w//2+2, ptop-34,
-                         tc["title_shadow"], 26, anchor_x="center", bold=True,
+        arcade.draw_text("SELECT LEVEL", w//2+2, ptop-int(34 * ui_scale),
+                         tc["title_shadow"], title_size, anchor_x="center", bold=True,
                          font_name=FU)
-        arcade.draw_text("SELECT LEVEL", w//2, ptop-32,
-                         tc["title"], 26, anchor_x="center", bold=True,
+        arcade.draw_text("SELECT LEVEL", w//2, ptop-int(32 * ui_scale),
+                         tc["title"], title_size, anchor_x="center", bold=True,
                          font_name=FU)
         # coin balance right-aligned
-        arcade.draw_text(f"$ {self.coins:,}", pr-14, ptop-30,
-                         (255,220,40,230), 12, anchor_x="right",
+        arcade.draw_text(f"$ {self.coins:,}", pr-14, ptop-int(30 * ui_scale),
+                         (255,220,40,230), coin_size, anchor_x="right",
                          bold=True, font_name=FN)
         arcade.draw_line(pl+14, header_y, pr-14, header_y, tc["divider"], 1)
 
         # ── Bottom bar (diff + play + back) ──────────
-        BOT_H = 46
+        BOT_H = max(50, int(52 * ui_scale))
         bot_y  = pb + BOT_H         # top of bottom bar
         arcade.draw_line(pl+14, bot_y, pr-14, bot_y, tc["divider"], 1)
 
+        bar_bottom = pb + max(8, int(9 * ui_scale))
+        bar_center_y = pb + BOT_H * 0.5
+        pill_h = max(24, int(26 * ui_scale))
+        pill_w = max(62, int(76 * ui_scale))
+        pill_gap = max(5, int(6 * ui_scale))
+        diff_label_size = max(8, int(10 * ui_scale))
+        diff_text_size = max(8, int(10 * ui_scale))
+
         # Difficulty pills
-        arcade.draw_text("DIFFICULTY", pl+14, pb+14, tc["text_dim"],
-                         9, font_name=FU)
-        dx = pl + 104
+        arcade.draw_text("DIFFICULTY", pl+14, bar_center_y - diff_label_size * 0.45, tc["text_dim"],
+                         diff_label_size, font_name=FU)
+        dx = pl + max(92, int(108 * ui_scale))
         self._ls_diff_btns = {}
         for dkey, dlabel in [("easy","EASY"),("medium","MED"),("hard","HARD")]:
-            dw2 = 72;  dh2 = 24
+            dw2 = pill_w;  dh2 = pill_h
             sel_d = (dkey == self.selected_difficulty)
             dc = {"easy":(60,200,80),"medium":(220,180,20),"hard":(220,60,60)}[dkey]
-            hov_d = self._is_hovering(dx, dx+dw2, pb+10, pb+10+dh2)
+            pill_bottom = int(bar_center_y - dh2 / 2)
+            pill_top = pill_bottom + dh2
+            hov_d = self._is_hovering(dx, dx+dw2, pill_bottom, pill_top)
             fill = (*dc, 190 if sel_d else (70 if hov_d else 35))
-            arcade.draw_lrbt_rectangle_filled(dx,dx+dw2,pb+10,pb+10+dh2,fill)
-            arcade.draw_lrbt_rectangle_outline(dx,dx+dw2,pb+10,pb+10+dh2,
+            arcade.draw_lrbt_rectangle_filled(dx, dx+dw2, pill_bottom, pill_top, fill)
+            arcade.draw_lrbt_rectangle_outline(dx, dx+dw2, pill_bottom, pill_top,
                                                 (*dc,255 if sel_d else 110),
                                                 2 if sel_d else 1)
-            arcade.draw_text(dlabel, dx+dw2//2, pb+14,
+            arcade.draw_text(dlabel, dx+dw2//2, bar_center_y,
                              (255,255,255) if sel_d else (*dc,210),
-                             9, anchor_x="center", bold=sel_d, font_name=FU)
-            self._ls_diff_btns[dkey] = (dx, dx+dw2, pb+10, pb+10+dh2)
-            dx += dw2 + 6
+                             diff_text_size, anchor_x="center", anchor_y="center",
+                             bold=sel_d, font_name=FU)
+            self._ls_diff_btns[dkey] = (dx, dx+dw2, pill_bottom, pill_top)
+            dx += dw2 + pill_gap
 
         # Play button (centre bottom)
-        bw = 160;  bh = 32
-        bx = w//2 - bw//2;  by = pb+7
+        bh = max(32, int(34 * ui_scale))
+        bw = max(170, int(210 * ui_scale))
+        bx = w//2 - bw//2
+        by = int(bar_center_y - bh / 2)
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
         arcade.draw_lrbt_rectangle_filled(bx,bx+bw,by,by+bh,
                                            tc["btn_hover"] if hov_p else tc["btn_fill"])
         arcade.draw_lrbt_rectangle_outline(bx,bx+bw,by,by+bh,tc["btn_border"],2)
-        arcade.draw_text("[ PLAY LEVEL ]", bx+bw//2, by+8,
-                         tc["btn_text"], 13, anchor_x="center",
+        arcade.draw_text("[ PLAY LEVEL ]", bx+bw//2, bar_center_y,
+                         tc["btn_text"], max(12, int(14 * ui_scale)), anchor_x="center", anchor_y="center",
                          bold=True, font_name=FU)
         self._ls_play_btn = (bx, bx+bw, by, by+bh)
 
         # Back button (right bottom)
-        bkw = 80;  bkx = pr - bkw - 12
-        hov_bk = self._is_hovering(bkx, bkx+bkw, by, by+bh)
-        arcade.draw_lrbt_rectangle_filled(bkx,bkx+bkw,by,by+bh,
+        bkw = max(86, int(96 * ui_scale))
+        bkh = max(30, int(32 * ui_scale))
+        bkx = pr - bkw - 12
+        bky = int(bar_center_y - bkh / 2)
+        hov_bk = self._is_hovering(bkx, bkx+bkw, bky, bky+bkh)
+        arcade.draw_lrbt_rectangle_filled(bkx,bkx+bkw,bky,bky+bkh,
                                            (*tc["btn_fill"][:3], 160 if hov_bk else 100))
-        arcade.draw_lrbt_rectangle_outline(bkx,bkx+bkw,by,by+bh,
+        arcade.draw_lrbt_rectangle_outline(bkx,bkx+bkw,bky,bky+bkh,
                                             (*tc["btn_border"][:3],130),1)
-        arcade.draw_text("[ BACK ]", bkx+bkw//2, by+8,
-                         tc["btn_text_dim"], 10, anchor_x="center",
+        arcade.draw_text("[ BACK ]", bkx+bkw//2, bar_center_y,
+                         tc["btn_text_dim"], max(10, int(11 * ui_scale)), anchor_x="center", anchor_y="center",
                          bold=True, font_name=FU)
-        self._ls_back_btn = (bkx, bkx+bkw, by, by+bh)
+        self._ls_back_btn = (bkx, bkx+bkw, bky, bky+bkh)
 
         # ── 2 × 5 Card Grid ──────────────────────────
         GRID_COLS  = 5
         GRID_ROWS  = 2
-        CARD_GAP   = 10
-        grid_top   = ptop - HEADER_H - 8
-        grid_bot   = bot_y + 8
+        CARD_GAP   = max(8, int(10 * ui_scale))
+        grid_top   = ptop - HEADER_H - max(8, int(10 * ui_scale))
+        grid_bot   = bot_y + max(8, int(10 * ui_scale))
         grid_h     = grid_top - grid_bot
-        grid_w     = pw - 28
+        grid_w     = pw - max(28, int(32 * ui_scale))
 
         cw = (grid_w - CARD_GAP*(GRID_COLS-1)) // GRID_COLS
         ch = (grid_h - CARD_GAP*(GRID_ROWS-1)) // GRID_ROWS
@@ -2135,7 +2151,7 @@ class GameWindow(arcade.Window):
         for idx, lvl in enumerate(LEVELS):
             row = idx // GRID_COLS
             col = idx  % GRID_COLS
-            cl  = pl + 14 + col*(cw+CARD_GAP)
+            cl  = pl + max(14, int(16 * ui_scale)) + col*(cw+CARD_GAP)
             cr  = cl + cw
             ct  = grid_top - row*(ch+CARD_GAP)
             cb_ = ct - ch
@@ -2183,17 +2199,17 @@ class GameWindow(arcade.Window):
                                  font_name=FN)
             else:
                 # Level number badge
-                badge_r = min(16, ch//7)
+                badge_r = max(13, min(int(18 * ui_scale), ch//7))
                 arcade.draw_circle_filled(ccx, ct-badge_r-4,
                                            badge_r, (*lc[:3],180))
                 arcade.draw_circle_outline(ccx, ct-badge_r-4,
                                             badge_r, (*lc[:3],255), 2)
                 arcade.draw_text(str(lvl["number"]), ccx, ct-badge_r*2-2,
-                                 (255,255,255), max(9,badge_r-2),
+                                 (255,255,255), max(10, badge_r),
                                  anchor_x="center", bold=True, font_name=FU)
 
                 # Name
-                name_sz = max(8, min(11, cw//12))
+                name_sz = max(8, min(int(12 * ui_scale), cw//12))
                 arcade.draw_text(lvl["name"], ccx, ct-badge_r*2-16,
                                  (*lc[:3],230) if sel else (*lc[:3],180),
                                  name_sz, anchor_x="center", bold=True,
@@ -2212,7 +2228,7 @@ class GameWindow(arcade.Window):
                     boss_hp = _level_boss_hp(lvl["regular_enemies"],
                                               lvl["shooting_enemies"],
                                               lvl["boss_hp_mult"])
-                stat_sz = max(7, min(9, cw//15))
+                stat_sz = max(7, min(int(10 * ui_scale), cw//15))
                 sy      = div_y2 - 4
                 for lbl2, val2 in [("ENEMIES", f"{total_e}"),
                                     ("BOSS HP",  f"{boss_hp:,}"),
@@ -2229,7 +2245,7 @@ class GameWindow(arcade.Window):
                 best_s = self.best_scores.get(idx, 0)
                 if best_s > 0:
                     arcade.draw_text(f"BEST {best_s:,}", ccx, cb_+5,
-                                     (255,220,40,210), 7, anchor_x="center",
+                                     (255,220,40,210), max(7, int(8 * ui_scale)), anchor_x="center",
                                      bold=True, font_name=FN)
 
             self._level_cards[idx] = (cl, cr, cb_, ct)

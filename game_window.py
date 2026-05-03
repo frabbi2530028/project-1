@@ -8,16 +8,19 @@ from game_config import *
 from game_config import _campaign_total_boss_hp, _level_boss_hp
 from game_entities import *
 
+FONT_UI_DISPLAY = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+FONT_UI_MENU = ("Avenir Next", "Verdana", "Trebuchet MS", "Arial")
+FONT_NUMERIC = ("SF Mono", "Menlo", "Monaco", "Courier New", "monospace")
+
 def _draw_btn(x, w, y, h, fill, border, text_color, label, font_size):
-    font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
     arcade.draw_lrbt_rectangle_filled(x, x + w, y, y + h, fill)
     arcade.draw_lrbt_rectangle_outline(x, x + w, y, y + h, border, 2)
     cx = x + w // 2;  cy = y + h // 2
     sa = min(175, int((text_color[3] if len(text_color)==4 else 255)*0.45))
     arcade.draw_text(label, cx+2, cy-2, (0,0,0,sa), font_size,
-                     anchor_x="center", anchor_y="center", bold=True, font_name=font_ui_local)
+                     anchor_x="center", anchor_y="center", bold=True, font_name=FONT_UI_MENU)
     arcade.draw_text(label, cx, cy, text_color, font_size,
-                     anchor_x="center", anchor_y="center", bold=True, font_name=font_ui_local)
+                     anchor_x="center", anchor_y="center", bold=True, font_name=FONT_UI_MENU)
 
 
 def _notif_color(kind: str) -> tuple:
@@ -82,9 +85,9 @@ class GameWindow(arcade.Window):
         self.upgrades: dict = {item["id"]: 0 for item in SHOP_ITEMS}
         self._load_progress()            # restore coins + upgrades from disk
 
-        # ── HUD text objects  (Futura→Century Gothic→Arial fallback chain) ──
-        FONT_UI  = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
-        FONT_NUM = ("Courier New", "Menlo", "Monaco", "monospace")
+        # ── HUD text objects ──────────────────────────
+        FONT_UI  = FONT_UI_DISPLAY
+        FONT_NUM = FONT_NUMERIC
         h = SCREEN_HEIGHT
         self.txt_score   = arcade.Text("SCORE 0", 22, h-28,
                                         (255,255,255,240), 22, bold=True, font_name=FONT_UI)
@@ -335,7 +338,7 @@ class GameWindow(arcade.Window):
         ship = SHIPS[self.selected_ship]
         width = right - left
         height = top - bottom
-        font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        font_ui_local = FONT_UI_MENU
         header_size = 10 if height >= 86 else 9
         name_size = 17 if height >= 96 else 14
         tag_size = 10 if height >= 86 else 9
@@ -387,7 +390,7 @@ class GameWindow(arcade.Window):
             cx = stats_left + stat_step * (idx + 0.5)
             arcade.draw_text(label, cx, stat_y + 16, theme_c["text_dim"], stat_label_size,
                              anchor_x="center", bold=True,
-                             font_name=("Courier New", "Menlo", "monospace"))
+                             font_name=FONT_NUMERIC)
             self._draw_stat_pips(cx, stat_y, value, 5,
                                  theme_c["stat_filled"], theme_c["stat_empty"], 72)
 
@@ -427,8 +430,8 @@ class GameWindow(arcade.Window):
                     arcade.draw_line(0,yi+off,w,yi+off-14,(155,182,228,20),1)
 
         # ── Panel ────────────────────────────────────
-        pw = min(int(w*0.88), 820)   # wider panel — 5 ship cards need room
-        ph = min(int(h*0.95), 580 if is_pause else 560)
+        pw = min(int(w * (0.88 if is_pause else 0.92)), 820 if is_pause else 980)
+        ph = min(int(h*0.95), 580 if is_pause else 620)
         pl = (w-pw)//2;  pr = pl+pw
         pb = (h-ph)//2;  ptop = pb+ph
 
@@ -444,13 +447,14 @@ class GameWindow(arcade.Window):
             arcade.draw_line(ax,ay,ax,      ay+dy*sz,    ac,2)
 
         # ── Title ────────────────────────────────────
-        font_ui_local = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        font_display = FONT_UI_DISPLAY
+        font_ui_local = FONT_UI_MENU
         title = "PAUSED" if is_pause else "NEON  DRIFT"
         ty    = ptop - 52
         arcade.draw_text(title, w//2+4, ty-4, theme_c["title_shadow"], 42,
-                         anchor_x="center", bold=True, font_name=font_ui_local)
+                         anchor_x="center", bold=True, font_name=font_display)
         arcade.draw_text(title, w//2,   ty,   theme_c["title"],        42,
-                         anchor_x="center", bold=True, font_name=font_ui_local)
+                         anchor_x="center", bold=True, font_name=font_display)
         sub = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
         arcade.draw_text(sub, w//2+1, ty-31, (0,0,0,80), 12,
                          anchor_x="center", font_name=font_ui_local)
@@ -597,11 +601,12 @@ class GameWindow(arcade.Window):
 
         # ── Ship cards ───────────────────────────────
         n   = len(SHIPS)
-        gap = 14
+        gap = 12
         # Dynamic card width: fill panel interior (22px margin each side) exactly
         panel_inner_w = pw - 44
         cw = (panel_inner_w - gap * (n - 1)) // n
-        ch  = min(210, int(cw * 1.22))   # keep aspect ratio proportional
+        card_height_limit = max(132, ph - 388)
+        ch  = min(220, int(cw * 1.24), card_height_limit)
         total_cw = cw * n + gap * (n - 1)
         cx0  = pl + 22                   # start at panel left margin
         cy0  = div_y - 54 - ch           # card bottom y
@@ -632,19 +637,23 @@ class GameWindow(arcade.Window):
                 arcade.draw_lrbt_rectangle_outline(
                     cl-3,cr+3,cb-3,ct+3, (*g,int(55+50*pulse)), 2)
 
-            content_pad = max(8, int(cw * 0.06))
-            fname_sz = max(9, min(12, cw // 14))
-            ftag_sz  = max(7, min(9, cw // 17))
-            fstat_sz = max(7, min(9, cw // 17))
+            content_pad = max(10, int(cw * 0.07))
+            fname_sz = max(14, min(18, cw // 9))
+            if len(ship["name"]) >= 11:
+                fname_sz -= 1
+            if len(ship["name"]) >= 12:
+                fname_sz -= 1
+            ftag_sz  = max(11, min(13, cw // 12))
+            fstat_sz = max(10, min(12, cw // 13))
 
             badge_y  = cb + int(ch * 0.05)
             def_y    = cb + int(ch * 0.14)
             atk_y    = cb + int(ch * 0.23)
             spd_y    = cb + int(ch * 0.32)
-            tag_y    = cb + int(ch * 0.41)
-            name_y   = cb + int(ch * 0.50)
+            tag_y    = cb + int(ch * 0.40)
+            name_y   = cb + int(ch * 0.49)
 
-            preview_bottom = name_y + fname_sz + 10
+            preview_bottom = name_y + fname_sz + 12
             preview_top = ct - content_pad
             preview_height = max(24, preview_top - preview_bottom)
             preview_width = max(24, cw - content_pad * 2)
@@ -662,23 +671,19 @@ class GameWindow(arcade.Window):
                 arcade.draw_circle_outline(pcx,pcy,28, theme_c["locked_border"],2)
                 arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 28,
                                  anchor_x="center", anchor_y="center", bold=True,
-                                 font_name=("Futura","Century Gothic","Arial"))
+                                 font_name=FONT_UI_MENU)
 
             nc = theme_c["locked_text"] if not avl else \
                  (theme_c["card_sel_border"] if sel else theme_c["text"])
-            # name shadow + main
-            arcade.draw_text(ship["name"], pcx+1, name_y-1, (0,0,0,100), fname_sz,
-                             anchor_x="center", bold=True,
-                             font_name=("Futura","Century Gothic","Arial"))
-            arcade.draw_text(ship["name"], pcx, name_y, nc, fname_sz,
-                             anchor_x="center", bold=True,
-                             font_name=("Futura","Century Gothic","Arial"))
+            tagline_c = theme_c["locked_text"] if not avl else (*theme_c["text"][:3], 220)
+            stat_c = theme_c["locked_text"] if not avl else (*theme_c["text"][:3], 235)
+            self._txt_shadow(ship["name"], pcx, name_y, nc, fname_sz, FONT_UI_MENU,
+                             anchor_x="center", bold=True, ox=1, oy=-1)
 
             if avl:
                 # tagline
-                arcade.draw_text(ship["tagline"], pcx, tag_y,
-                                 theme_c["text_dim"], ftag_sz, anchor_x="center",
-                                 font_name=("Futura","Century Gothic","Arial"))
+                self._txt_shadow(ship["tagline"], pcx, tag_y, tagline_c, ftag_sz, FONT_UI_MENU,
+                                 anchor_x="center", ox=1, oy=-1)
 
                 # thin divider between tagline and stats
                 arcade.draw_line(cl+8, tag_y-6, cr-8, tag_y-6,
@@ -690,22 +695,18 @@ class GameWindow(arcade.Window):
                 for row_y, lbl, val in [(spd_y, "SPD", ship["stat_spd"]),
                                          (atk_y, "ATK", ship["stat_atk"]),
                                          (def_y, "DEF", ship["stat_def"])]:
-                    arcade.draw_text(lbl, cl + content_pad, row_y, theme_c["text_dim"], fstat_sz,
-                                     anchor_y="center", bold=True,
-                                     font_name=("Courier New","Menlo","monospace"))
+                    self._txt_shadow(lbl, cl + content_pad, row_y, stat_c, fstat_sz, FONT_NUMERIC,
+                                     anchor_y="center", bold=True, ox=1, oy=-1)
                     self._draw_stat_pips(pip_x, row_y, val, 5,
                                          theme_c["stat_filled"], theme_c["stat_empty"], pip_span)
 
                 # SELECTED badge
                 if sel:
-                    arcade.draw_text("✔ SELECTED", pcx, badge_y,
-                                     theme_c["selected_badge"], fstat_sz,
-                                     anchor_x="center", bold=True,
-                                     font_name=("Futura","Century Gothic","Arial"))
+                    self._txt_shadow("✔ SELECTED", pcx, badge_y, theme_c["selected_badge"],
+                                     fstat_sz, FONT_UI_MENU, anchor_x="center", bold=True, ox=1, oy=-1)
             else:
-                arcade.draw_text("COMING SOON", pcx, tag_y,
-                                 theme_c["locked_text"], ftag_sz, anchor_x="center",
-                                 font_name=("Futura","Century Gothic","Arial"))
+                self._txt_shadow("COMING SOON", pcx, tag_y, theme_c["locked_text"], ftag_sz,
+                                 FONT_UI_MENU, anchor_x="center", ox=1, oy=-1)
 
             self._ship_cards[i] = (cl, cr, cb, ct)
 
@@ -819,7 +820,7 @@ class GameWindow(arcade.Window):
             _theme_ref_y = qy
 
         # theme toggle — always a fixed gap below the lowest action button
-        tw, th2 = 190, 32
+        tw, th2 = 230, 32
         tx  = w//2 - tw//2
         ty2 = max(pb + 10, _theme_ref_y - th2 - 12)
         hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
@@ -1119,25 +1120,30 @@ class GameWindow(arcade.Window):
 
     def _shop_layout(self):
         w, h = self.width, self.height
-        pw = min(int(w * 0.90), 760)
-        ph = min(int(h * 0.92), 560)
+        pw = min(int(w * 0.92), 860)
+        ph = min(int(h * 0.94), 660)
         pl = (w - pw) // 2
         pr = pl + pw
         pb = (h - ph) // 2
         ptop = pb + ph
 
-        div_y = ptop - 88
+        div_y = ptop - 102
         cols = 3
-        cw_ = (pw - 60) // cols
-        ch_ = 148
+        rows = max(1, math.ceil(len(SHOP_ITEMS) / cols))
+        side_pad = 28
         gap_ = 14
+        cw_ = (pw - side_pad * 2 - gap_ * (cols - 1)) // cols
         grid_top = div_y - 18
+        back_band = 66
+        grid_bottom = pb + back_band
+        available_h = max(320, grid_top - grid_bottom)
+        ch_ = min(188, max(156, (available_h - gap_ * (rows - 1)) // rows))
 
         item_rects = {}
         for idx, item in enumerate(SHOP_ITEMS):
             col = idx % cols
             row = idx // cols
-            cl = pl + 30 + col * (cw_ + gap_)
+            cl = pl + side_pad + col * (cw_ + gap_)
             ct = grid_top - row * (ch_ + gap_)
             cr = cl + cw_
             cb_ = ct - ch_
@@ -1160,8 +1166,9 @@ class GameWindow(arcade.Window):
     def _draw_shop(self):
         w, h   = self.width, self.height
         tc     = THEMES["dark"]
-        font_u = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
-        font_n = ("Courier New", "Menlo", "Monaco", "monospace")
+        font_title = FONT_UI_DISPLAY
+        font_u = FONT_UI_MENU
+        font_n = FONT_NUMERIC
 
         # Background
         arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
@@ -1186,9 +1193,9 @@ class GameWindow(arcade.Window):
         # Title
         ty_title = ptop - 48
         arcade.draw_text("SHOP", w//2+3, ty_title-3, tc["title_shadow"], 38,
-                         anchor_x="center", bold=True, font_name=font_u)
+                         anchor_x="center", bold=True, font_name=font_title)
         arcade.draw_text("SHOP", w//2, ty_title, tc["title"], 38,
-                         anchor_x="center", bold=True, font_name=font_u)
+                         anchor_x="center", bold=True, font_name=font_title)
         # Coin balance
         bal_str = f"$ {self.coins:,}  coins"
         arcade.draw_text(bal_str, w//2, ty_title-30,
@@ -1226,24 +1233,42 @@ class GameWindow(arcade.Window):
             arcade.draw_lrbt_rectangle_filled(cl, cr, cb_, ct, fill_c)
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb_, ct, bord_c, 2)
 
+            pad_x = max(14, int(cw_ * 0.07))
+            title_size = max(13, min(16, cw_ // 15))
+            icon_size = max(16, min(22, cw_ // 11))
+            desc_size = max(10, min(12, cw_ // 18))
+            cost_size = max(12, min(15, cw_ // 15))
+            top_pad = max(14, int(ch_ * 0.08))
+            title_y = ct - top_pad
+            badge_cy = title_y - max(26, int(ch_ * 0.17))
+            badge_w = max(54, int(cw_ * 0.22))
+            badge_h = max(28, int(ch_ * 0.16))
+            desc_y = badge_cy - max(24, int(ch_ * 0.16))
+            dot_y = desc_y - max(26, int(ch_ * 0.16))
+            price_y = cb_ + max(22, int(ch_ * 0.11))
+
             # Icon badge
-            icon_x = cl + 20;  icon_y = ct - 28
             ic_alpha = 255 if (can_afford or maxed) else 110
-            arcade.draw_lrbt_rectangle_filled(icon_x-2, icon_x+38, icon_y-18, icon_y+4,
-                                               (*ic[:3], 60 if can_afford else 30))
-            arcade.draw_text(item["icon"], icon_x, icon_y-14,
-                             (*ic[:3], ic_alpha), 14, bold=True, font_name=font_u)
+            arcade.draw_lrbt_rectangle_filled(
+                cl + pad_x, cl + pad_x + badge_w,
+                badge_cy - badge_h // 2, badge_cy + badge_h // 2,
+                (*ic[:3], 60 if can_afford else 30)
+            )
+            self._txt_shadow(item["icon"], cl + pad_x + badge_w // 2, badge_cy - 1,
+                             (*ic[:3], ic_alpha), icon_size, font_u,
+                             anchor_x="center", anchor_y="center", bold=True, ox=1, oy=-1)
 
             # Name
             nc = (*ic[:3], 240) if (can_afford or maxed) else (80, 90, 120, 180)
-            arcade.draw_text(item["name"], cl + cw_//2, ct - 22,
-                             nc, 11, anchor_x="center", bold=True, font_name=font_u)
+            self._txt_shadow(item["name"], cl + cw_//2, title_y,
+                             nc, title_size, font_u, anchor_x="center",
+                             bold=True, ox=1, oy=-1)
             # Desc
-            arcade.draw_text(item["desc"], cl + cw_//2, ct - 42,
-                             (160, 180, 215, 180), 9, anchor_x="center", font_name=font_u)
+            self._txt_shadow(item["desc"], cl + cw_//2, desc_y,
+                             (185, 205, 235, 210), desc_size, font_u,
+                             anchor_x="center", ox=1, oy=-1)
 
             # Tier dots
-            dot_y  = ct - 60
             dot_cx = cl + cw_//2
             dot_sp = 14
             dot_total = item["max"] * dot_sp
@@ -1256,16 +1281,15 @@ class GameWindow(arcade.Window):
                                               (255, 255, 255, 180))
 
             # Buy / maxed label
-            btn_y = cb_ + 10
             if maxed:
-                arcade.draw_text("✔ MAXED", cl + cw_//2, btn_y + 4,
-                                 (80, 220, 100, 230), 10, anchor_x="center",
-                                 bold=True, font_name=font_u)
+                self._txt_shadow("✔ MAXED", cl + cw_//2, price_y,
+                                 (80, 220, 100, 230), cost_size - 1, font_u,
+                                 anchor_x="center", bold=True, ox=1, oy=-1)
             else:
                 cost_c = (255, 220, 40, 240) if can_afford else (130, 140, 160, 160)
-                arcade.draw_text(f"$ {cost}  coins", cl + cw_//2, btn_y + 4,
-                                 cost_c, 11, anchor_x="center",
-                                 bold=True, font_name=font_n)
+                self._txt_shadow(f"$ {cost}  coins", cl + cw_//2, price_y,
+                                 cost_c, cost_size, font_n, anchor_x="center",
+                                 bold=True, ox=1, oy=-1)
 
             if not maxed:
                 self._shop_btns[item["id"]] = (cl, cr, cb_, ct)

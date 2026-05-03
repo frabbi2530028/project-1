@@ -1642,6 +1642,7 @@ class GameWindow(arcade.Window):
         p    = self.player
         font_ui  = self._FONT_UI
         font_num = self._FONT_NUM
+        hud_scale = max(0.45, min(1.0, min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT)))
 
         # ── Subtle vignette edges so text floats on any background ──
         vig = THEMES[self.menu_theme]["vignette"]
@@ -1659,11 +1660,25 @@ class GameWindow(arcade.Window):
         t = self.bg_time
 
         # ══ TOP-LEFT  ════════════════════════════════
+        left_x = max(10, int(20 * hud_scale))
+        top_y = h - max(10, int(14 * hud_scale))
+        score_label_size = max(8, int(9 * hud_scale))
+        score_size = max(16, int(30 * hud_scale))
+        health_label_size = max(9, int(10 * hud_scale))
+        health_value_size = max(10, int(13 * hud_scale))
+        top_value_gap = max(6, int(10 * hud_scale))
+        section_gap = max(8, int(14 * hud_scale))
+        health_value_gap = max(6, int(10 * hud_scale))
+        hp_bar_gap = max(8, int(12 * hud_scale))
+        hp_bar_w = max(120, min(230, int(w * 0.33)))
+        hp_bar_h = max(7, int(10 * hud_scale))
 
         # ── SCORE ──────────────────────────────────
-        self.txt_score.text = f"{self.score:,}"
-        self.txt_score.draw()
-        self._txt_shadow("SCORE", 22, h-12, (120,165,230,180), 9, font_ui)
+        self._txt_shadow("SCORE", left_x, top_y, (120,165,230,180), score_label_size, font_ui,
+                         anchor_y="top")
+        score_y = top_y - score_label_size - top_value_gap
+        self._txt_shadow(f"{self.score:,}", left_x, score_y, (255,255,255,240), score_size,
+                         font_ui, anchor_y="top", bold=True)
 
         # ── Level progress bar (top-centre) ──────────
         lvl  = LEVELS[self.selected_level]
@@ -1703,19 +1718,24 @@ class GameWindow(arcade.Window):
         hr   = max(0.0, p.health/p.max_health)
         hc   = (60,235,110) if hr>0.55 else (255,195,55) if hr>0.28 else (255,60,60)
 
-        # "HEALTH" label row
-        self._txt_shadow("HEALTH", 22, h-46, (120,165,230,200), 10, font_ui)
+        health_label_y = score_y - score_size - section_gap
+        self._txt_shadow("HEALTH", left_x, health_label_y, (120,165,230,200),
+                         health_label_size, font_ui, anchor_y="top")
 
         # HP numbers row — drawn BEFORE bar so bar doesn't cover them
         hp_str = f"{int(max(0, p.health))}  /  {p.max_health}"
-        self._txt_shadow(hp_str, 22, h-62, (*hc[:3], 230), 11, font_num, bold=True)
+        health_value_y = health_label_y - health_label_size - health_value_gap
+        self._txt_shadow(hp_str, left_x, health_value_y, (*hc[:3], 230), health_value_size,
+                         font_num, anchor_y="top", bold=True)
 
-        # Segmented bar — clear below numbers (bar top = h-68, number baseline = h-62, gap = 6px)
-        self._draw_seg_bar(22, h-82, 230, 10, hr, hc, segs=23, gap=2)
+        # Segmented bar — sits below the HP numbers with a scale-aware gap.
+        hp_bar_y = health_value_y - health_value_size - hp_bar_gap
+        self._draw_seg_bar(left_x, hp_bar_y, hp_bar_w, hp_bar_h, hr, hc, segs=23, gap=2)
         # Neon glow highlight line
         if hr > 0:
-            gw = int(230 * hr)
-            arcade.draw_lrbt_rectangle_filled(22, 22+gw, h-72, h-71,
+            gw = int(hp_bar_w * hr)
+            arcade.draw_lrbt_rectangle_filled(left_x, left_x + gw,
+                                               hp_bar_y + hp_bar_h - 1, hp_bar_y + hp_bar_h,
                                                (*hc[:3], int(155*hr)))
 
         # ══ POWER-UP PANEL (bottom-left) ══════════════
@@ -1723,39 +1743,58 @@ class GameWindow(arcade.Window):
 
         # ══ TOP-RIGHT ════════════════════════════════
 
-        # ── Timer ──────────────────────────────────
-        self._txt_shadow("TIME", w-18, h-14, (120,165,230,175), 9, font_ui,
-                         anchor_x="right")
-        self.txt_timer.text = f"{self.time_alive:06.1f}s"
-        self.txt_timer.draw()
+        right_x = w - max(10, int(16 * hud_scale))
+        top_y = h - max(10, int(14 * hud_scale))
+        label_gap = max(6, int(10 * hud_scale))
+        value_gap = max(6, int(10 * hud_scale))
+        section_gap = max(8, int(12 * hud_scale))
+        badge_h = max(16, int(20 * hud_scale))
+        badge_pad = max(9, int(12 * hud_scale))
+        badge_text_size = max(9, int(10 * hud_scale))
+        small_label_size = max(8, int(9 * hud_scale))
+        timer_size = max(10, int(13 * hud_scale))
+        coin_size = max(11, int(14 * hud_scale))
 
-        # ── Coin counter (top-right, below timer) ───
-        coin_c = (255, 220, 40, 245)
-        self._txt_shadow(f"$ {self.coins:,}", w-18, h-46, coin_c, 14,
-                         font_num, anchor_x="right", bold=True)
-        self._txt_shadow("COINS", w-18, h-62, (200, 170, 30, 160), 9,
-                         font_ui, anchor_x="right")
+        # ── Timer ──────────────────────────────────
+        self._txt_shadow("TIME", right_x, top_y, (120,165,230,175), small_label_size,
+                         font_ui, anchor_x="right", anchor_y="top")
+        timer_y = top_y - small_label_size - label_gap
+        self._txt_shadow(f"{self.time_alive:06.1f}s", right_x, timer_y, (165,200,255,215),
+                         timer_size, font_num, anchor_x="right", anchor_y="top", bold=True)
 
         # ── Difficulty badge ────────────────────────
         dp  = self._dpreset
         dc  = dp["color"]
         dlbl = dp["label"]
-        bw_ = len(dlbl)*9 + 24
-        bx_ = w - 18 - bw_
-        by_ = h - 54
-        arcade.draw_lrbt_rectangle_filled(bx_, bx_+bw_, by_, by_+18,
+        badge_text_w = max(60, int(len(dlbl) * badge_text_size * 0.78))
+        badge_w = badge_text_w + badge_pad * 2
+        badge_y = timer_y - timer_size - section_gap - badge_h
+        badge_left = right_x - badge_w
+        arcade.draw_lrbt_rectangle_filled(badge_left, right_x, badge_y, badge_y + badge_h,
                                            (*dc, 55))
-        arcade.draw_lrbt_rectangle_outline(bx_, bx_+bw_, by_, by_+18,
+        arcade.draw_lrbt_rectangle_outline(badge_left, right_x, badge_y, badge_y + badge_h,
                                             (*dc, 185), 1)
-        self._txt_shadow(dlbl, bx_+bw_//2, by_+3, (*dc, 240), 10, font_ui,
-                         anchor_x="center", bold=True)
+        self._txt_shadow(dlbl, badge_left + badge_w // 2, badge_y + badge_h // 2,
+                         (*dc, 240), badge_text_size, font_ui,
+                         anchor_x="center", anchor_y="center", bold=True, ox=1, oy=-1)
+
+        # ── Coin counter (top-right, below difficulty) ───
+        coin_c = (255, 220, 40, 245)
+        coin_value_y = badge_y - coin_size - section_gap
+        coin_label_y = coin_value_y - small_label_size - value_gap
+        self._txt_shadow(f"$ {self.coins:,}", right_x, coin_value_y, coin_c, coin_size,
+                         font_num, anchor_x="right", anchor_y="top", bold=True)
+        self._txt_shadow("COINS", right_x, coin_label_y, (200, 170, 30, 160),
+                         small_label_size, font_ui, anchor_x="right", anchor_y="top")
 
         # ══ COMBO (top-right below difficulty) ═══════
         if self.combo > 1 and self.combo_timer > 0:
             pulse = 0.75 + 0.25*math.sin(t*8)
-            self.txt_combo.text  = f"×{self.combo}  COMBO"
-            self.txt_combo.color = (255, 220, 60, int(230*pulse))
-            self.txt_combo.draw()
+            combo_y = coin_label_y - max(16, int(20 * hud_scale)) - section_gap
+            self._txt_shadow(f"×{self.combo}  COMBO", right_x, combo_y,
+                             (255, 220, 60, int(230*pulse)),
+                             max(16, int(20 * hud_scale)), font_ui,
+                             anchor_x="right", anchor_y="top", bold=True)
 
         # ══ BOTTOM ════════════════════════════════════
 

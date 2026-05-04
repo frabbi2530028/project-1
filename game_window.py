@@ -160,6 +160,7 @@ class GameWindow(arcade.Window):
         self._dpreset = DIFFICULTY_PRESETS[self.selected_difficulty]
         self.beams: list = []          # active BeamRay objects (Interceptor)
         self.elec_bolts = arcade.SpriteList()  # active ElectricBolt sprites (Reaper)
+        self._screen_transition: dict | None = None
 
         self._build_starfield()
 
@@ -312,6 +313,35 @@ class GameWindow(arcade.Window):
             alive.append(pt)
         self.particles = alive
 
+    @staticmethod
+    def _ease_out_cubic(value: float) -> float:
+        value = max(0.0, min(1.0, value))
+        return 1.0 - (1.0 - value) ** 3
+
+    @staticmethod
+    def _ease_out_back(value: float) -> float:
+        value = max(0.0, min(1.0, value))
+        c1 = 1.70158
+        c3 = c1 + 1.0
+        return 1.0 + c3 * (value - 1.0) ** 3 + c1 * (value - 1.0) ** 2
+
+    def _start_screen_transition(self, from_state: str, to_state: str) -> None:
+        self._screen_transition = {
+            "from": from_state,
+            "to": to_state,
+            "time": 0.0,
+            "duration": 0.48,
+        }
+
+    def _update_screen_transition(self, delta: float) -> None:
+        if not self._screen_transition:
+            return
+
+        self._screen_transition["time"] += delta
+        if self._screen_transition["time"] >= self._screen_transition["duration"]:
+            self.game_state = self._screen_transition["to"]
+            self._screen_transition = None
+
     # ══════════════════════════════════════════════════
     #  MENU DRAWING
     # ══════════════════════════════════════════════════
@@ -400,46 +430,55 @@ class GameWindow(arcade.Window):
             self._draw_stat_pips(cx, stat_y, value, 5,
                                  theme_c["stat_filled"], theme_c["stat_empty"], 72)
 
-    def _draw_menu(self):
+    def _draw_menu(self, anim: dict | None = None, draw_background: bool = True):
+        anim = anim or {}
         is_pause = (self.game_state == STATE_PAUSED)
         # Pause overlay always uses the dark theme for a clean dark panel look.
         # Only the main menu respects the user's light/dark preference.
         theme_c  = THEMES["dark"] if is_pause else THEMES[self.menu_theme]
         w, h = self.width, self.height
         t  = self.bg_time
+        panel_scale = 1.0 if is_pause else anim.get("scale", 1.0)
+        panel_offset_y = 0.0 if is_pause else anim.get("offset_y", 0.0)
+
+        def scaled(value: float, minimum: int = 1) -> int:
+            return max(minimum, int(round(value * panel_scale)))
 
         # ── Background ───────────────────────────────
-        if is_pause:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 5, 16, 170))
-        else:
-            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, theme_c["bg"])
-            if self.menu_theme == "dark":
-                p = (math.sin(t*0.65)+1)*0.5
-                arcade.draw_circle_filled(w*0.13,h*0.88,228+18*p,     (38,80,185,42))
-                arcade.draw_circle_filled(w*0.87,h*0.20,265+28*(1-p), (145,40,165,36))
-                arcade.draw_circle_filled(w*0.52,h*1.06,268,           (28,155,195,20))
-                off = (t*14)%28
-                for yi in range(-30, h+30, 28):
-                    arcade.draw_line(0,yi+off,w,yi+off-18,(28,44,76,24),1)
-                for s in self.stars:
-                    tw = 0.55+0.45*math.sin(t*s["twinkle"]+s["phase"])
-                    al = max(20,min(255,int(s["alpha"]*tw)))
-                    arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
+        if draw_background:
+            if is_pause:
+                arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 5, 16, 170))
             else:
-                for i in range(7):
-                    ang = t*0.28+i*math.tau/7
-                    rx = w*0.5+math.cos(ang)*w*0.40
-                    ry = h*0.5+math.sin(ang*0.62)*h*0.36
-                    arcade.draw_circle_filled(rx,ry,88+22*math.sin(t*0.9+i),(255,255,255,24))
-                off = (t*12)%26
-                for yi in range(-30,h+30,26):
-                    arcade.draw_line(0,yi+off,w,yi+off-14,(155,182,228,20),1)
+                arcade.draw_lrbt_rectangle_filled(0, w, 0, h, theme_c["bg"])
+                if self.menu_theme == "dark":
+                    p = (math.sin(t*0.65)+1)*0.5
+                    arcade.draw_circle_filled(w*0.13,h*0.88,228+18*p,     (38,80,185,42))
+                    arcade.draw_circle_filled(w*0.87,h*0.20,265+28*(1-p), (145,40,165,36))
+                    arcade.draw_circle_filled(w*0.52,h*1.06,268,           (28,155,195,20))
+                    off = (t*14)%28
+                    for yi in range(-30, h+30, 28):
+                        arcade.draw_line(0,yi+off,w,yi+off-18,(28,44,76,24),1)
+                    for s in self.stars:
+                        tw = 0.55+0.45*math.sin(t*s["twinkle"]+s["phase"])
+                        al = max(20,min(255,int(s["alpha"]*tw)))
+                        arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
+                else:
+                    for i in range(7):
+                        ang = t*0.28+i*math.tau/7
+                        rx = w*0.5+math.cos(ang)*w*0.40
+                        ry = h*0.5+math.sin(ang*0.62)*h*0.36
+                        arcade.draw_circle_filled(rx,ry,88+22*math.sin(t*0.9+i),(255,255,255,24))
+                    off = (t*12)%26
+                    for yi in range(-30,h+30,26):
+                        arcade.draw_line(0,yi+off,w,yi+off-14,(155,182,228,20),1)
 
         # ── Panel ────────────────────────────────────
-        pw = min(int(w * (0.88 if is_pause else 0.92)), 820 if is_pause else 980)
-        ph = min(int(h*0.95), 580 if is_pause else 620)
+        base_pw = min(int(w * (0.88 if is_pause else 0.92)), 820 if is_pause else 980)
+        base_ph = min(int(h*0.95), 580 if is_pause else 620)
+        pw = int(base_pw * panel_scale)
+        ph = int(base_ph * panel_scale)
         pl = (w-pw)//2;  pr = pl+pw
-        pb = (h-ph)//2;  ptop = pb+ph
+        pb = int((h-ph)//2 + panel_offset_y);  ptop = pb+ph
 
         arcade.draw_lrbt_rectangle_filled(pl+7,pr+7,pb-7,ptop-7,(0,0,0,70))
         arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop, theme_c["panel_fill"])
@@ -447,24 +486,24 @@ class GameWindow(arcade.Window):
         arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5, theme_c["panel_inner"], 1)
 
         # corner accents
-        ac = theme_c["panel_border"];  sz = 24
+        ac = theme_c["panel_border"];  accent_size = scaled(24)
         for (ax,ay,dx,dy) in [(pl,pb,-1,-1),(pr,pb,1,-1),(pl,ptop,-1,1),(pr,ptop,1,1)]:
-            arcade.draw_line(ax,ay,ax+dx*sz,ay,          ac,2)
-            arcade.draw_line(ax,ay,ax,      ay+dy*sz,    ac,2)
+            arcade.draw_line(ax,ay,ax+dx*accent_size,ay,          ac,2)
+            arcade.draw_line(ax,ay,ax,      ay+dy*accent_size,    ac,2)
 
         # ── Title ────────────────────────────────────
         font_display = FONT_UI_DISPLAY
         font_ui_local = FONT_UI_MENU
         title = "PAUSED" if is_pause else "NEON  DRIFT"
         ty    = ptop - 52
-        arcade.draw_text(title, w//2+4, ty-4, theme_c["title_shadow"], 42,
+        arcade.draw_text(title, w//2+4, ty-4, theme_c["title_shadow"], scaled(42),
                          anchor_x="center", bold=True, font_name=font_display)
-        arcade.draw_text(title, w//2,   ty,   theme_c["title"],        42,
+        arcade.draw_text(title, w//2,   ty,   theme_c["title"],        scaled(42),
                          anchor_x="center", bold=True, font_name=font_display)
         sub = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
-        arcade.draw_text(sub, w//2+1, ty-31, (0,0,0,80), 12,
+        arcade.draw_text(sub, w//2+1, ty-31, (0,0,0,80), scaled(12),
                          anchor_x="center", font_name=font_ui_local)
-        arcade.draw_text(sub, w//2, ty-30, theme_c["subtitle"], 12,
+        arcade.draw_text(sub, w//2, ty-30, theme_c["subtitle"], scaled(12),
                          anchor_x="center", font_name=font_ui_local)
 
         div_y = ptop - 97
@@ -600,14 +639,14 @@ class GameWindow(arcade.Window):
             self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
             return
 
-        arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-23, (0,0,0,90), 13,
+        arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-23, (0,0,0,90), scaled(13),
                          anchor_x="center", bold=True, font_name=font_ui_local)
         arcade.draw_text("SELECT YOUR SHIP", w//2, div_y-22,
-                         theme_c["text"], 13, anchor_x="center", bold=True, font_name=font_ui_local)
+                         theme_c["text"], scaled(13), anchor_x="center", bold=True, font_name=font_ui_local)
 
         # ── Ship cards ───────────────────────────────
         n   = len(SHIPS)
-        gap = 12
+        gap = scaled(12)
         # Dynamic card width: fill panel interior (22px margin each side) exactly
         panel_inner_w = pw - 44
         cw = (panel_inner_w - gap * (n - 1)) // n
@@ -720,13 +759,13 @@ class GameWindow(arcade.Window):
         btn_top = cy0 - 12
 
         # ── Difficulty selector ──────────────────────
-        arcade.draw_text("SELECT DIFFICULTY", w//2+1, btn_top-3, (0,0,0,90), 12,
+        arcade.draw_text("SELECT DIFFICULTY", w//2+1, btn_top-3, (0,0,0,90), scaled(12),
                          anchor_x="center", bold=True, font_name=font_ui_local)
         arcade.draw_text("SELECT DIFFICULTY", w//2, btn_top-2,
-                         theme_c["text"], 12, anchor_x="center", bold=True, font_name=font_ui_local)
+                         theme_c["text"], scaled(12), anchor_x="center", bold=True, font_name=font_ui_local)
 
-        dw, dh = 118, 38
-        dgap   = 10
+        dw, dh = scaled(118), scaled(38)
+        dgap   = scaled(10)
         dtotal = dw*3 + dgap*2
         dx0    = (w - dtotal)//2
         diff_by = btn_top - dh - 20   # bottom y of difficulty buttons
@@ -764,69 +803,69 @@ class GameWindow(arcade.Window):
                     dleft-3, dright+3, diff_by-3, dtop+3, (*dc, int(50+45*pulse)), 2)
             sa_ = min(175, int((tcolor[3] if len(tcolor)==4 else 255)*0.4))
             arcade.draw_text(preset["label"], dleft+dw//2+1, diff_by+dh//2-1,
-                             (0,0,0,sa_), 14, anchor_x="center", anchor_y="center",
+                             (0,0,0,sa_), scaled(14), anchor_x="center", anchor_y="center",
                              bold=True, font_name=font_ui_local)
             arcade.draw_text(preset["label"], dleft+dw//2, diff_by+dh//2,
-                             tcolor, 14, anchor_x="center", anchor_y="center",
+                             tcolor, scaled(14), anchor_x="center", anchor_y="center",
                              bold=True, font_name=font_ui_local)
 
             self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
 
         play_y = diff_by - 14   # play button sits below difficulty row
 
-        bw, bh = 230, 50
+        bw, bh = scaled(230), scaled(50)
         bx = w//2-bw//2;  by = play_y - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
         _draw_btn(bx, bw, by, bh,
                   theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
                   theme_c["btn_border"], theme_c["btn_text"],
-                  "[ RESUME ]" if is_pause else "[ PLAY GAME ]", 20)
+                  "[ RESUME ]" if is_pause else "[ PLAY GAME ]", scaled(20))
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
 
         # ── Shop button (main menu only) ─────────────
         if not is_pause:
-            sw, sh2 = 230, 38
+            sw, sh2 = scaled(230), scaled(38)
             sx2 = w//2 - sw//2;  sy2 = by - sh2 - 8
             hov_s = self._is_hovering(sx2, sx2+sw, sy2, sy2+sh2)
             coin_label = f"[ SHOP ]  $ {self.coins:,}"
             _draw_btn(sx2, sw, sy2, sh2,
                       theme_c["btn_hover"] if hov_s else (*theme_c["btn_fill"][:3], 200),
                       (255, 210, 30, 220), (255, 215, 40, 255),
-                      coin_label, 14)
+                      coin_label, scaled(14))
             self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
             _theme_ref_y = sy2
         else:
-            sw, sh2 = 230, 38
+            sw, sh2 = scaled(230), scaled(38)
             sx2 = w//2 - sw//2;  sy2 = by - sh2 - 8
             hov_s = self._is_hovering(sx2, sx2+sw, sy2, sy2+sh2)
             coin_label = f"[ SHOP ]  $ {self.coins:,}"
             _draw_btn(sx2, sw, sy2, sh2,
                       theme_c["btn_hover"] if hov_s else (*theme_c["btn_fill"][:3], 200),
                       (255, 210, 30, 220), (255, 215, 40, 255),
-                      coin_label, 14)
+                      coin_label, scaled(14))
             self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
 
-            rw, rh = 196, 40
+            rw, rh = scaled(196), scaled(40)
             rx = w//2-rw//2;  ry = sy2-rh-10
             hov_r = self._is_hovering(rx, rx+rw, ry, ry+rh)
             _draw_btn(rx, rw, ry, rh,
                       theme_c["btn_hover"] if hov_r else (145, 40, 40, 145),
                       (255, 110, 110, 190), theme_c["btn_text_dim"],
-                      "RESET RUN", 14)
+                      "RESET RUN", scaled(14))
             self._menu_btns["reset"] = (rx, rx+rw, ry, ry+rh)
 
-            qw, qh = 196, 40
+            qw, qh = scaled(196), scaled(40)
             qx = w//2-qw//2;  qy = ry-qh-10
             hov_q = self._is_hovering(qx, qx+qw, qy, qy+qh)
             _draw_btn(qx, qw, qy, qh,
                       theme_c["btn_hover"] if hov_q else (*theme_c["btn_fill"][:3], 145),
                       (*theme_c["btn_border"][:3], 152), theme_c["btn_text_dim"],
-                      "QUIT TO MENU", 14)
+                      "QUIT TO MENU", scaled(14))
             self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
             _theme_ref_y = qy
 
         # theme toggle — always a fixed gap below the lowest action button
-        tw, th2 = 230, 32
+        tw, th2 = scaled(230), scaled(32)
         tx  = w//2 - tw//2
         ty2 = max(pb + 10, _theme_ref_y - th2 - 12)
         hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
@@ -835,37 +874,46 @@ class GameWindow(arcade.Window):
                   (*theme_c["btn_border"][:3], 158),
                   theme_c["toggle_text"],
                   "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]",
-                  12)
+                  scaled(12))
         self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
 
     # ══════════════════════════════════════════════════
     #  LEVEL SELECT SCREEN
     # ══════════════════════════════════════════════════
 
-    def _draw_level_select(self):
+    def _draw_level_select(self, anim: dict | None = None, draw_background: bool = True):
+        anim = anim or {}
         w, h   = self.width, self.height
         tc     = THEMES["dark"]
         FU     = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
         FN     = ("Courier New", "Menlo", "Monaco", "monospace")
         t      = self.bg_time
-        ui_scale = max(0.82, min(1.35, min(w / 1360, h / 920)))
+        panel_scale = anim.get("scale", 1.0)
+        panel_offset_y = anim.get("offset_y", 0.0)
+        ui_scale = max(0.82, min(1.35, min(w / 1360, h / 920))) * panel_scale
 
         # ── Background ───────────────────────────────
-        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
-        off = (t * 14) % 28
-        for yi in range(-30, h+30, 28):
-            arcade.draw_line(0, yi+off, w, yi+off-18, (28,44,76,24), 1)
-        for s in self.stars:
-            tw2 = 0.55 + 0.45*math.sin(t*s["twinkle"]+s["phase"])
-            al  = max(20, min(255, int(s["alpha"]*tw2)))
-            arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
+        if draw_background:
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
+            off = (t * 14) % 28
+            for yi in range(-30, h+30, 28):
+                arcade.draw_line(0, yi+off, w, yi+off-18, (28,44,76,24), 1)
+            for s in self.stars:
+                tw2 = 0.55 + 0.45*math.sin(t*s["twinkle"]+s["phase"])
+                al  = max(20, min(255, int(s["alpha"]*tw2)))
+                arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
 
         # ── Outer panel ──────────────────────────────
-        PAD  = max(12, int(18 * ui_scale))
-        pw   = w - PAD*2
-        ph   = h - PAD*2
-        pl   = PAD;  pr = pl+pw
-        pb   = PAD;  ptop = pb+ph
+        base_ui_scale = max(0.82, min(1.35, min(w / 1360, h / 920)))
+        base_pad = max(12, int(18 * base_ui_scale))
+        base_pw = w - base_pad * 2
+        base_ph = h - base_pad * 2
+        pw   = int(base_pw * panel_scale)
+        ph   = int(base_ph * panel_scale)
+        pl   = (w - pw) // 2
+        pr   = pl + pw
+        pb   = int((h - ph) // 2 + panel_offset_y)
+        ptop = pb + ph
         arcade.draw_lrbt_rectangle_filled(pl+6,pr+6,pb-6,ptop-6,(0,0,0,80))
         arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop,tc["panel_fill"])
         arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop,tc["panel_border"],2)
@@ -1880,6 +1928,28 @@ class GameWindow(arcade.Window):
                                  (x, y-20, x, y-8), (x, y+8, x, y+20)]:
             arcade.draw_line(x1, y1, x2, y2, cc, 2)
 
+    def _draw_menu_to_level_transition(self) -> None:
+        if not self._screen_transition:
+            return
+
+        p = min(1.0, self._screen_transition["time"] / self._screen_transition["duration"])
+        out_ease = self._ease_out_cubic(p)
+        in_ease = self._ease_out_back(p)
+
+        menu_anim = {
+            "scale": 1.0 - 0.13 * out_ease,
+            "offset_y": -28 * out_ease,
+        }
+        level_anim = {
+            "scale": 0.86 + 0.14 * in_ease,
+            "offset_y": 72 * (1.0 - out_ease) - 10 * math.sin(p * math.pi),
+        }
+
+        self._draw_menu(anim=menu_anim, draw_background=True)
+        shade_alpha = int(34 + 56 * out_ease)
+        arcade.draw_lrbt_rectangle_filled(0, self.width, 0, self.height, (4, 8, 20, shade_alpha))
+        self._draw_level_select(anim=level_anim, draw_background=False)
+
     # ══════════════════════════════════════════════════
     #  ON DRAW
     # ══════════════════════════════════════════════════
@@ -1887,6 +1957,10 @@ class GameWindow(arcade.Window):
     def on_draw(self):
         w, h = self.width, self.height
         self.clear()
+
+        if self._screen_transition:
+            self._draw_menu_to_level_transition()
+            return
 
         if self.game_state == STATE_MENU:
             self._draw_menu()
@@ -2055,6 +2129,7 @@ class GameWindow(arcade.Window):
 
         self._update_starfield(delta)
         self._update_particles(delta)
+        self._update_screen_transition(delta)
 
         if self.notif_timer  > 0: self.notif_timer  -= delta
         if self.damage_flash > 0: self.damage_flash = max(0.0, self.damage_flash-2.6*delta)
@@ -2734,6 +2809,8 @@ class GameWindow(arcade.Window):
         self._update_mouse_pos(x, y)
         if button != arcade.MOUSE_BUTTON_LEFT:
             return
+        if self._screen_transition:
+            return
 
         if self.game_state in (STATE_MENU, STATE_PAUSED):
             # difficulty button click
@@ -2754,7 +2831,7 @@ class GameWindow(arcade.Window):
                 if l<=x<=r and b<=y<=t:
                     if name == "play":
                         if self.game_state == STATE_MENU:
-                            self.game_state = STATE_LEVEL_SELECT
+                            self._start_screen_transition(STATE_MENU, STATE_LEVEL_SELECT)
                         else:
                             self.game_state = STATE_PLAYING
                             self.set_mouse_visible(False)
@@ -2832,6 +2909,9 @@ class GameWindow(arcade.Window):
             self.player.change_y = 0.0
 
     def on_key_press(self, key, modifiers):
+        if self._screen_transition and key != arcade.key.F11:
+            return
+
         if key in {arcade.key.W, arcade.key.A, arcade.key.S, arcade.key.D,
                    arcade.key.UP, arcade.key.DOWN, arcade.key.LEFT, arcade.key.RIGHT}:
             self._held_move_keys.add(key)

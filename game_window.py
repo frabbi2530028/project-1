@@ -51,6 +51,12 @@ class GameWindow(arcade.Window):
                 load_texture_clean(path, sc)
             except (FileNotFoundError, OSError):
                 pass   # image not yet in place — handled gracefully at runtime
+        for lvl in LEVELS:
+            for scale_key in ("boss_texture_scale", "boss_portrait_scale"):
+                try:
+                    load_texture_clean(lvl["boss_texture"], lvl[scale_key])
+                except (FileNotFoundError, OSError):
+                    pass
         for k in POWERUP_TYPES:
             solid_texture(22, POWERUP_COLORS[k])
 
@@ -1061,8 +1067,56 @@ class GameWindow(arcade.Window):
                                      anchor_x="right", bold=True, font_name=FN)
                     sy -= stat_sz + 6
 
-                # Best score at bottom
                 best_s = self.best_scores.get(idx, 0)
+                boss_name_sz = max(6, min(int(8 * ui_scale), cw//17))
+                boss_line_y = cb_ + 18
+                portrait_left = cl + max(18, int(20 * ui_scale))
+                portrait_right = cr - max(18, int(20 * ui_scale))
+                portrait_bottom = boss_line_y + 14
+                portrait_top = sy - 6
+
+                if portrait_top - portrait_bottom >= max(28, int(34 * ui_scale)):
+                    bob = math.sin(t * 1.9 + idx * 0.7)
+                    drift = math.sin(t * 1.2 + idx * 0.45) * 2.0
+                    pulse = 0.92 + 0.08 * math.sin(t * 2.4 + idx * 0.9)
+                    hover_y = bob * 4.0
+                    glow_w = (portrait_right - portrait_left) * (0.48 + 0.06 * pulse)
+                    glow_h = max(8, (portrait_top - portrait_bottom) * 0.12)
+                    glow_y = portrait_bottom + glow_h * 0.95
+                    glow_alpha = 34 if sel else 22
+                    arcade.draw_ellipse_filled(
+                        ccx, glow_y,
+                        glow_w, glow_h,
+                        (*lc[:3], glow_alpha)
+                    )
+                    arcade.draw_ellipse_outline(
+                        ccx, glow_y + 1,
+                        glow_w * 0.72, glow_h * 0.55,
+                        (*lc[:3], 36 if sel else 24), 1
+                    )
+                    boss_tex = load_texture_clean(
+                        lvl["boss_texture"],
+                        lvl.get("boss_portrait_scale", lvl.get("boss_texture_scale", 0.3))
+                    )
+                    _draw_texture_fitted(
+                        boss_tex,
+                        ccx + drift,
+                        (portrait_bottom + portrait_top) * 0.5 + 4 + hover_y,
+                        (portrait_right - portrait_left) * (0.82 * pulse),
+                        (portrait_top - portrait_bottom) * (0.80 * pulse),
+                    )
+
+                arcade.draw_text(
+                    f"BOSS: {lvl['boss_name']}",
+                    ccx, boss_line_y,
+                    (*lc[:3], 235) if sel else (*lc[:3], 190),
+                    boss_name_sz,
+                    anchor_x="center",
+                    bold=True,
+                    font_name=FN,
+                )
+
+                # Best score at bottom
                 if best_s > 0:
                     arcade.draw_text(f"BEST {best_s:,}", ccx, cb_+5,
                                      (255,220,40,210), max(7, int(8 * ui_scale)), anchor_x="center",
@@ -2646,12 +2700,19 @@ class GameWindow(arcade.Window):
                 lvl["shooting_enemies"],
                 lvl["boss_hp_mult"] * mult
             )
-        boss = BossEnemy(self.width // 2, self.height + 55, boss_hp)
+        boss = BossEnemy(
+            self.width // 2,
+            self.height + 55,
+            boss_hp,
+            texture_path=lvl.get("boss_texture", "image/boss.png"),
+            texture_scale=lvl.get("boss_texture_scale", 0.2),
+            boss_name=lvl.get("boss_name", "BOSS"),
+        )
         if self.selected_level == len(LEVELS) - 1:
             boss.is_final_boss = True
         self.bosses.append(boss)
         lc = lvl["color"]
-        self.notif_text  = f"⚠  LEVEL {lvl['number']} BOSS  —  {boss_hp:,} HP!"
+        self.notif_text  = f"⚠  {boss.boss_name} INBOUND  —  {boss_hp:,} HP!"
         self.notif_color = lc
         self.notif_timer = 3.0
 

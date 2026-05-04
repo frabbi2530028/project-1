@@ -214,19 +214,20 @@ def _build_levels() -> list:
     Spawn rate tightens with each level.  Boss HP = combined enemy HP.
     """
     names = [
-        (1,  "DAWN PATROL",   "First contact — rookies in the dark",          (80,  220, 130)),
-        (2,  "NOVA SURGE",    "Faster waves, denser skies",                    (90,  180, 255)),
-        (3,  "IRON CROSS",    "Shielded interceptors join the fray",           (255, 200,  50)),
-        (4,  "CRIMSON TIDE",  "Elite fighters & coordinated fire",             (255, 100,  80)),
-        (5,  "SOLAR FLARE",   "Relentless sun-scorched assault",               (255, 165,  40)),
-        (6,  "NEBULA RIFT",   "Dense formations & heavy artillery",            (140, 100, 255)),
-        (7,  "OBSIDIAN GATE", "Elite guard — precision or death",              (80,  210, 220)),
-        (8,  "VOID STORM",    "Maximum aggression — bullets everywhere",       (200, 100, 255)),
-        (9,  "SINGULARITY",   "The abyss opens — no mercy",                   (255,  60, 120)),
-        (10, "FINAL HORIZON", "Last stand — the combined fleet arrives",       (255, 220,  80)),
+        (1,  "DAWN PATROL",   "First contact — rookies in the dark",          (80,  220, 130), "AVATAR 2472",      "image/avatar_2472.png",    3.00, 3.50),
+        (2,  "NOVA SURGE",    "Faster waves, denser skies",                    (90,  180, 255), "FCDXFW1",          "image/FcdXFW1.png",        0.38, 0.44),
+        (3,  "IRON CROSS",    "Shielded interceptors join the fray",           (255, 200,  50), "UVLV4MU",          "image/UvlV4Mu.png",        0.55, 0.72),
+        (4,  "CRIMSON TIDE",  "Elite fighters & coordinated fire",             (255, 100,  80), "PLANE 6",          "image/plane6.png",         0.08, 0.10),
+        (5,  "SOLAR FLARE",   "Relentless sun-scorched assault",               (255, 165,  40), "WD5NR2U",          "image/wd5Nr2u.png",        0.36, 0.44),
+        (6,  "NEBULA RIFT",   "Dense formations & heavy artillery",            (140, 100, 255), "REMADE PLANE",     "image/1-year-later-i-remade-this-plane-its-still-unrealistic-but-v0-3fszatcdqw2e1.webp", 0.15, 0.18),
+        (7,  "OBSIDIAN GATE", "Elite guard — precision or death",              (80,  210, 220), "OBSIDIAN REX",     "image/boss.png",           0.20, 0.32),
+        (8,  "VOID STORM",    "Maximum aggression — bullets everywhere",       (200, 100, 255), "VOID REAPER",      "image/boss.png",           0.20, 0.32),
+        (9,  "SINGULARITY",   "The abyss opens — no mercy",                   (255,  60, 120), "GRAVECROWN",       "image/boss.png",           0.20, 0.32),
+        (10, "FINAL HORIZON", "Last stand — the combined fleet arrives",       (255, 220,  80), "OMEGA CORE",       "image/boss.png",           0.20, 0.32),
     ]
     levels = []
-    for i, (num, name, subtitle, color) in enumerate(names):
+    for i, (num, name, subtitle, color, boss_name, boss_texture,
+            boss_texture_scale, boss_portrait_scale) in enumerate(names):
         n = i + 1
         if n == 1:
             total = 200
@@ -250,6 +251,10 @@ def _build_levels() -> list:
             "spawn_rate":       spawn_rate,
             "shoot_rate":       shoot_rate,
             "boss_hp_mult":     boss_mult,
+            "boss_name":        boss_name,
+            "boss_texture":     boss_texture,
+            "boss_texture_scale": boss_texture_scale,
+            "boss_portrait_scale": boss_portrait_scale,
             "reward_coins":     reward,
             "requires_level":   i - 1,   # index of level that must be completed (-1 = none)
         })

@@ -139,11 +139,14 @@ class ShootingEnemy(arcade.Sprite):
 
 
 class BossEnemy(arcade.Sprite):
-    def __init__(self, x, y, health=BOSS_HEALTH):
+    def __init__(self, x, y, health=BOSS_HEALTH,
+                 texture_path="image/boss.png", texture_scale=0.2,
+                 boss_name="BOSS"):
         super().__init__()
-        self.texture       = load_texture_clean("image/boss.png", 0.2)
+        self.texture       = load_texture_clean(texture_path, texture_scale)
         self.center_x      = x;  self.center_y  = y
         self.health        = health;  self.max_health = health
+        self.boss_name     = boss_name
         self.normal_timer  = 0.0;  self.special_timer = 0.0
         self.electric_timer = 0.0
         self.is_final_boss = False

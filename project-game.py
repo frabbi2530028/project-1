@@ -2290,23 +2290,24 @@ class GameWindow(arcade.Window):
             else:
                 # Level number badge
                 badge_r = max(13, min(int(18 * ui_scale), ch//7))
-                arcade.draw_circle_filled(ccx, ct-badge_r-4,
-                                           badge_r, (*lc[:3],180))
-                arcade.draw_circle_outline(ccx, ct-badge_r-4,
-                                            badge_r, (*lc[:3],255), 2)
-                arcade.draw_text(str(lvl["number"]), ccx, ct-badge_r*2-2,
+                badge_cy = ct - badge_r - 4
+                arcade.draw_circle_filled(ccx, badge_cy, badge_r, (*lc[:3],180))
+                arcade.draw_circle_outline(ccx, badge_cy, badge_r, (*lc[:3],255), 2)
+                arcade.draw_text(str(lvl["number"]), ccx, badge_cy,
                                  (255,255,255), max(10, badge_r),
-                                 anchor_x="center", bold=True, font_name=FU)
+                                 anchor_x="center", anchor_y="center",
+                                 bold=True, font_name=FU)
 
                 # Name
                 name_sz = max(8, min(int(12 * ui_scale), cw//12))
-                arcade.draw_text(lvl["name"], ccx, ct-badge_r*2-16,
+                name_y = badge_cy - badge_r - max(8, int(8 * ui_scale))
+                arcade.draw_text(lvl["name"], ccx, name_y,
                                  (*lc[:3],230) if sel else (*lc[:3],180),
-                                 name_sz, anchor_x="center", bold=True,
+                                 name_sz, anchor_x="center", anchor_y="top", bold=True,
                                  font_name=FU)
 
                 # Divider
-                div_y2 = ct - badge_r*2 - 28
+                div_y2 = name_y - name_sz - max(8, int(8 * ui_scale))
                 arcade.draw_line(cl+8, div_y2, cr-8, div_y2,
                                  (*lc[:3],50), 1)
 
@@ -2318,17 +2319,19 @@ class GameWindow(arcade.Window):
                     boss_hp = _level_boss_hp(lvl["regular_enemies"],
                                               lvl["shooting_enemies"],
                                               lvl["boss_hp_mult"])
-                stat_sz = max(7, min(int(10 * ui_scale), cw//15))
+                stat_sz = max(8, min(int(10 * ui_scale), cw//15))
                 sy      = div_y2 - 4
+                stat_label_c = (155, 180, 225, 225)
+                stat_value_c = (*lc[:3], 235)
                 for lbl2, val2 in [("ENEMIES", f"{total_e}"),
                                     ("BOSS HP",  f"{boss_hp:,}"),
                                     ("REWARD",  f"${lvl['reward_coins']}")]:
                     if sy < cb_ + 26: break
-                    arcade.draw_text(lbl2, cl+6, sy-stat_sz,
-                                     (110,130,185,170), stat_sz-1, font_name=FN)
-                    arcade.draw_text(val2, cr-5, sy-stat_sz,
-                                     (*lc[:3],210), stat_sz,
-                                     anchor_x="right", bold=True, font_name=FN)
+                    self._txt_shadow(lbl2, cl+6, sy-stat_sz,
+                                     stat_label_c, stat_sz-1, FN)
+                    self._txt_shadow(val2, cr-5, sy-stat_sz,
+                                     stat_value_c, stat_sz, FN,
+                                     anchor_x="right", bold=True)
                     sy -= stat_sz + 6
 
                 best_s = self.best_scores.get(idx, 0)

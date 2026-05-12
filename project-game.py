@@ -184,6 +184,7 @@ STATE_PAUSED      = "paused"
 STATE_GAMEOVER    = "gameover"
 STATE_LEVEL_SELECT = "level_select"
 STATE_LEVEL_CLEAR  = "level_clear"
+STATE_MODE_SELECT  = "mode_select"
 
 # ─────────────────────────────────────────────────────
 #  LEVEL DEFINITIONS
@@ -1279,7 +1280,9 @@ class GameWindow(arcade.Window):
         _preload_powerup_textures()
 
         # ── UI/menu state ─────────────────────────────
-        self.game_state    = STATE_MENU
+        self.game_state    = STATE_MODE_SELECT
+        self.selected_mode      = None          # "normal" | "maze" | "multiplayer"
+        self._mode_btns:  dict  = {}
         self.menu_theme         = "dark"
         self.selected_ship      = 0
         self.selected_difficulty = "medium"
@@ -1645,6 +1648,218 @@ class GameWindow(arcade.Window):
                              font_name=FONT_NUMERIC)
             self._draw_stat_pips(cx, stat_y, value, 5,
                                  theme_c["stat_filled"], theme_c["stat_empty"], 72)
+
+    def _draw_mode_select(self):
+        """Full-screen mode selection lobby shown before the main menu."""
+        w, h = self.width, self.height
+        t    = self.bg_time
+        tc   = THEMES["dark"]
+        FU   = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        FN   = ("Courier New", "Menlo", "Monaco", "monospace")
+
+        # ── Animated background ─────────────────────────────────────────
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
+        p = (math.sin(t * 0.55) + 1) * 0.5
+        arcade.draw_circle_filled(w * 0.12, h * 0.85, 240 + 20 * p,       (38, 75, 185, 45))
+        arcade.draw_circle_filled(w * 0.88, h * 0.18, 270 + 28 * (1 - p), (130, 40, 165, 38))
+        arcade.draw_circle_filled(w * 0.50, h * 1.08, 290,                  (28, 150, 200, 22))
+        off = (t * 14) % 28
+        for yi in range(-30, h + 30, 28):
+            arcade.draw_line(0, yi + off, w, yi + off - 18, (28, 44, 76, 24), 1)
+        for s in self.stars:
+            tw2 = 0.55 + 0.45 * math.sin(t * s["twinkle"] + s["phase"])
+            al  = max(20, min(255, int(s["alpha"] * tw2)))
+            arcade.draw_circle_filled(s["x"], s["y"], s["size"], (200, 222, 255, al))
+
+        # ── Title ───────────────────────────────────────────────────────
+        title_pulse = 0.5 + 0.5 * math.sin(t * 2.2)
+        title_color = (int(90 + 30 * title_pulse), int(195 + 30 * title_pulse), 255, 255)
+        arcade.draw_text("SPACE SHOOTER", w // 2 + 3, h - 62,
+                         (0, 0, 0, 90), 36, anchor_x="center", bold=True, font_name=FU)
+        arcade.draw_text("SPACE SHOOTER", w // 2, h - 60,
+                         title_color, 36, anchor_x="center", bold=True, font_name=FU)
+        arcade.draw_text("NEON DRIFT", w // 2 + 2, h - 100,
+                         (0, 0, 0, 75), 20, anchor_x="center", bold=True, font_name=FU)
+        arcade.draw_text("NEON DRIFT", w // 2, h - 98,
+                         (90, 198, 255, 210), 20, anchor_x="center", bold=True, font_name=FU)
+
+        arcade.draw_text("SELECT YOUR GAME MODE", w // 2, h - 134,
+                         (120, 155, 215, 190), 13, anchor_x="center", font_name=FU)
+        arcade.draw_line(w // 2 - 160, h - 148, w // 2 + 160, h - 148,
+                         (70, 112, 205, 90), 1)
+
+        # ── Three mode cards ────────────────────────────────────────────
+        modes = [
+            {
+                "key":     "normal",
+                "label":   "NORMAL",
+                "icon":    "◈",
+                "desc":    "Classic space combat",
+                "detail":  "10 levels · Shop · Boss fights",
+                "color":   (90, 198, 255),
+                "available": True,
+            },
+            {
+                "key":     "maze",
+                "label":   "MAZE MODE",
+                "icon":    "⬡",
+                "desc":    "Navigate & survive",
+                "detail":  "Procedural maze arenas",
+                "color":   (120, 255, 160),
+                "available": False,
+            },
+            {
+                "key":     "multiplayer",
+                "label":   "MULTIPLAYER",
+                "icon":    "⚔",
+                "desc":    "Battle with others",
+                "detail":  "Co-op & PvP online",
+                "color":   (255, 140, 80),
+                "available": False,
+            },
+        ]
+
+        n_cards = len(modes)
+        card_w  = min(210, int((w - 80) / n_cards - 20))
+        card_h  = min(260, int(h * 0.48))
+        total_w = n_cards * card_w + (n_cards - 1) * 24
+        start_x = (w - total_w) // 2
+        card_y  = h // 2 - card_h // 2 - 20
+
+        self._mode_btns = {}
+
+        for i, mode in enumerate(modes):
+            cl = start_x + i * (card_w + 24)
+            cr = cl + card_w
+            cb = card_y
+            ct = card_y + card_h
+            cx_ = cl + card_w // 2
+
+            avail  = mode["available"]
+            mc     = mode["color"]
+            hov    = avail and self._is_hovering(cl, cr, cb, ct)
+            sel    = (self.selected_mode == mode["key"])
+
+            # Shadow
+            arcade.draw_lrbt_rectangle_filled(cl + 6, cr + 6, cb - 6, ct - 6, (0, 0, 0, 70))
+
+            # Card body
+            if not avail:
+                fill   = (12, 16, 40, 210)
+                border = (38, 46, 80, 130)
+            elif sel or hov:
+                alpha  = 200 if sel else 140
+                fill   = (*mc[:3], alpha) if sel else (14, 32, 80, 220)
+                border = (*mc, 255)
+            else:
+                fill   = (9, 18, 50, 220)
+                border = (*mc[:3], 110)
+
+            arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
+            arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, border, 2 if (sel or hov) else 1)
+
+            # Glow pulse on selected / hover
+            if sel or hov:
+                pulse2 = 0.5 + 0.5 * math.sin(t * 4.5)
+                glow_a = int(30 + 35 * pulse2)
+                arcade.draw_lrbt_rectangle_outline(cl - 3, cr + 3, cb - 3, ct + 3,
+                                                    (*mc, glow_a), 3)
+
+            # Corner accents
+            sz = 12
+            ac2 = border
+            for (px2, py2, sx2, sy2) in [(cl, ct, 1, -1), (cr, ct, -1, -1),
+                                          (cl, cb, 1,  1), (cr, cb, -1,  1)]:
+                arcade.draw_line(px2, py2, px2 + sx2 * sz, py2, ac2, 2)
+                arcade.draw_line(px2, py2, px2, py2 + sy2 * sz, ac2, 2)
+
+            # Icon
+            icon_c = mc if avail else (55, 65, 100, 180)
+            icon_a = int(200 + 55 * math.sin(t * 3.0 + i)) if avail else 100
+            arcade.draw_text(mode["icon"], cx_, ct - 62,
+                             (*icon_c[:3], icon_a), 34,
+                             anchor_x="center", anchor_y="center", font_name=FU)
+
+            # Divider
+            div_c = (*mc[:3], 80) if avail else (38, 46, 80, 60)
+            arcade.draw_line(cl + 18, ct - 90, cr - 18, ct - 90, div_c, 1)
+
+            # Mode label
+            lbl_c = (*mc, 255) if avail else (55, 65, 105, 180)
+            arcade.draw_text(mode["label"], cx_ + 1, ct - 118,
+                             (0, 0, 0, 80), 15, anchor_x="center", bold=True, font_name=FU)
+            arcade.draw_text(mode["label"], cx_, ct - 116,
+                             lbl_c, 15, anchor_x="center", bold=True, font_name=FU)
+
+            # Short description
+            desc_c = (180, 205, 245, 210) if avail else (60, 72, 110, 160)
+            arcade.draw_text(mode["desc"], cx_, ct - 148,
+                             desc_c, 11, anchor_x="center", font_name=FU)
+
+            # Detail line
+            det_c = (110, 140, 195, 160) if avail else (45, 55, 85, 120)
+            arcade.draw_text(mode["detail"], cx_, ct - 168,
+                             det_c, 9, anchor_x="center", font_name=FN)
+
+            # COMING SOON badge
+            if not avail:
+                bw2 = card_w - 28;  bh2 = 24
+                bx2 = cl + 14;      by2 = cb + 18
+                arcade.draw_lrbt_rectangle_filled(bx2, bx2 + bw2, by2, by2 + bh2,
+                                                   (22, 28, 62, 220))
+                arcade.draw_lrbt_rectangle_outline(bx2, bx2 + bw2, by2, by2 + bh2,
+                                                    (60, 75, 130, 180), 1)
+                arcade.draw_text("COMING SOON", bx2 + bw2 // 2, by2 + bh2 // 2,
+                                 (100, 120, 185, 200), 9, anchor_x="center",
+                                 anchor_y="center", bold=True, font_name=FU)
+            else:
+                # SELECT button at bottom of card
+                btn_bw = card_w - 28;  btn_bh = 28
+                btn_bx = cl + 14;      btn_by = cb + 14
+                btn_hov = self._is_hovering(btn_bx, btn_bx + btn_bw, btn_by, btn_by + btn_bh)
+                btn_fill   = (*mc, 220) if (sel or btn_hov) else (*mc[:3], 50)
+                btn_border = (*mc, 255)
+                btn_tc     = (10, 10, 20, 255) if (sel or btn_hov) else (*mc, 210)
+                arcade.draw_lrbt_rectangle_filled(btn_bx, btn_bx + btn_bw,
+                                                   btn_by, btn_by + btn_bh, btn_fill)
+                arcade.draw_lrbt_rectangle_outline(btn_bx, btn_bx + btn_bw,
+                                                    btn_by, btn_by + btn_bh, btn_border, 1)
+                btn_label = "▶  SELECTED" if sel else "SELECT"
+                arcade.draw_text(btn_label, btn_bx + btn_bw // 2, btn_by + btn_bh // 2,
+                                 btn_tc, 10, anchor_x="center", anchor_y="center",
+                                 bold=True, font_name=FU)
+                self._mode_btns[mode["key"]] = (cl, cr, cb, ct)
+
+        # ── ENTER button ────────────────────────────────────────────────
+        if self.selected_mode:
+            enter_w = 240;  enter_h = 48
+            enter_x = w // 2 - enter_w // 2
+            enter_y = card_y - enter_h - 24
+            enter_hov = self._is_hovering(enter_x, enter_x + enter_w, enter_y, enter_y + enter_h)
+            ep = 0.5 + 0.5 * math.sin(t * 3.5)
+            e_fill   = (int(28 + 24 * ep), int(88 + 30 * ep), int(215 + 20 * ep), 245)
+            e_border = (90, 198, 255, 255) if enter_hov else (70, 162, 255, 220)
+            e_tc     = (255, 255, 255, 255)
+            if enter_hov:
+                arcade.draw_lrbt_rectangle_filled(enter_x - 2, enter_x + enter_w + 2,
+                                                   enter_y - 2, enter_y + enter_h + 2,
+                                                   (90, 198, 255, 28))
+            arcade.draw_lrbt_rectangle_filled(enter_x, enter_x + enter_w,
+                                               enter_y, enter_y + enter_h, e_fill)
+            arcade.draw_lrbt_rectangle_outline(enter_x, enter_x + enter_w,
+                                                enter_y, enter_y + enter_h, e_border, 2)
+            arcade.draw_text("[ ENTER GAME ]", w // 2 + 1, enter_y + enter_h // 2 - 1,
+                             (0, 0, 0, 90), 18, anchor_x="center", anchor_y="center",
+                             bold=True, font_name=FU)
+            arcade.draw_text("[ ENTER GAME ]", w // 2, enter_y + enter_h // 2,
+                             e_tc, 18, anchor_x="center", anchor_y="center",
+                             bold=True, font_name=FU)
+            self._mode_btns["__enter__"] = (enter_x, enter_x + enter_w, enter_y, enter_y + enter_h)
+
+        # ── Footer hint ─────────────────────────────────────────────────
+        arcade.draw_text("Click a mode card, then press ENTER GAME  ·  F11 Fullscreen",
+                         w // 2, 16, (80, 108, 165, 140), 9,
+                         anchor_x="center", font_name=FN)
 
     def _draw_menu(self, anim: dict | None = None, draw_background: bool = True):
         anim = anim or {}
@@ -3181,6 +3396,10 @@ class GameWindow(arcade.Window):
             self._draw_menu_to_level_transition()
             return
 
+        if self.game_state == STATE_MODE_SELECT:
+            self._draw_mode_select()
+            return
+
         if self.game_state == STATE_MENU:
             self._draw_menu()
             return
@@ -4031,6 +4250,19 @@ class GameWindow(arcade.Window):
         if self._screen_transition:
             return
 
+        if self.game_state == STATE_MODE_SELECT:
+            for name, rect in self._mode_btns.items():
+                l, r, b, t = rect
+                if l <= x <= r and b <= y <= t:
+                    if name == "__enter__":
+                        # Transition to the main menu for the selected mode
+                        if self.selected_mode == "normal":
+                            self.game_state = STATE_MENU
+                    elif name in ("normal",):
+                        self.selected_mode = name
+                    return
+            return
+
         if self.game_state in (STATE_MENU, STATE_PAUSED):
             # difficulty button click
             for dkey, rect in self._diff_btns.items():
@@ -4138,7 +4370,9 @@ class GameWindow(arcade.Window):
             return
 
         if key == arcade.key.ESCAPE:
-            if self.game_state == STATE_PLAYING:
+            if self.game_state == STATE_MODE_SELECT:
+                pass  # nothing to go back to on the first screen
+            elif self.game_state == STATE_PLAYING:
                 self.game_state = STATE_PAUSED
                 self._clear_movement_input()
                 self.set_mouse_visible(True)

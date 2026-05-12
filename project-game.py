@@ -190,19 +190,17 @@ STATE_MODE_SELECT  = "mode_select"
 #  MAZE MODE CONSTANTS
 # ─────────────────────────────────────────────────────
 
-MAZE_CELL_SIZE    = 64          # pixels per cell
+MAZE_CELL_SIZE    = 56          # pixels per cell (slightly smaller to fit bigger grids)
 MAZE_WALL_THICK   = 10          # wall line thickness
-MAZE_BASE_COLS    = 9           # starting grid width
-MAZE_BASE_ROWS    = 7           # starting grid height
-MAZE_ENEMY_SPEED  = 78          # enemy walk speed (px/s)
-MAZE_ENEMY_HEALTH = 45
-MAZE_SHOOT_RANGE  = 5           # cells: max distance enemy will shoot
+MAZE_BASE_COLS    = 13          # starting grid width  (was 9)
+MAZE_BASE_ROWS    = 9           # starting grid height (was 7)
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
 STATE_MAZE_SELECT = "maze_select"
 
 # ─────────────────────────────────────────────────────
 #  MAZE PRESETS  (player chooses one before starting)
+#  No enemies — pure navigation challenge
 # ─────────────────────────────────────────────────────
 
 MAZE_PRESETS = [
@@ -210,45 +208,41 @@ MAZE_PRESETS = [
         "key":        "classic",
         "name":       "CLASSIC",
         "icon":       "⬡",
-        "desc":       "Balanced corridors & fair fights",
-        "detail":     "9×7 start · 3 enemies / floor",
+        "desc":       "Balanced corridors, steady challenge",
+        "detail":     "13×9 start · grows each floor",
         "color":      (90, 198, 255),
-        "cols_bonus": 0,     # added to MAZE_BASE_COLS + lvl*2
-        "rows_bonus": 0,     # added to MAZE_BASE_ROWS + lvl
-        "enemy_mult": 1.0,
+        "cols_bonus": 0,
+        "rows_bonus": 0,
     },
     {
         "key":        "labyrinth",
         "name":       "LABYRINTH",
         "icon":       "◎",
-        "desc":       "Wide twisting maze, more enemies",
-        "detail":     "13×9 start · 5 enemies / floor",
+        "desc":       "Vast twisting corridors to explore",
+        "detail":     "17×11 start · massive scale-up",
         "color":      (120, 255, 160),
         "cols_bonus": 4,
         "rows_bonus": 2,
-        "enemy_mult": 1.6,
     },
     {
         "key":        "sprint",
         "name":       "SPRINT",
         "icon":       "◈",
-        "desc":       "Tiny arenas — reach the exit fast",
-        "detail":     "7×5 start · 2 enemies / floor",
+        "desc":       "Compact arenas — reach exit fast",
+        "detail":     "9×7 start · quick floors",
         "color":      (255, 220, 40),
-        "cols_bonus": -2,
+        "cols_bonus": -4,
         "rows_bonus": -2,
-        "enemy_mult": 0.65,
     },
     {
         "key":        "gauntlet",
         "name":       "GAUNTLET",
         "icon":       "✦",
-        "desc":       "Tall maze packed with hunters",
-        "detail":     "9×11 start · 7 enemies / floor",
+        "desc":       "Tall narrow maze — easy to get lost",
+        "detail":     "11×15 start · vertical nightmare",
         "color":      (255, 90, 90),
-        "cols_bonus": 0,
-        "rows_bonus": 4,
-        "enemy_mult": 2.2,
+        "cols_bonus": -2,
+        "rows_bonus": 6,
     },
 ]
 
@@ -1859,8 +1853,8 @@ class GameWindow(arcade.Window):
         cs    = MAZE_CELL_SIZE
         preset = getattr(self, "maze_preset", None) or MAZE_PRESETS[0]
 
-        cols = min(MAZE_BASE_COLS  + preset["cols_bonus"] + lvl * 2, max(7,  (w - 80) // cs))
-        rows = min(MAZE_BASE_ROWS  + preset["rows_bonus"] + lvl,     max(5,  (h - 120) // cs))
+        cols = min(MAZE_BASE_COLS  + preset["cols_bonus"] + lvl * 3, max(9,  (w - 60) // cs))
+        rows = min(MAZE_BASE_ROWS  + preset["rows_bonus"] + lvl * 2, max(7,  (h - 100) // cs))
         # Keep odd dimensions (nicer-looking mazes)
         if cols % 2 == 0: cols -= 1
         if rows % 2 == 0: rows -= 1
@@ -1889,6 +1883,7 @@ class GameWindow(arcade.Window):
         self.player.center_x = ox + 0.5 * cs
         self.player.center_y = oy + (rows - 0.5) * cs
         self.player.change_x = 0.0;  self.player.change_y = 0.0
+        self.player.angle    = -90.0   # face RIGHT (90° clockwise from default up)
 
         self.player_list = arcade.SpriteList()
         self.player_list.append(self.player)
@@ -1899,15 +1894,8 @@ class GameWindow(arcade.Window):
         self.powerups      = arcade.SpriteList()
         self.coins_list    = arcade.SpriteList()
 
-        # ── Enemies ─────────────────────────────────
-        enemy_count = max(1, int((3 + lvl * 2) * preset["enemy_mult"]))
-        all_cells   = [(c, r) for c in range(cols) for r in range(rows)]
-        far_cells   = [(c, r) for c, r in all_cells
-                       if abs(c) + abs(r - (rows - 1)) > max(3, (cols + rows) // 4)]
-        random.shuffle(far_cells)
+        # ── No enemies in maze mode — pure navigation ──
         self.maze_enemies = []
-        for c, r in far_cells[:enemy_count]:
-            self.maze_enemies.append(MazeEnemy(c, r, cs, float(ox), float(oy)))
 
         # ── Runtime reset ───────────────────────────
         self.score              = getattr(self, "score", 0)
@@ -2047,19 +2035,8 @@ class GameWindow(arcade.Window):
         # ── Particles ───────────────────────────────
         self._draw_particles()
 
-        # ── Enemies ─────────────────────────────────
-        for enemy in self.maze_enemies:
-            arcade.draw_circle_filled(enemy.center_x, enemy.center_y, 24, (255, 70, 70, 55))
-            arcade.draw_sprite(enemy)
-            if enemy.health < enemy.max_health:
-                ratio = max(0.0, enemy.health / enemy.max_health)
-                bx2 = enemy.center_x - 18
-                arcade.draw_lrbt_rectangle_filled(bx2, bx2 + 36, enemy.top + 5, enemy.top + 10, (30, 20, 20, 220))
-                arcade.draw_lrbt_rectangle_filled(bx2, bx2 + 36 * ratio, enemy.top + 5, enemy.top + 10, (255, 90, 80, 235))
-
         # ── Bullets ─────────────────────────────────
-        self.bullets.draw()
-        self.enemy_bullets.draw()
+        # (no bullets in maze mode — navigation only)
 
         # ── Player ──────────────────────────────────
         if self.player:
@@ -2106,22 +2083,17 @@ class GameWindow(arcade.Window):
         self._txt_shadow(f"SCORE  {self.score:,}", w - 16, h - 28,
                          (210, 235, 255, 240), 18, FU, anchor_x="right", bold=True)
 
-        # ── Maze level badge ────────────────────────
-        lbl = f"MAZE  LEVEL  {self.maze_level + 1}"
+        # ── Maze floor badge ────────────────────────
+        lbl = f"FLOOR  {self.maze_level + 1}"
         self._txt_shadow(lbl, w // 2, h - 28, (100, 255, 160, 230),
                          14, FU, anchor_x="center", bold=True)
-
-        # ── Enemy count ─────────────────────────────
-        alive = len(self.maze_enemies)
-        ec_clr = (255, 120, 80, 200) if alive > 0 else (100, 240, 130, 200)
-        self._txt_shadow(f"ENEMIES  {alive}", 16, h - 56, ec_clr, 10, FU)
 
         # ── Timer ───────────────────────────────────
         self._txt_shadow(f"{self.time_alive:06.1f}s", w - 16, h - 52,
                          (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
 
         # ── Hint ────────────────────────────────────
-        arcade.draw_text("WASD Move · Mouse Aim · ESC Pause · H Hide HUD",
+        arcade.draw_text("WASD Move · Find the EXIT · ESC Quit · H Hide HUD",
                          w // 2, 12, (70, 100, 155, 130), 8,
                          anchor_x="center", font_name=FN)
 
@@ -2178,12 +2150,6 @@ class GameWindow(arcade.Window):
         ey2 = my + (self.maze_exit_row + 0.5) * mm_cs
         arcade.draw_circle_filled(ex2, ey2, mm_cs * 0.45, (0, 255, 155, 210))
 
-        # Enemy markers
-        for enemy in self.maze_enemies:
-            ex3 = mx + (enemy.maze_col + 0.5) * mm_cs
-            ey3 = my + (enemy.maze_row + 0.5) * mm_cs
-            arcade.draw_circle_filled(ex3, ey3, mm_cs * 0.38, (255, 75, 75, 215))
-
         # Player marker
         pc2, pr2 = self._maze_player_cell()
         px3 = mx + (pc2 + 0.5) * mm_cs
@@ -2209,10 +2175,10 @@ class GameWindow(arcade.Window):
         arcade.draw_lrbt_rectangle_outline(cx2, cx2 + cw2, cy2, cy2 + ch2, (200, 35, 35, 200), 2)
 
         mid = w // 2
-        self._txt_shadow("YOU DIED", mid, cy2 + ch2 - 58, (255, 50, 50, 255),
+        self._txt_shadow("MAZE OVER", mid, cy2 + ch2 - 58, (255, 50, 50, 255),
                          50, FU, anchor_x="center", bold=True)
         arcade.draw_line(cx2 + 24, cy2 + ch2 - 78, cx2 + cw2 - 24, cy2 + ch2 - 78, (200, 35, 35, 130), 1)
-        self._txt_shadow(f"MAZE LEVEL  {self.maze_level + 1}",
+        self._txt_shadow(f"FLOOR  {self.maze_level + 1}",
                          mid, cy2 + ch2 - 112, (120, 155, 215, 210), 12, FU, anchor_x="center")
         self._txt_shadow(f"SCORE  {self.score:,}", mid, cy2 + ch2 - 148,
                          (210, 235, 255, 245), 30, FN, anchor_x="center", bold=True)
@@ -2254,134 +2220,35 @@ class GameWindow(arcade.Window):
         else:
             p.change_y = 0.0
 
-        p.angle = max(-20, min(20, -p.change_x * 0.06))
+        # Ship faces RIGHT (-90°) and tilts slightly based on vertical speed
+        tilt = max(-20, min(20, p.change_y * 0.06))
+        p.angle = -90.0 + tilt
         p.update_powerups(delta)
 
-        # Engine particles
+        # Engine trail — particles stream from the LEFT side (behind a rightward ship)
         mv = abs(p.change_x) + abs(p.change_y)
-        if mv > 80 and random.random() < 0.45:
-            ang = math.atan2(-p.change_y, -p.change_x) + random.uniform(-0.45, 0.45)
+        if mv > 60 and random.random() < 0.50:
+            ang = math.atan2(-p.change_y, -p.change_x) + random.uniform(-0.35, 0.35)
             self._add_particle(
-                p.center_x + random.uniform(-3, 3), p.center_y - 6,
-                math.cos(ang) * random.uniform(60, 140),
-                math.sin(ang) * random.uniform(60, 140),
-                random.uniform(1.2, 2.4), random.uniform(0.10, 0.22),
+                p.center_x + random.uniform(-4, 4),
+                p.center_y + random.uniform(-4, 4),
+                math.cos(ang) * random.uniform(55, 130),
+                math.sin(ang) * random.uniform(55, 130),
+                random.uniform(1.2, 2.2), random.uniform(0.10, 0.22),
                 (90, 200, 255), 0.88)
 
-        # ── Player shooting ──────────────────────────
-        self.fire_timer += delta
-        while self.fire_timer >= AUTO_FIRE_RATE:
-            self._shoot_toward(self.mouse_x, self.mouse_y)
-            self.fire_timer -= AUTO_FIRE_RATE
-
-        # ── Update player bullets (manual — no arcade update, wall check) ─
-        for b in list(self.bullets):
-            b.center_x += b.change_x * delta
-            b.center_y += b.change_y * delta
-            b.life      -= delta
-            col_b = int((b.center_x - ox) / cs)
-            row_b = int((b.center_y - oy) / cs)
-            in_bounds = (0 <= col_b < maze.cols and 0 <= row_b < maze.rows
-                         and ox <= b.center_x <= ox + maze.cols * cs
-                         and oy <= b.center_y <= oy + maze.rows * cs)
-            if b.life <= 0 or not in_bounds:
-                b.remove_from_sprite_lists()
-
-        # ── Update enemy bullets ─────────────────────
-        for b in list(self.enemy_bullets):
-            b.center_x += b.change_x * delta
-            b.center_y += b.change_y * delta
-            b.life      -= delta
-            col_b = int((b.center_x - ox) / cs)
-            row_b = int((b.center_y - oy) / cs)
-            in_bounds = (0 <= col_b < maze.cols and 0 <= row_b < maze.rows
-                         and ox <= b.center_x <= ox + maze.cols * cs
-                         and oy <= b.center_y <= oy + maze.rows * cs)
-            if b.life <= 0 or not in_bounds:
-                b.remove_from_sprite_lists()
-
-        # ── Update enemies ───────────────────────────
-        pc2, pr2 = self._maze_player_cell()
-        for enemy in list(self.maze_enemies):
-            enemy.maze_update(delta, pc2, pr2, maze, cs, ox, oy)
-
-            # Enemy shooting — only when close enough
-            enemy.shoot_timer -= delta
-            if enemy.shoot_timer <= 0:
-                enemy.shoot_timer = random.uniform(1.8, 3.4)
-                dist_cells = abs(enemy.maze_col - pc2) + abs(enemy.maze_row - pr2)
-                if dist_cells <= MAZE_SHOOT_RANGE:
-                    ang = math.atan2(p.center_y - enemy.center_y,
-                                     p.center_x  - enemy.center_x)
-                    eb = EnemyBullet(enemy.center_x, enemy.center_y, angle_rad=ang)
-                    self.enemy_bullets.append(eb)
-
-        # ── Bullet ↔ enemy collision ──────────────────
-        for b in list(self.bullets):
-            for enemy in list(self.maze_enemies):
-                if (abs(b.center_x - enemy.center_x) < 20
-                        and abs(b.center_y - enemy.center_y) < 20):
-                    enemy.health -= 20
-                    b.remove_from_sprite_lists()
-                    self._burst(b.center_x, b.center_y, 6,
-                                (255, 200, 80), 40, 120, 1.0, 2.2, 0.10, 0.24)
-                    if enemy.health <= 0:
-                        self._burst(enemy.center_x, enemy.center_y, 14,
-                                    (255, 110, 55), 60, 200, 1.5, 3.0, 0.14, 0.38)
-                        self.maze_enemies.remove(enemy)
-                        self.score += 100
-                        self.notif_text  = "+100"
-                        self.notif_color = (255, 220, 60)
-                        self.notif_timer = 0.55
-                    break
-
-        # ── Enemy bullets ↔ player ───────────────────
-        if self.contact_damage_timer <= 0:
-            for b in list(self.enemy_bullets):
-                if abs(b.center_x - p.center_x) < 22 and abs(b.center_y - p.center_y) < 22:
-                    b.remove_from_sprite_lists()
-                    if p.shield_active:
-                        pass
-                    else:
-                        p.health -= 15
-                        self.damage_flash = 1.0
-                        self.contact_damage_timer = 0.22
-                        if p.health <= 0:
-                            self._maze_gameover()
-                    break
-
-        # ── Enemy contact damage ─────────────────────
-        if self.contact_damage_timer <= 0:
-            for enemy in self.maze_enemies:
-                if (math.hypot(enemy.center_x - p.center_x,
-                               enemy.center_y - p.center_y) < 28):
-                    if not p.shield_active:
-                        p.health -= CONTACT_DAMAGE
-                        self.damage_flash = 1.0
-                        self.contact_damage_timer = CONTACT_DAMAGE_COOLDOWN
-                        if p.health <= 0:
-                            self._maze_gameover()
-                    break
-
-        if self.contact_damage_timer > 0:
-            self.contact_damage_timer -= delta
-
         # ── Exit check ───────────────────────────────
+        pc2, pr2 = self._maze_player_cell()
         if (pc2 == self.maze_exit_col and pr2 == self.maze_exit_row
                 and not self.maze_exit_reached):
             self.maze_exit_reached = True
-            bonus = max(0, 1000 - int(self.time_alive * 3))
+            bonus = max(0, 2000 - int(self.time_alive * 5))
             self.score += bonus
             self.maze_level += 1
-            self.notif_text  = f"FLOOR CLEAR!  +{bonus} TIME BONUS  →  MAZE {self.maze_level + 1}"
+            self.notif_text  = f"EXIT FOUND!  +{bonus} TIME BONUS  →  FLOOR {self.maze_level + 1}"
             self.notif_color = (120, 255, 160)
             self.notif_timer = 1.8
-            # Brief pause then next floor
             self.setup_maze(keep_player=True)
-
-        # ── Damage flash decay ───────────────────────
-        if self.damage_flash > 0:
-            self.damage_flash = max(0.0, self.damage_flash - 2.5 * delta)
 
         self._update_particles(delta)
 

@@ -187,6 +187,20 @@ STATE_LEVEL_CLEAR  = "level_clear"
 STATE_MODE_SELECT  = "mode_select"
 
 # ─────────────────────────────────────────────────────
+#  MAZE MODE CONSTANTS
+# ─────────────────────────────────────────────────────
+
+MAZE_CELL_SIZE    = 64          # pixels per cell
+MAZE_WALL_THICK   = 10          # wall line thickness
+MAZE_BASE_COLS    = 9           # starting grid width
+MAZE_BASE_ROWS    = 7           # starting grid height
+MAZE_ENEMY_SPEED  = 78          # enemy walk speed (px/s)
+MAZE_ENEMY_HEALTH = 45
+MAZE_SHOOT_RANGE  = 5           # cells: max distance enemy will shoot
+STATE_MAZE        = "maze"
+STATE_MAZE_OVER   = "maze_over"
+
+# ─────────────────────────────────────────────────────
 #  LEVEL DEFINITIONS
 #  boss_hp = sum of all enemy HP in that level
 # ─────────────────────────────────────────────────────
@@ -1215,6 +1229,125 @@ class ElectricBolt(arcade.Sprite):
 
 
 # ═════════════════════════════════════════════════════
+#  MAZE GRID  —  recursive-backtracker generator + BFS
+# ═════════════════════════════════════════════════════
+
+
+class MazeGrid:
+    """Grid-based maze.  Walls are stored as *open* passages (direction removed)."""
+    N, E, S, W = 0, 1, 2, 3
+    OPP  = {0: 2, 1: 3, 2: 0, 3: 1}
+    DX   = {0: 0, 1:  1, 2:  0, 3: -1}   # col delta per direction
+    DY   = {0: 1, 1:  0, 2: -1, 3:  0}   # row delta (Y up = N positive)
+
+    def __init__(self, cols: int, rows: int, seed=None):
+        self.cols = cols
+        self.rows = rows
+        # open_walls[row][col] = set of directions where the wall is removed (passage exists)
+        self.open_walls: list[list[set]] = [[set() for _ in range(cols)] for _ in range(rows)]
+        self._generate(seed)
+
+    # ── Iterative recursive-backtracker ───────────────
+    def _generate(self, seed=None):
+        rng  = random.Random(seed)
+        vis  = [[False] * self.cols for _ in range(self.rows)]
+        # Start at top-left cell
+        start_col, start_row = 0, self.rows - 1
+        stack = [(start_col, start_row)]
+        vis[start_row][start_col] = True
+        while stack:
+            col, row = stack[-1]
+            neighbours = []
+            for d in (self.N, self.E, self.S, self.W):
+                nc, nr = col + self.DX[d], row + self.DY[d]
+                if 0 <= nc < self.cols and 0 <= nr < self.rows and not vis[nr][nc]:
+                    neighbours.append((d, nc, nr))
+            if neighbours:
+                d, nc, nr = rng.choice(neighbours)
+                self.open_walls[row][col].add(d)
+                self.open_walls[nr][nc].add(self.OPP[d])
+                vis[nr][nc] = True
+                stack.append((nc, nr))
+            else:
+                stack.pop()
+
+    def is_open(self, col: int, row: int, direction: int) -> bool:
+        if not (0 <= col < self.cols and 0 <= row < self.rows):
+            return False
+        return direction in self.open_walls[row][col]
+
+    def bfs(self, sc: int, sr: int, ec: int, er: int) -> list:
+        """Return list of (col,row) steps from (sc,sr) to (ec,er), exclusive of start."""
+        from collections import deque
+        prev: dict = {(sc, sr): None}
+        q = deque([(sc, sr)])
+        while q:
+            col, row = q.popleft()
+            if col == ec and row == er:
+                path: list = []
+                cur = (col, row)
+                while prev[cur] is not None:
+                    path.append(cur)
+                    cur = prev[cur]
+                path.reverse()
+                return path
+            for d in (self.N, self.E, self.S, self.W):
+                if self.is_open(col, row, d):
+                    nc, nr = col + self.DX[d], row + self.DY[d]
+                    if (nc, nr) not in prev:
+                        prev[(nc, nr)] = (col, row)
+                        q.append((nc, nr))
+        return []
+
+
+# ─────────────────────────────────────────────────────
+#  MAZE ENEMY SPRITE
+# ─────────────────────────────────────────────────────
+
+class MazeEnemy(arcade.Sprite):
+    """Enemy that navigates the maze via BFS toward the player."""
+
+    def __init__(self, col: int, row: int, cell_size: int, ox: float, oy: float):
+        super().__init__()
+        self.texture     = load_texture_clean("image/enemy.png", 0.12)
+        self.center_x    = ox + (col + 0.5) * cell_size
+        self.center_y    = oy + (row + 0.5) * cell_size
+        self.maze_col    = col
+        self.maze_row    = row
+        self.health      = MAZE_ENEMY_HEALTH
+        self.max_health  = MAZE_ENEMY_HEALTH
+        self.speed       = MAZE_ENEMY_SPEED + random.uniform(-10, 10)
+        self.path: list  = []
+        self.path_timer  = random.uniform(0.0, 0.5)   # stagger first recalc
+        self.shoot_timer = random.uniform(1.8, 3.5)
+
+    def maze_update(self, delta: float, player_col: int, player_row: int,
+                    maze: MazeGrid, cs: int, ox: float, oy: float) -> None:
+        # Re-path every ~0.55 s
+        self.path_timer -= delta
+        if self.path_timer <= 0 or not self.path:
+            self.path_timer = 0.55
+            self.path = maze.bfs(self.maze_col, self.maze_row, player_col, player_row)
+
+        if not self.path:
+            return
+
+        nc, nr = self.path[0]
+        tx = ox + (nc + 0.5) * cs
+        ty = oy + (nr + 0.5) * cs
+        dx = tx - self.center_x
+        dy = ty - self.center_y
+        dist = math.hypot(dx, dy)
+        if dist < 3:
+            self.maze_col, self.maze_row = nc, nr
+            self.path.pop(0)
+        elif dist > 0:
+            self.center_x += (dx / dist) * self.speed * delta
+            self.center_y += (dy / dist) * self.speed * delta
+        self.angle = math.degrees(math.atan2(dy, dx)) - 90
+
+
+# ═════════════════════════════════════════════════════
 #  GAME WINDOW
 # ═════════════════════════════════════════════════════
 
@@ -1380,6 +1513,17 @@ class GameWindow(arcade.Window):
         self.beams: list = []          # active BeamRay objects (Interceptor)
         self.elec_bolts = arcade.SpriteList()  # active ElectricBolt sprites (Reaper)
         self._screen_transition: dict | None = None
+
+        # ── Maze mode state ───────────────────────────
+        self.maze_grid:       MazeGrid | None = None
+        self.maze_cell_size:  int   = MAZE_CELL_SIZE
+        self.maze_origin:     tuple = (0, 0)
+        self.maze_level:      int   = 0
+        self.maze_enemies:    list  = []
+        self.maze_score:      int   = 0
+        self.maze_exit_col:   int   = 0
+        self.maze_exit_row:   int   = 0
+        self.maze_exit_reached: bool = False
 
         self._build_starfield()
 
@@ -1648,6 +1792,547 @@ class GameWindow(arcade.Window):
                              font_name=FONT_NUMERIC)
             self._draw_stat_pips(cx, stat_y, value, 5,
                                  theme_c["stat_filled"], theme_c["stat_empty"], 72)
+
+    # ══════════════════════════════════════════════════
+    #  MAZE MODE — SETUP
+    # ══════════════════════════════════════════════════
+
+    def setup_maze(self, keep_player: bool = False):
+        """Generate a new maze level.  Call with keep_player=True to retain HP between floors."""
+        w, h  = self.width, self.height
+        lvl   = self.maze_level
+        cs    = MAZE_CELL_SIZE
+
+        cols = min(MAZE_BASE_COLS  + lvl * 2, max(7,  (w - 80) // cs))
+        rows = min(MAZE_BASE_ROWS  + lvl,      max(5,  (h - 120) // cs))
+        # Keep odd dimensions (nicer-looking mazes)
+        if cols % 2 == 0: cols -= 1
+        if rows % 2 == 0: rows -= 1
+
+        total_w = cols * cs;  total_h = rows * cs
+        ox = (w - total_w) // 2
+        oy = (h - total_h) // 2 - 10   # slightly above centre for HUD room
+
+        self.maze_grid      = MazeGrid(cols, rows, seed=random.randint(0, 999999))
+        self.maze_cell_size = cs
+        self.maze_origin    = (float(ox), float(oy))
+        self.maze_exit_col  = cols - 1
+        self.maze_exit_row  = 0           # bottom-right cell
+
+        # ── Player ──────────────────────────────────
+        ship = SHIPS[self.selected_ship]
+        if self.player is None or not keep_player:
+            self.player = Player()
+            armor_tier   = self.upgrades.get("armor", 0)
+            base_hp      = int(PLAYER_HEALTH * ship["hp_mult"]) + armor_tier * 25
+            self.player.max_health = base_hp
+            self.player.health     = base_hp
+        tex = load_texture_clean(ship["texture"], ship["tex_scale"])
+        self.player.texture  = tex
+        # Spawn at top-left cell
+        self.player.center_x = ox + 0.5 * cs
+        self.player.center_y = oy + (rows - 0.5) * cs
+        self.player.change_x = 0.0;  self.player.change_y = 0.0
+
+        self.player_list = arcade.SpriteList()
+        self.player_list.append(self.player)
+
+        # ── Sprite lists ────────────────────────────
+        self.bullets       = arcade.SpriteList()
+        self.enemy_bullets = arcade.SpriteList()
+        self.powerups      = arcade.SpriteList()
+        self.coins_list    = arcade.SpriteList()
+
+        # ── Enemies ─────────────────────────────────
+        enemy_count = 3 + lvl * 2
+        all_cells   = [(c, r) for c in range(cols) for r in range(rows)]
+        far_cells   = [(c, r) for c, r in all_cells
+                       if abs(c) + abs(r - (rows - 1)) > max(3, (cols + rows) // 4)]
+        random.shuffle(far_cells)
+        self.maze_enemies = []
+        for c, r in far_cells[:enemy_count]:
+            self.maze_enemies.append(MazeEnemy(c, r, cs, float(ox), float(oy)))
+
+        # ── Runtime reset ───────────────────────────
+        self.score              = getattr(self, "score", 0)
+        self.fire_timer         = 0.0
+        self.notif_text         = f"MAZE  LEVEL  {lvl + 1}"
+        self.notif_color        = (120, 255, 160)
+        self.notif_timer        = 2.0
+        self.damage_flash       = 0.0
+        self.contact_damage_timer = 0.0
+        self.particles          = []
+        self.maze_exit_reached  = False
+        self.boss_on_screen     = False
+
+        self.game_state = STATE_MAZE
+        self.set_mouse_visible(False)
+
+    # ══════════════════════════════════════════════════
+    #  MAZE MODE — DRAW
+    # ══════════════════════════════════════════════════
+
+    def _maze_can_move_to(self, x: float, y: float, radius: float) -> bool:
+        """True if a circle (x,y,radius) fits at that position without hitting walls."""
+        maze = self.maze_grid
+        cs   = self.maze_cell_size
+        ox, oy = self.maze_origin
+        wt2  = MAZE_WALL_THICK // 2 + 2   # +2 px safety
+
+        if x - radius < ox or x + radius > ox + maze.cols * cs:
+            return False
+        if y - radius < oy or y + radius > oy + maze.rows * cs:
+            return False
+
+        col = max(0, min(maze.cols - 1, int((x - ox) / cs)))
+        row = max(0, min(maze.rows - 1, int((y - oy) / cs)))
+
+        cell_l = ox + col * cs;  cell_r = cell_l + cs
+        cell_b = oy + row * cs;  cell_t = cell_b + cs
+
+        if x + radius > cell_r - wt2 and not maze.is_open(col, row, MazeGrid.E):
+            return False
+        if x - radius < cell_l + wt2 and not maze.is_open(col, row, MazeGrid.W):
+            return False
+        if y + radius > cell_t - wt2 and not maze.is_open(col, row, MazeGrid.N):
+            return False
+        if y - radius < cell_b + wt2 and not maze.is_open(col, row, MazeGrid.S):
+            return False
+        return True
+
+    def _maze_player_cell(self) -> tuple[int, int]:
+        ox, oy = self.maze_origin
+        cs = self.maze_cell_size
+        col = max(0, min(self.maze_grid.cols - 1, int((self.player.center_x - ox) / cs)))
+        row = max(0, min(self.maze_grid.rows - 1, int((self.player.center_y - oy) / cs)))
+        return col, row
+
+    def _draw_maze_world(self):
+        w, h   = self.width, self.height
+        t      = self.bg_time
+        maze   = self.maze_grid
+        cs     = self.maze_cell_size
+        ox, oy = self.maze_origin
+        wt     = MAZE_WALL_THICK
+        wt2    = wt // 2
+        FU     = FONT_UI_MENU
+        FN     = FONT_NUMERIC
+
+        WALL_C  = (30, 220, 140)   # neon green
+        FLOOR_C = (6,  14,  20)    # near-black floor
+        EXIT_C  = (80, 255, 190)   # cyan-green exit
+        ENTRY_C = (90, 198, 255)   # blue entry
+
+        # ── Background ──────────────────────────────
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (4, 8, 14))
+
+        # ── Floor tiles ─────────────────────────────
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                fl = ox + col * cs
+                fb = oy + row * cs
+                arcade.draw_lrbt_rectangle_filled(fl, fl + cs, fb, fb + cs, FLOOR_C)
+
+        # Subtle floor grid
+        gc = (0, 35, 22, 35)
+        for row in range(maze.rows + 1):
+            yy = oy + row * cs
+            arcade.draw_line(ox, yy, ox + maze.cols * cs, yy, gc, 1)
+        for col in range(maze.cols + 1):
+            xx = ox + col * cs
+            arcade.draw_line(xx, oy, xx, oy + maze.rows * cs, gc, 1)
+
+        # ── Walls ───────────────────────────────────
+        p2 = 0.5 + 0.5 * math.sin(t * 1.8)
+        wc = (int(25 + 25 * p2), int(210 + 25 * p2), int(130 + 25 * p2), 255)
+        gw = (*wc[:3], 60)   # wall glow colour
+
+        # Outer border (always solid)
+        bx = ox - wt2;  by = oy - wt2
+        bw2 = maze.cols * cs + wt;  bh2 = maze.rows * cs + wt
+        arcade.draw_lrbt_rectangle_filled(bx, bx + bw2, by, by + wt, wc)           # bottom
+        arcade.draw_lrbt_rectangle_filled(bx, bx + bw2, by + bh2 - wt, by + bh2, wc)  # top
+        arcade.draw_lrbt_rectangle_filled(bx, bx + wt,  by, by + bh2, wc)           # left
+        arcade.draw_lrbt_rectangle_filled(bx + bw2 - wt, bx + bw2, by, by + bh2, wc)  # right
+
+        # Internal walls — only draw where the passage is CLOSED
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                cl = ox + col * cs;  cr = cl + cs
+                cb = oy + row * cs;  ct = cb + cs
+                # North wall (top edge of cell) — skip topmost row (already border)
+                if row < maze.rows - 1 and not maze.is_open(col, row, MazeGrid.N):
+                    arcade.draw_lrbt_rectangle_filled(cl, cr, ct - wt2, ct + wt2, wc)
+                    arcade.draw_lrbt_rectangle_filled(cl + wt2, cr - wt2, ct - wt2 - 2, ct + wt2 + 2, gw)
+                # East wall (right edge of cell) — skip rightmost column
+                if col < maze.cols - 1 and not maze.is_open(col, row, MazeGrid.E):
+                    arcade.draw_lrbt_rectangle_filled(cr - wt2, cr + wt2, cb, ct, wc)
+                    arcade.draw_lrbt_rectangle_filled(cr - wt2 - 2, cr + wt2 + 2, cb + wt2, ct - wt2, gw)
+
+        # ── Exit portal ─────────────────────────────
+        ec2, er2 = self.maze_exit_col, self.maze_exit_row
+        ex2 = ox + (ec2 + 0.5) * cs
+        ey2 = oy + (er2 + 0.5) * cs
+        pr  = cs * 0.33
+        ep  = 0.5 + 0.5 * math.sin(t * 4.8)
+        arcade.draw_circle_filled(ex2, ey2, pr + 10 * ep, (0, 100, 60, 50))
+        arcade.draw_circle_filled(ex2, ey2, pr,            (*EXIT_C, 130))
+        arcade.draw_circle_outline(ex2, ey2, pr,            EXIT_C, 3)
+        arcade.draw_circle_outline(ex2, ey2, pr + 10 * ep, (*EXIT_C[:3], int(70 * ep)), 2)
+        arcade.draw_text("EXIT", ex2, ey2,
+                         (80, 255, 180, 210), 9, anchor_x="center", anchor_y="center",
+                         bold=True, font_name=FU)
+
+        # ── Entry glow ──────────────────────────────
+        enx = ox + 0.5 * cs
+        eny = oy + (maze.rows - 0.5) * cs
+        arcade.draw_circle_filled(enx, eny, 14, (*ENTRY_C[:3], 45))
+
+        # ── Particles ───────────────────────────────
+        self._draw_particles()
+
+        # ── Enemies ─────────────────────────────────
+        for enemy in self.maze_enemies:
+            arcade.draw_circle_filled(enemy.center_x, enemy.center_y, 24, (255, 70, 70, 55))
+            enemy.draw()
+            if enemy.health < enemy.max_health:
+                ratio = max(0.0, enemy.health / enemy.max_health)
+                bx2 = enemy.center_x - 18
+                arcade.draw_lrbt_rectangle_filled(bx2, bx2 + 36, enemy.top + 5, enemy.top + 10, (30, 20, 20, 220))
+                arcade.draw_lrbt_rectangle_filled(bx2, bx2 + 36 * ratio, enemy.top + 5, enemy.top + 10, (255, 90, 80, 235))
+
+        # ── Bullets ─────────────────────────────────
+        self.bullets.draw()
+        self.enemy_bullets.draw()
+
+        # ── Player ──────────────────────────────────
+        if self.player:
+            p  = self.player
+            pg = (95, 200, 255, 68)
+            arcade.draw_circle_filled(p.center_x, p.center_y, 34, pg)
+            if p.shield_active:
+                rr = 34 + 2.5 * math.sin(t * 9)
+                arcade.draw_circle_outline(p.center_x, p.center_y, rr, (90, 235, 255, 230), 3)
+            self.player_list.draw()
+
+        # ── Damage flash ────────────────────────────
+        if self.damage_flash > 0:
+            arcade.draw_lrbt_rectangle_filled(
+                0, w, 0, h, (255, 55, 55, int(165 * self.damage_flash)))
+
+        # ── Crosshair ───────────────────────────────
+        self._draw_crosshair()
+
+        # ── HUD ─────────────────────────────────────
+        self._draw_maze_hud()
+
+    def _draw_maze_hud(self):
+        w, h   = self.width, self.height
+        t      = self.bg_time
+        p      = self.player
+        FU     = FONT_UI_MENU
+        FN     = FONT_NUMERIC
+
+        # ── Health bar ──────────────────────────────
+        hp_ratio = max(0.0, p.health / p.max_health)
+        bar_w = min(220, int(w * 0.28));  bar_h = 14
+        bx2 = 16;  by2 = h - 36
+        arcade.draw_lrbt_rectangle_filled(bx2, bx2 + bar_w, by2, by2 + bar_h, (22, 30, 48, 220))
+        fill_w = int(bar_w * hp_ratio)
+        hp_c = (60, 225, 100) if hp_ratio > 0.5 else (255, 210, 30) if hp_ratio > 0.25 else (255, 55, 55)
+        arcade.draw_lrbt_rectangle_filled(bx2, bx2 + fill_w, by2, by2 + bar_h, (*hp_c, 220))
+        arcade.draw_lrbt_rectangle_outline(bx2, bx2 + bar_w, by2, by2 + bar_h, (80, 130, 190, 180), 1)
+        self._txt_shadow(f"HP  {p.health} / {p.max_health}",
+                         bx2 + bar_w // 2, by2 + 1, (200, 225, 255, 215),
+                         8, FN, anchor_x="center")
+
+        # ── Score ───────────────────────────────────
+        self._txt_shadow(f"SCORE  {self.score:,}", w - 16, h - 28,
+                         (210, 235, 255, 240), 18, FU, anchor_x="right", bold=True)
+
+        # ── Maze level badge ────────────────────────
+        lbl = f"MAZE  LEVEL  {self.maze_level + 1}"
+        self._txt_shadow(lbl, w // 2, h - 28, (100, 255, 160, 230),
+                         14, FU, anchor_x="center", bold=True)
+
+        # ── Enemy count ─────────────────────────────
+        alive = len(self.maze_enemies)
+        ec_clr = (255, 120, 80, 200) if alive > 0 else (100, 240, 130, 200)
+        self._txt_shadow(f"ENEMIES  {alive}", 16, h - 56, ec_clr, 10, FU)
+
+        # ── Timer ───────────────────────────────────
+        self._txt_shadow(f"{self.time_alive:06.1f}s", w - 16, h - 52,
+                         (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
+
+        # ── Hint ────────────────────────────────────
+        arcade.draw_text("WASD Move · Mouse Aim · ESC Pause · H Hide HUD",
+                         w // 2, 12, (70, 100, 155, 130), 8,
+                         anchor_x="center", font_name=FN)
+
+        # ── Notification ────────────────────────────
+        if self.notif_timer > 0:
+            a = min(255, int(self.notif_timer * 300))
+            self._txt_shadow(self.notif_text, w // 2, h // 2 + 90,
+                             (*self.notif_color[:3], a), 26, FU,
+                             anchor_x="center", bold=True)
+
+        # ── Minimap ─────────────────────────────────
+        self._draw_maze_minimap()
+
+    def _draw_maze_minimap(self):
+        maze   = self.maze_grid
+        mm_cs  = max(4, min(9, 90 // max(maze.cols, maze.rows)))
+        mx     = 16
+        my     = self.height - 110 - maze.rows * mm_cs
+        mw     = maze.cols * mm_cs
+        mh     = maze.rows * mm_cs
+
+        # Panel
+        arcade.draw_lrbt_rectangle_filled(mx - 4, mx + mw + 4, my - 4, my + mh + 4, (0, 0, 0, 170))
+        arcade.draw_lrbt_rectangle_outline(mx - 4, mx + mw + 4, my - 4, my + mh + 4,
+                                            (0, 170, 90, 160), 1)
+
+        MWTT = max(1, mm_cs // 5)
+        wc2  = (0, 200, 110, 200)
+
+        # Floors
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                fx = mx + col * mm_cs;  fy = my + row * mm_cs
+                arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy, fy + mm_cs, (10, 26, 20))
+
+        # Walls
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                fx = mx + col * mm_cs;  fy = my + row * mm_cs
+                if row < maze.rows - 1 and not maze.is_open(col, row, MazeGrid.N):
+                    arcade.draw_lrbt_rectangle_filled(
+                        fx, fx + mm_cs,
+                        fy + mm_cs - MWTT, fy + mm_cs + MWTT, wc2)
+                if col < maze.cols - 1 and not maze.is_open(col, row, MazeGrid.E):
+                    arcade.draw_lrbt_rectangle_filled(
+                        fx + mm_cs - MWTT, fx + mm_cs + MWTT,
+                        fy, fy + mm_cs, wc2)
+
+        # Border
+        arcade.draw_lrbt_rectangle_outline(mx, mx + mw, my, my + mh, wc2, MWTT)
+
+        # Exit marker
+        ex2 = mx + (self.maze_exit_col + 0.5) * mm_cs
+        ey2 = my + (self.maze_exit_row + 0.5) * mm_cs
+        arcade.draw_circle_filled(ex2, ey2, mm_cs * 0.45, (0, 255, 155, 210))
+
+        # Enemy markers
+        for enemy in self.maze_enemies:
+            ex3 = mx + (enemy.maze_col + 0.5) * mm_cs
+            ey3 = my + (enemy.maze_row + 0.5) * mm_cs
+            arcade.draw_circle_filled(ex3, ey3, mm_cs * 0.38, (255, 75, 75, 215))
+
+        # Player marker
+        pc2, pr2 = self._maze_player_cell()
+        px3 = mx + (pc2 + 0.5) * mm_cs
+        py3 = my + (pr2 + 0.5) * mm_cs
+        arcade.draw_circle_filled(px3, py3, mm_cs * 0.46, (90, 200, 255, 245))
+
+    def _draw_maze_over(self):
+        """Overlay shown on maze death."""
+        w, h  = self.width, self.height
+        FU    = FONT_UI_MENU
+        FN    = FONT_NUMERIC
+
+        self._draw_maze_world()
+
+        # Dim overlay
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (3, 5, 14, 180))
+
+        # Card
+        cw2 = min(480, int(w * 0.65));  ch2 = 260
+        cx2 = (w - cw2) // 2;           cy2 = h // 2 - ch2 // 2
+        arcade.draw_lrbt_rectangle_filled(cx2 + 6, cx2 + cw2 + 6, cy2 - 6, cy2 + ch2 - 6, (0, 0, 0, 70))
+        arcade.draw_lrbt_rectangle_filled(cx2, cx2 + cw2, cy2, cy2 + ch2, (7, 10, 26, 240))
+        arcade.draw_lrbt_rectangle_outline(cx2, cx2 + cw2, cy2, cy2 + ch2, (200, 35, 35, 200), 2)
+
+        mid = w // 2
+        self._txt_shadow("YOU DIED", mid, cy2 + ch2 - 58, (255, 50, 50, 255),
+                         50, FU, anchor_x="center", bold=True)
+        arcade.draw_line(cx2 + 24, cy2 + ch2 - 78, cx2 + cw2 - 24, cy2 + ch2 - 78, (200, 35, 35, 130), 1)
+        self._txt_shadow(f"MAZE LEVEL  {self.maze_level + 1}",
+                         mid, cy2 + ch2 - 112, (120, 155, 215, 210), 12, FU, anchor_x="center")
+        self._txt_shadow(f"SCORE  {self.score:,}", mid, cy2 + ch2 - 148,
+                         (210, 235, 255, 245), 30, FN, anchor_x="center", bold=True)
+        self._txt_shadow("R  —  RETRY  MAZE       ESC  —  BACK TO MENU",
+                         mid, cy2 + 30, (130, 165, 215, 200), 13, FU, anchor_x="center")
+
+    # ══════════════════════════════════════════════════
+    #  MAZE MODE — UPDATE
+    # ══════════════════════════════════════════════════
+
+    def _update_maze(self, delta: float):
+        """Full game-logic tick for maze mode."""
+        self.time_alive += delta
+        p      = self.player
+        maze   = self.maze_grid
+        cs     = self.maze_cell_size
+        ox, oy = self.maze_origin
+
+        # ── Player movement ──────────────────────────
+        ix = float(self.right_key) - float(self.left_key)
+        iy = float(self.up) - float(self.down)
+        if ix and iy:
+            ix *= 0.70710678;  iy *= 0.70710678
+        ship_spd = p.get_speed() * SHIPS[self.selected_ship]["spd_mult"]
+        sm = min(1.0, 14.0 * delta)
+        p.change_x += (ix * ship_spd - p.change_x) * sm
+        p.change_y += (iy * ship_spd - p.change_y) * sm
+
+        PLAYER_R = cs * 0.30
+        new_x = p.center_x + p.change_x * delta
+        new_y = p.center_y + p.change_y * delta
+
+        if self._maze_can_move_to(new_x, p.center_y, PLAYER_R):
+            p.center_x = new_x
+        else:
+            p.change_x = 0.0
+        if self._maze_can_move_to(p.center_x, new_y, PLAYER_R):
+            p.center_y = new_y
+        else:
+            p.change_y = 0.0
+
+        p.angle = max(-20, min(20, -p.change_x * 0.06))
+        p.update_powerups(delta)
+
+        # Engine particles
+        mv = abs(p.change_x) + abs(p.change_y)
+        if mv > 80 and random.random() < 0.45:
+            ang = math.atan2(-p.change_y, -p.change_x) + random.uniform(-0.45, 0.45)
+            self._add_particle(
+                p.center_x + random.uniform(-3, 3), p.center_y - 6,
+                math.cos(ang) * random.uniform(60, 140),
+                math.sin(ang) * random.uniform(60, 140),
+                random.uniform(1.2, 2.4), random.uniform(0.10, 0.22),
+                (90, 200, 255), 0.88)
+
+        # ── Player shooting ──────────────────────────
+        self.fire_timer += delta
+        while self.fire_timer >= AUTO_FIRE_RATE:
+            self._shoot_toward(self.mouse_x, self.mouse_y)
+            self.fire_timer -= AUTO_FIRE_RATE
+
+        # ── Update player bullets (manual — no arcade update, wall check) ─
+        for b in list(self.bullets):
+            b.center_x += b.change_x * delta
+            b.center_y += b.change_y * delta
+            b.life      -= delta
+            col_b = int((b.center_x - ox) / cs)
+            row_b = int((b.center_y - oy) / cs)
+            in_bounds = (0 <= col_b < maze.cols and 0 <= row_b < maze.rows
+                         and ox <= b.center_x <= ox + maze.cols * cs
+                         and oy <= b.center_y <= oy + maze.rows * cs)
+            if b.life <= 0 or not in_bounds:
+                b.remove_from_sprite_lists()
+
+        # ── Update enemy bullets ─────────────────────
+        for b in list(self.enemy_bullets):
+            b.center_x += b.change_x * delta
+            b.center_y += b.change_y * delta
+            b.life      -= delta
+            col_b = int((b.center_x - ox) / cs)
+            row_b = int((b.center_y - oy) / cs)
+            in_bounds = (0 <= col_b < maze.cols and 0 <= row_b < maze.rows
+                         and ox <= b.center_x <= ox + maze.cols * cs
+                         and oy <= b.center_y <= oy + maze.rows * cs)
+            if b.life <= 0 or not in_bounds:
+                b.remove_from_sprite_lists()
+
+        # ── Update enemies ───────────────────────────
+        pc2, pr2 = self._maze_player_cell()
+        for enemy in list(self.maze_enemies):
+            enemy.maze_update(delta, pc2, pr2, maze, cs, ox, oy)
+
+            # Enemy shooting — only when close enough
+            enemy.shoot_timer -= delta
+            if enemy.shoot_timer <= 0:
+                enemy.shoot_timer = random.uniform(1.8, 3.4)
+                dist_cells = abs(enemy.maze_col - pc2) + abs(enemy.maze_row - pr2)
+                if dist_cells <= MAZE_SHOOT_RANGE:
+                    ang = math.atan2(p.center_y - enemy.center_y,
+                                     p.center_x  - enemy.center_x)
+                    eb = EnemyBullet(enemy.center_x, enemy.center_y, angle_rad=ang)
+                    self.enemy_bullets.append(eb)
+
+        # ── Bullet ↔ enemy collision ──────────────────
+        for b in list(self.bullets):
+            for enemy in list(self.maze_enemies):
+                if (abs(b.center_x - enemy.center_x) < 20
+                        and abs(b.center_y - enemy.center_y) < 20):
+                    enemy.health -= 20
+                    b.remove_from_sprite_lists()
+                    self._burst(b.center_x, b.center_y, 6,
+                                (255, 200, 80), 40, 120, 1.0, 2.2, 0.10, 0.24)
+                    if enemy.health <= 0:
+                        self._burst(enemy.center_x, enemy.center_y, 14,
+                                    (255, 110, 55), 60, 200, 1.5, 3.0, 0.14, 0.38)
+                        self.maze_enemies.remove(enemy)
+                        self.score += 100
+                        self.notif_text  = "+100"
+                        self.notif_color = (255, 220, 60)
+                        self.notif_timer = 0.55
+                    break
+
+        # ── Enemy bullets ↔ player ───────────────────
+        if self.contact_damage_timer <= 0:
+            for b in list(self.enemy_bullets):
+                if abs(b.center_x - p.center_x) < 22 and abs(b.center_y - p.center_y) < 22:
+                    b.remove_from_sprite_lists()
+                    if p.shield_active:
+                        pass
+                    else:
+                        p.health -= 15
+                        self.damage_flash = 1.0
+                        self.contact_damage_timer = 0.22
+                        if p.health <= 0:
+                            self._maze_gameover()
+                    break
+
+        # ── Enemy contact damage ─────────────────────
+        if self.contact_damage_timer <= 0:
+            for enemy in self.maze_enemies:
+                if (math.hypot(enemy.center_x - p.center_x,
+                               enemy.center_y - p.center_y) < 28):
+                    if not p.shield_active:
+                        p.health -= CONTACT_DAMAGE
+                        self.damage_flash = 1.0
+                        self.contact_damage_timer = CONTACT_DAMAGE_COOLDOWN
+                        if p.health <= 0:
+                            self._maze_gameover()
+                    break
+
+        if self.contact_damage_timer > 0:
+            self.contact_damage_timer -= delta
+
+        # ── Exit check ───────────────────────────────
+        if (pc2 == self.maze_exit_col and pr2 == self.maze_exit_row
+                and not self.maze_exit_reached):
+            self.maze_exit_reached = True
+            bonus = max(0, 1000 - int(self.time_alive * 3))
+            self.score += bonus
+            self.maze_level += 1
+            self.notif_text  = f"FLOOR CLEAR!  +{bonus} TIME BONUS  →  MAZE {self.maze_level + 1}"
+            self.notif_color = (120, 255, 160)
+            self.notif_timer = 1.8
+            # Brief pause then next floor
+            self.setup_maze(keep_player=True)
+
+        # ── Damage flash decay ───────────────────────
+        if self.damage_flash > 0:
+            self.damage_flash = max(0.0, self.damage_flash - 2.5 * delta)
+
+        self._update_particles(delta)
+
+    def _maze_gameover(self):
+        self.player.health = 0
+        self.game_state = STATE_MAZE_OVER
+        self.set_mouse_visible(True)
 
     def _draw_mode_select(self):
         """Full-screen mode selection lobby shown before the main menu."""

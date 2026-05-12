@@ -199,6 +199,58 @@ MAZE_ENEMY_HEALTH = 45
 MAZE_SHOOT_RANGE  = 5           # cells: max distance enemy will shoot
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
+STATE_MAZE_SELECT = "maze_select"
+
+# ─────────────────────────────────────────────────────
+#  MAZE PRESETS  (player chooses one before starting)
+# ─────────────────────────────────────────────────────
+
+MAZE_PRESETS = [
+    {
+        "key":        "classic",
+        "name":       "CLASSIC",
+        "icon":       "⬡",
+        "desc":       "Balanced corridors & fair fights",
+        "detail":     "9×7 start · 3 enemies / floor",
+        "color":      (90, 198, 255),
+        "cols_bonus": 0,     # added to MAZE_BASE_COLS + lvl*2
+        "rows_bonus": 0,     # added to MAZE_BASE_ROWS + lvl
+        "enemy_mult": 1.0,
+    },
+    {
+        "key":        "labyrinth",
+        "name":       "LABYRINTH",
+        "icon":       "◎",
+        "desc":       "Wide twisting maze, more enemies",
+        "detail":     "13×9 start · 5 enemies / floor",
+        "color":      (120, 255, 160),
+        "cols_bonus": 4,
+        "rows_bonus": 2,
+        "enemy_mult": 1.6,
+    },
+    {
+        "key":        "sprint",
+        "name":       "SPRINT",
+        "icon":       "◈",
+        "desc":       "Tiny arenas — reach the exit fast",
+        "detail":     "7×5 start · 2 enemies / floor",
+        "color":      (255, 220, 40),
+        "cols_bonus": -2,
+        "rows_bonus": -2,
+        "enemy_mult": 0.65,
+    },
+    {
+        "key":        "gauntlet",
+        "name":       "GAUNTLET",
+        "icon":       "✦",
+        "desc":       "Tall maze packed with hunters",
+        "detail":     "9×11 start · 7 enemies / floor",
+        "color":      (255, 90, 90),
+        "cols_bonus": 0,
+        "rows_bonus": 4,
+        "enemy_mult": 2.2,
+    },
+]
 
 # ─────────────────────────────────────────────────────
 #  LEVEL DEFINITIONS
@@ -721,7 +773,7 @@ def _draw_texture_fitted(texture: arcade.Texture, center_x: float, center_y: flo
         sprite.center_x = center_x
         sprite.center_y = center_y
         sprite.scale = scale
-        sprite.draw()
+        arcade.draw_sprite(sprite)
 
 
 # ─────────────────────────────────────────────────────
@@ -1416,6 +1468,9 @@ class GameWindow(arcade.Window):
         self.game_state    = STATE_MODE_SELECT
         self.selected_mode      = None          # "normal" | "maze" | "multiplayer"
         self._mode_btns:  dict  = {}
+        self.selected_maze_preset: str = "classic"
+        self._maze_preset_btns: dict   = {}
+        self.maze_preset: dict | None  = None   # active preset params
         self.menu_theme         = "dark"
         self.selected_ship      = 0
         self.selected_difficulty = "medium"
@@ -1802,9 +1857,10 @@ class GameWindow(arcade.Window):
         w, h  = self.width, self.height
         lvl   = self.maze_level
         cs    = MAZE_CELL_SIZE
+        preset = getattr(self, "maze_preset", None) or MAZE_PRESETS[0]
 
-        cols = min(MAZE_BASE_COLS  + lvl * 2, max(7,  (w - 80) // cs))
-        rows = min(MAZE_BASE_ROWS  + lvl,      max(5,  (h - 120) // cs))
+        cols = min(MAZE_BASE_COLS  + preset["cols_bonus"] + lvl * 2, max(7,  (w - 80) // cs))
+        rows = min(MAZE_BASE_ROWS  + preset["rows_bonus"] + lvl,     max(5,  (h - 120) // cs))
         # Keep odd dimensions (nicer-looking mazes)
         if cols % 2 == 0: cols -= 1
         if rows % 2 == 0: rows -= 1
@@ -1844,7 +1900,7 @@ class GameWindow(arcade.Window):
         self.coins_list    = arcade.SpriteList()
 
         # ── Enemies ─────────────────────────────────
-        enemy_count = 3 + lvl * 2
+        enemy_count = max(1, int((3 + lvl * 2) * preset["enemy_mult"]))
         all_cells   = [(c, r) for c in range(cols) for r in range(rows)]
         far_cells   = [(c, r) for c, r in all_cells
                        if abs(c) + abs(r - (rows - 1)) > max(3, (cols + rows) // 4)]
@@ -1994,7 +2050,7 @@ class GameWindow(arcade.Window):
         # ── Enemies ─────────────────────────────────
         for enemy in self.maze_enemies:
             arcade.draw_circle_filled(enemy.center_x, enemy.center_y, 24, (255, 70, 70, 55))
-            enemy.draw()
+            arcade.draw_sprite(enemy)
             if enemy.health < enemy.max_health:
                 ratio = max(0.0, enemy.health / enemy.max_health)
                 bx2 = enemy.center_x - 18
@@ -2391,7 +2447,7 @@ class GameWindow(arcade.Window):
                 "desc":    "Navigate & survive",
                 "detail":  "Procedural maze arenas",
                 "color":   (120, 255, 160),
-                "available": False,
+                "available": True,
             },
             {
                 "key":     "multiplayer",
@@ -2545,6 +2601,177 @@ class GameWindow(arcade.Window):
         arcade.draw_text("Click a mode card, then press ENTER GAME  ·  F11 Fullscreen",
                          w // 2, 16, (80, 108, 165, 140), 9,
                          anchor_x="center", font_name=FN)
+
+    # ══════════════════════════════════════════════════
+    #  MAZE SELECT SCREEN
+    # ══════════════════════════════════════════════════
+
+    def _draw_maze_select(self):
+        """Full-screen maze preset picker shown after choosing MAZE MODE."""
+        w, h = self.width, self.height
+        t    = self.bg_time
+        tc   = THEMES["dark"]
+        FU   = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
+        FN   = ("Courier New", "Menlo", "Monaco", "monospace")
+
+        # Animated background
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
+        p2 = (math.sin(t * 0.55) + 1) * 0.5
+        arcade.draw_circle_filled(w * 0.10, h * 0.82, 220 + 18 * p2,       (28, 148, 90,  42))
+        arcade.draw_circle_filled(w * 0.90, h * 0.22, 250 + 24 * (1 - p2), (40,  90, 175, 38))
+        off = (t * 14) % 28
+        for yi in range(-30, h + 30, 28):
+            arcade.draw_line(0, yi + off, w, yi + off - 18, (20, 50, 34, 22), 1)
+        for s in self.stars:
+            tw2 = 0.55 + 0.45 * math.sin(t * s["twinkle"] + s["phase"])
+            al  = max(20, min(255, int(s["alpha"] * tw2)))
+            arcade.draw_circle_filled(s["x"], s["y"], s["size"], (180, 255, 210, al))
+
+        # Title
+        arcade.draw_text("MAZE MODE", w // 2 + 2, h - 56,
+                         (0, 0, 0, 80), 32, anchor_x="center", bold=True, font_name=FU)
+        arcade.draw_text("MAZE MODE", w // 2, h - 54,
+                         (120, 255, 160, 255), 32, anchor_x="center", bold=True, font_name=FU)
+        arcade.draw_text("SELECT MAZE TYPE", w // 2, h - 92,
+                         (100, 200, 130, 190), 13, anchor_x="center", font_name=FU)
+        arcade.draw_line(w // 2 - 180, h - 106, w // 2 + 180, h - 106,
+                         (60, 180, 100, 80), 1)
+
+        # Preset cards
+        n_cards = len(MAZE_PRESETS)
+        card_w  = min(170, int((w - 80) / n_cards - 18))
+        card_h  = min(240, int(h * 0.44))
+        total_w = n_cards * card_w + (n_cards - 1) * 18
+        start_x = (w - total_w) // 2
+        card_y  = h // 2 - card_h // 2 - 10
+
+        self._maze_preset_btns = {}
+
+        for i, preset in enumerate(MAZE_PRESETS):
+            cl  = start_x + i * (card_w + 18)
+            cr  = cl + card_w
+            cb  = card_y
+            ct  = card_y + card_h
+            cx_ = cl + card_w // 2
+            mc  = preset["color"]
+            sel = (self.selected_maze_preset == preset["key"])
+            hov = self._is_hovering(cl, cr, cb, ct)
+
+            arcade.draw_lrbt_rectangle_filled(cl + 5, cr + 5, cb - 5, ct - 5, (0, 0, 0, 60))
+            if sel:
+                fill   = (*mc[:3], 185); border = (*mc, 255); bthk = 3
+            elif hov:
+                fill   = (14, 32, 22, 220); border = (*mc, 230); bthk = 2
+            else:
+                fill   = (9, 18, 14, 220); border = (*mc[:3], 100); bthk = 1
+            arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
+            arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, border, bthk)
+            if sel or hov:
+                pulse2 = 0.5 + 0.5 * math.sin(t * 4.5)
+                arcade.draw_lrbt_rectangle_outline(
+                    cl - 3, cr + 3, cb - 3, ct + 3, (*mc, int(28 + 30 * pulse2)), 3)
+
+            # Corner accents
+            sz = 10
+            for (px2, py2, sx2, sy2) in [(cl, ct, 1, -1), (cr, ct, -1, -1),
+                                          (cl, cb, 1,  1), (cr, cb, -1,  1)]:
+                arcade.draw_line(px2, py2, px2 + sx2 * sz, py2, border, 2)
+                arcade.draw_line(px2, py2, px2, py2 + sy2 * sz, border, 2)
+
+            # Icon
+            icon_a = int(200 + 55 * math.sin(t * 3.0 + i)) if not sel else 255
+            arcade.draw_text(preset["icon"], cx_, ct - 54,
+                             (*mc[:3], icon_a), 30,
+                             anchor_x="center", anchor_y="center", font_name=FU)
+
+            arcade.draw_line(cl + 14, ct - 80, cr - 14, ct - 80,
+                             (*mc[:3], 75 if not sel else 130), 1)
+
+            # Name
+            lbl_c = (10, 10, 20, 255) if sel else (*mc, 255)
+            arcade.draw_text(preset["name"], cx_ + 1, ct - 108,
+                             (0, 0, 0, 70), 13, anchor_x="center", bold=True, font_name=FU)
+            arcade.draw_text(preset["name"], cx_, ct - 106,
+                             lbl_c, 13, anchor_x="center", bold=True, font_name=FU)
+
+            # Desc + detail
+            desc_c = (10, 10, 20, 230) if sel else (180, 215, 195, 210)
+            arcade.draw_text(preset["desc"], cx_, ct - 136,
+                             desc_c, 9, anchor_x="center", font_name=FU)
+            det_c = (10, 10, 20, 180) if sel else (100, 160, 120, 155)
+            arcade.draw_text(preset["detail"], cx_, ct - 156,
+                             det_c, 8, anchor_x="center", font_name=FN)
+
+            # SELECT button at bottom of card
+            btn_bw = card_w - 24;  btn_bh = 26
+            btn_bx = cl + 12;      btn_by = cb + 12
+            btn_hov = self._is_hovering(btn_bx, btn_bx + btn_bw, btn_by, btn_by + btn_bh)
+            btn_fill   = (*mc, 220) if (sel or btn_hov) else (*mc[:3], 45)
+            btn_tc     = (10, 10, 20, 255) if (sel or btn_hov) else (*mc, 200)
+            arcade.draw_lrbt_rectangle_filled(btn_bx, btn_bx + btn_bw,
+                                               btn_by, btn_by + btn_bh, btn_fill)
+            arcade.draw_lrbt_rectangle_outline(btn_bx, btn_bx + btn_bw,
+                                                btn_by, btn_by + btn_bh, (*mc, 255), 1)
+            arcade.draw_text("▶  SELECTED" if sel else "SELECT",
+                             btn_bx + btn_bw // 2, btn_by + btn_bh // 2,
+                             btn_tc, 9, anchor_x="center", anchor_y="center",
+                             bold=True, font_name=FU)
+
+            self._maze_preset_btns[preset["key"]] = (cl, cr, cb, ct)
+
+        # ENTER MAZE button
+        play_w = 240;  play_h = 48
+        play_x = w // 2 - play_w // 2
+        play_y = card_y - play_h - 22
+        play_hov = self._is_hovering(play_x, play_x + play_w, play_y, play_y + play_h)
+        ep = 0.5 + 0.5 * math.sin(t * 3.5)
+        e_fill   = (int(20 + 20 * ep), int(160 + 40 * ep), int(90 + 30 * ep), 245)
+        e_border = (120, 255, 160, 255) if play_hov else (80, 210, 120, 220)
+        if play_hov:
+            arcade.draw_lrbt_rectangle_filled(play_x - 2, play_x + play_w + 2,
+                                               play_y - 2, play_y + play_h + 2,
+                                               (120, 255, 160, 26))
+        arcade.draw_lrbt_rectangle_filled(play_x, play_x + play_w,
+                                           play_y, play_y + play_h, e_fill)
+        arcade.draw_lrbt_rectangle_outline(play_x, play_x + play_w,
+                                            play_y, play_y + play_h, e_border, 2)
+        arcade.draw_text("[ ENTER MAZE ]", w // 2 + 1, play_y + play_h // 2 - 1,
+                         (0, 0, 0, 85), 18, anchor_x="center", anchor_y="center",
+                         bold=True, font_name=FU)
+        arcade.draw_text("[ ENTER MAZE ]", w // 2, play_y + play_h // 2,
+                         (255, 255, 255, 255), 18, anchor_x="center", anchor_y="center",
+                         bold=True, font_name=FU)
+        self._maze_preset_btns["__play__"] = (play_x, play_x + play_w, play_y, play_y + play_h)
+
+        # Back button
+        back_w = 130;  back_h = 36
+        back_x = w // 2 - back_w // 2
+        back_y = play_y - back_h - 12
+        back_hov = self._is_hovering(back_x, back_x + back_w, back_y, back_y + back_h)
+        arcade.draw_lrbt_rectangle_filled(back_x, back_x + back_w, back_y, back_y + back_h,
+                                           tc["btn_hover"] if back_hov else (*tc["btn_fill"][:3], 180))
+        arcade.draw_lrbt_rectangle_outline(back_x, back_x + back_w, back_y, back_y + back_h,
+                                            tc["btn_border"], 1)
+        arcade.draw_text("[ BACK ]", w // 2, back_y + back_h // 2,
+                         (255, 255, 255, 220), 13, anchor_x="center", anchor_y="center",
+                         bold=True, font_name=FU)
+        self._maze_preset_btns["__back__"] = (back_x, back_x + back_w, back_y, back_y + back_h)
+
+        arcade.draw_text("Select a maze type, then press ENTER MAZE  ·  ESC to go back",
+                         w // 2, 16, (70, 130, 95, 140), 9,
+                         anchor_x="center", font_name=FN)
+
+    def _start_maze_with_preset(self):
+        """Reset all maze run state and start a fresh maze with the chosen preset."""
+        self.maze_preset = next(
+            (p for p in MAZE_PRESETS if p["key"] == self.selected_maze_preset),
+            MAZE_PRESETS[0]
+        )
+        self.maze_level = 0
+        self.score      = 0
+        self.time_alive = 0.0
+        self.run_coins  = 0
+        self.setup_maze(keep_player=False)
 
     def _draw_menu(self, anim: dict | None = None, draw_background: bool = True):
         anim = anim or {}
@@ -4097,6 +4324,18 @@ class GameWindow(arcade.Window):
             self._draw_level_select()
             return
 
+        if self.game_state == STATE_MAZE_SELECT:
+            self._draw_maze_select()
+            return
+
+        if self.game_state == STATE_MAZE:
+            self._draw_maze_world()
+            return
+
+        if self.game_state == STATE_MAZE_OVER:
+            self._draw_maze_over()
+            return
+
         # Playing / paused / gameover — always draw the world
         tc = THEMES[self.menu_theme]   # pull once, use everywhere below
         self._draw_bg_space()
@@ -4259,6 +4498,10 @@ class GameWindow(arcade.Window):
         if self.contact_damage_timer > 0: self.contact_damage_timer -= delta
         if self.combo_timer > 0: self.combo_timer -= delta
         elif self.combo > 0:     self.combo = 0
+
+        if self.game_state == STATE_MAZE:
+            self._update_maze(delta)
+            return
 
         if self.game_state != STATE_PLAYING:
             return
@@ -4940,11 +5183,25 @@ class GameWindow(arcade.Window):
                 l, r, b, t = rect
                 if l <= x <= r and b <= y <= t:
                     if name == "__enter__":
-                        # Transition to the main menu for the selected mode
                         if self.selected_mode == "normal":
                             self.game_state = STATE_MENU
-                    elif name in ("normal",):
+                        elif self.selected_mode == "maze":
+                            self.game_state = STATE_MAZE_SELECT
+                    elif name in ("normal", "maze"):
                         self.selected_mode = name
+                    return
+            return
+
+        if self.game_state == STATE_MAZE_SELECT:
+            for name, rect in self._maze_preset_btns.items():
+                l, r, b, t = rect
+                if l <= x <= r and b <= y <= t:
+                    if name == "__play__":
+                        self._start_maze_with_preset()
+                    elif name == "__back__":
+                        self.game_state = STATE_MODE_SELECT
+                    else:
+                        self.selected_maze_preset = name
                     return
             return
 
@@ -5057,6 +5314,15 @@ class GameWindow(arcade.Window):
         if key == arcade.key.ESCAPE:
             if self.game_state == STATE_MODE_SELECT:
                 pass  # nothing to go back to on the first screen
+            elif self.game_state == STATE_MAZE_SELECT:
+                self.game_state = STATE_MODE_SELECT
+            elif self.game_state == STATE_MAZE:
+                self.game_state = STATE_MAZE_SELECT
+                self._clear_movement_input()
+                self.set_mouse_visible(True)
+            elif self.game_state == STATE_MAZE_OVER:
+                self.game_state = STATE_MAZE_SELECT
+                self.set_mouse_visible(True)
             elif self.game_state == STATE_PLAYING:
                 self.game_state = STATE_PAUSED
                 self._clear_movement_input()
@@ -5075,6 +5341,9 @@ class GameWindow(arcade.Window):
 
         elif key == arcade.key.R and self.game_state == STATE_GAMEOVER:
             self.setup()
+
+        elif key == arcade.key.R and self.game_state == STATE_MAZE_OVER:
+            self._start_maze_with_preset()
 
         elif key == arcade.key.F11:
             self._toggle_fullscreen()

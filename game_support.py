@@ -45,6 +45,7 @@ POWERUP_KEYS = {
     arcade.key.KEY_1: "speed",
     arcade.key.KEY_2: "shield",
     arcade.key.KEY_3: "triple",
+    arcade.key.KEY_4: "breach",    # Maze-mode wall breaker
     arcade.key.KEY_5: "elec360",   # Reaper special
 }
 
@@ -190,8 +191,8 @@ STATE_MODE_SELECT  = "mode_select"
 #  MAZE MODE CONSTANTS
 # ─────────────────────────────────────────────────────
 
-MAZE_CELL_SIZE    = 64          # pixels per cell
-MAZE_WALL_THICK   = 10          # wall line thickness
+MAZE_CELL_SIZE    = 96          # pixels per cell
+MAZE_WALL_THICK   = 18          # wall line thickness
 MAZE_BASE_COLS    = 23          # starting grid width  — larger than screen
 MAZE_BASE_ROWS    = 17          # starting grid height — larger than screen
 
@@ -201,9 +202,17 @@ MAZE_ENEMY_SPEED          = 72     # px/s movement speed
 MAZE_ENEMY_BULLET_DAMAGE  = 5      # much less than normal (10)
 MAZE_ENEMY_BULLET_SPEED   = 270    # px/s  (slower than normal 430)
 MAZE_ENEMY_FIRE_RATE      = 2.6    # seconds between shots
-MAZE_ENEMY_SPAWN_INTERVAL = 5.0    # seconds between spawns
+MAZE_ENEMY_SPAWN_INTERVAL = 2.8    # seconds between spawns
 MAZE_ENEMY_BULLET_LIFE    = 4.0    # max seconds before auto-removal
-MAZE_ENEMY_SPLIT_TIME     = 3.0    # seconds before a surviving enemy splits
+MAZE_ENEMY_SPLIT_TIME     = 1.8    # seconds before a surviving enemy splits
+MAZE_ENEMY_BASE_CAP       = 7      # starting max enemies on a maze floor
+MAZE_ENEMY_CAP_PER_FLOOR  = 4      # extra enemy capacity per floor
+MAZE_ENEMY_MAX_CAP        = 28     # hard cap to keep performance under control
+MAZE_BREACH_DROP_CHANCE   = 36     # % chance a maze enemy drops a breach cell
+MAZE_BREACH_DURATION      = 5.0    # seconds breach rounds can damage fragile walls
+MAZE_BREACH_MAX_STORAGE   = 4      # player can bank up to 4 wall-breaking charges
+MAZE_BREAKABLE_WALL_HP    = 3      # breach hits needed to crack a fragile wall
+MAZE_BREAKABLE_WALL_CHANCE = 0.24  # only some closed internal walls can be destroyed
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
 STATE_MAZE_SELECT = "maze_select"
@@ -784,7 +793,7 @@ def _draw_texture_fitted(texture: arcade.Texture, center_x: float, center_y: flo
 #  POWERUPS
 # ─────────────────────────────────────────────────────
 
-POWERUP_TYPES  = ["health", "shield", "speed", "triple", "beam360", "elec360"]
+POWERUP_TYPES  = ["health", "shield", "speed", "triple", "beam360", "elec360", "breach"]
 POWERUP_COLORS = {
     "health":   (0,   255, 90,  220),
     "shield":   (0,   190, 255, 220),
@@ -792,16 +801,19 @@ POWERUP_COLORS = {
     "triple":   (255, 130, 0,   220),
     "beam360":  (255, 60,  20,  220),   # fiery orange-red
     "elec360":  (120, 80,  255, 220),   # electric violet
+    "breach":   (255, 205, 60,  220),   # maze wall breaker
 }
 POWERUP_LABELS = {
     "health":  "+HP",   "shield":  "SHIELD",
     "speed":   "SPEED", "triple":  "TRIPLE",  "beam360":  "360°",
-    "elec360": "⚡360°",
+    "elec360": "⚡360°", "breach": "BREACH",
 }
 # Types that only drop when the beam ship is active
 BEAM_ONLY_POWERUPS     = {"beam360"}
 # Types that only drop when the electric ship is active
 ELECTRIC_ONLY_POWERUPS = {"elec360"}
+# Maze-only wall breaker. Normal mode excludes it from random drops.
+BREACH_ONLY_POWERUPS = {"breach"}
 
 
 # ─────────────────────────────────────────────────────
@@ -861,6 +873,14 @@ def _make_powerup_texture(kind: str) -> arcade.Texture:
             x2 = cx + math.cos(a) * 14;  y2 = cx + math.sin(a) * 14
             d.line((x1, y1, x2, y2), fill=(r, g, b, 240), width=2)
         d.ellipse((cx-4, cx-4, cx+4, cx+4), fill=(r, g, b, 255))
+
+    elif kind == "breach":
+        # Cracked charge cell
+        d.polygon([(cx, 7), (cx+12, cx), (cx, S-7), (cx-12, cx)],
+                  fill=(r, g, b, 210))
+        d.line((cx-3, 10, cx+2, cx-1, cx-2, cx+4, cx+4, S-9),
+               fill=(8, 12, 30, 235), width=2)
+        d.line((cx-9, cx, cx+9, cx), fill=(255, 245, 165, 230), width=1)
 
     elif kind == "health":
         # Plus / cross
@@ -973,16 +993,17 @@ class Player(arcade.Sprite):
         self.triple_active   = False;  self.triple_timer   = 0.0
         self.beam360_active  = False;  self.beam360_timer  = 0.0
         self.elec360_active  = False;  self.elec360_timer  = 0.0
+        self.breach_active   = False;  self.breach_timer   = 0.0
 
         self.inventory = {"speed": 0, "shield": 0, "triple": 0,
-                          "beam360": 0, "elec360": 0}
+                          "beam360": 0, "elec360": 0, "breach": 0}
 
     def get_speed(self):
         engine = getattr(self, "_engine_bonus", 1.0)
         return PLAYER_SPEED * engine * (1.65 if self.speed_active else 1.0)
 
     def update_powerups(self, delta):
-        for attr in ("shield", "speed", "triple", "beam360", "elec360"):
+        for attr in ("shield", "speed", "triple", "beam360", "elec360", "breach"):
             if getattr(self, f"{attr}_active"):
                 new_t = getattr(self, f"{attr}_timer") - delta
                 if new_t <= 0:
@@ -1301,6 +1322,10 @@ class MazeGrid:
         self.rows = rows
         # open_walls[row][col] = set of directions where the wall is removed (passage exists)
         self.open_walls: list[list[set]] = [[set() for _ in range(cols)] for _ in range(rows)]
+        # breakable_walls[(col,row,dir)] = current HP for closed internal walls.
+        # Canonical dir is always N or E so the same wall is not stored twice.
+        self.breakable_walls: dict[tuple[int, int, int], int] = {}
+        self.breakable_wall_max_hp = MAZE_BREAKABLE_WALL_HP
         self._generate(seed)
 
     # ── Iterative recursive-backtracker ───────────────
@@ -1332,6 +1357,61 @@ class MazeGrid:
             return False
         return direction in self.open_walls[row][col]
 
+    def _wall_key(self, col: int, row: int, direction: int) -> tuple[int, int, int] | None:
+        """Return a canonical key for an internal wall, or None for maze borders."""
+        if not (0 <= col < self.cols and 0 <= row < self.rows):
+            return None
+        nc = col + self.DX[direction]
+        nr = row + self.DY[direction]
+        if not (0 <= nc < self.cols and 0 <= nr < self.rows):
+            return None
+        if direction in (self.N, self.E):
+            return (col, row, direction)
+        return (nc, nr, self.OPP[direction])
+
+    def is_breakable_wall(self, col: int, row: int, direction: int) -> bool:
+        key = self._wall_key(col, row, direction)
+        return key in self.breakable_walls if key else False
+
+    def wall_hp(self, col: int, row: int, direction: int) -> int:
+        key = self._wall_key(col, row, direction)
+        return self.breakable_walls.get(key, 0) if key else 0
+
+    def configure_breakable_walls(self, seed=None, chance: float = MAZE_BREAKABLE_WALL_CHANCE,
+                                  hp: int = MAZE_BREAKABLE_WALL_HP,
+                                  protected_cells: set[tuple[int, int]] | None = None) -> None:
+        """Mark only selected closed internal walls as fragile; all others stay permanent."""
+        rng = random.Random(seed)
+        protected_cells = protected_cells or set()
+        self.breakable_walls.clear()
+        self.breakable_wall_max_hp = hp
+
+        candidates: list[tuple[int, int, int]] = []
+        for row in range(self.rows):
+            for col in range(self.cols):
+                if (col, row) in protected_cells:
+                    continue
+                for direction in (self.N, self.E):
+                    nc = col + self.DX[direction]
+                    nr = row + self.DY[direction]
+                    if not (0 <= nc < self.cols and 0 <= nr < self.rows):
+                        continue
+                    if (nc, nr) in protected_cells or self.is_open(col, row, direction):
+                        continue
+                    candidates.append((col, row, direction))
+
+        for key in candidates:
+            if rng.random() < chance:
+                self.breakable_walls[key] = hp
+
+        # Guarantee at least a few readable break targets on tiny/sparse layouts.
+        minimum = min(max(4, (self.cols * self.rows) // 22), len(candidates))
+        if len(self.breakable_walls) < minimum:
+            remaining = [key for key in candidates if key not in self.breakable_walls]
+            rng.shuffle(remaining)
+            for key in remaining[:minimum - len(self.breakable_walls)]:
+                self.breakable_walls[key] = hp
+
     def carve_passage(self, col: int, row: int, direction: int) -> bool:
         """Force a passage open between a cell and its neighbor."""
         if not (0 <= col < self.cols and 0 <= row < self.rows):
@@ -1342,7 +1422,23 @@ class MazeGrid:
             return False
         self.open_walls[row][col].add(direction)
         self.open_walls[nr][nc].add(self.OPP[direction])
+        key = self._wall_key(col, row, direction)
+        if key:
+            self.breakable_walls.pop(key, None)
         return True
+
+    def damage_wall(self, col: int, row: int, direction: int, amount: int = 1) -> tuple[bool, bool, int]:
+        """Damage a fragile wall. Returns (damaged, broken, remaining_hp)."""
+        key = self._wall_key(col, row, direction)
+        if key not in self.breakable_walls:
+            return False, False, 0
+        next_hp = self.breakable_walls[key] - amount
+        if next_hp <= 0:
+            k_col, k_row, k_dir = key
+            self.carve_passage(k_col, k_row, k_dir)
+            return True, True, 0
+        self.breakable_walls[key] = next_hp
+        return True, False, next_hp
 
     def open_start_area(self) -> None:
         """Give the spawn cell more than one opening so the run starts with choices."""

@@ -35,8 +35,20 @@ class MazeModeMixin:
         ox = 0
         oy = 0
 
-        self.maze_grid      = MazeGrid(cols, rows, seed=random.randint(0, 999999))
+        maze_seed = random.randint(0, 999999)
+        self.maze_grid      = MazeGrid(cols, rows, seed=maze_seed)
         self.maze_grid.open_start_area()
+        protected_cells = {
+            (0, rows - 1), (1, rows - 1), (0, rows - 2),
+            (cols - 1, 0), (cols - 2, 0), (cols - 1, 1),
+        }
+        self.maze_grid.configure_breakable_walls(
+            seed=maze_seed + 97,
+            protected_cells={
+                (c, r) for c, r in protected_cells
+                if 0 <= c < cols and 0 <= r < rows
+            },
+        )
         self.maze_cell_size = cs
         self.maze_origin    = (float(ox), float(oy))
         self.maze_exit_col  = cols - 1
@@ -73,7 +85,7 @@ class MazeModeMixin:
         self.maze_enemies       = arcade.SpriteList()   # MazeEnemy sprites
         self.maze_bullets       = arcade.SpriteList()   # player bullets (wall-blocked)
         self.maze_enemy_bullets = arcade.SpriteList()   # enemy bullets  (wall-blocked)
-        self.maze_spawn_timer   = 3.0                   # first enemy after 3 s
+        self.maze_spawn_timer   = 1.2                   # first enemy arrives quickly
 
         # ── Initialise camera centred on player spawn ──
         total_w = cols * cs
@@ -136,6 +148,64 @@ class MazeModeMixin:
             return False
         return True
 
+    def _maze_wall_at_point(self, x: float, y: float, radius: float) -> tuple[int, int, int] | None:
+        """Return the closed wall touched by a circular object, if any."""
+        maze = self.maze_grid
+        cs   = self.maze_cell_size
+        ox, oy = self.maze_origin
+        wt2  = MAZE_WALL_THICK // 2 + 2
+
+        if x - radius < ox or x + radius > ox + maze.cols * cs:
+            return None
+        if y - radius < oy or y + radius > oy + maze.rows * cs:
+            return None
+
+        col = max(0, min(maze.cols - 1, int((x - ox) / cs)))
+        row = max(0, min(maze.rows - 1, int((y - oy) / cs)))
+
+        cell_l = ox + col * cs;  cell_r = cell_l + cs
+        cell_b = oy + row * cs;  cell_t = cell_b + cs
+
+        checks = [
+            (x + radius > cell_r - wt2, MazeGrid.E),
+            (x - radius < cell_l + wt2, MazeGrid.W),
+            (y + radius > cell_t - wt2, MazeGrid.N),
+            (y - radius < cell_b + wt2, MazeGrid.S),
+        ]
+        for touched, direction in checks:
+            if touched and not maze.is_open(col, row, direction):
+                return (col, row, direction)
+        return None
+
+    def _draw_maze_wall_segment(self, left: float, right: float, bottom: float, top: float,
+                                col: int, row: int, direction: int,
+                                wall_color: tuple, glow_color: tuple) -> None:
+        """Draw permanent walls and fragile breach walls with distinct material colors."""
+        maze = self.maze_grid
+        if maze.is_breakable_wall(col, row, direction):
+            hp = maze.wall_hp(col, row, direction)
+            ratio = max(0.0, min(1.0, hp / max(1, maze.breakable_wall_max_hp)))
+            fill = (255, int(95 + 70 * ratio), int(88 + 34 * ratio), 245)
+            glow = (255, 120, 105, 82)
+            arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, fill)
+            arcade.draw_lrbt_rectangle_filled(left - 3, right + 3, bottom - 3, top + 3, glow)
+
+            cx = (left + right) / 2
+            cy = (bottom + top) / 2
+            crack = (45, 12, 25, 185)
+            if direction == MazeGrid.N:
+                arcade.draw_line(cx - 18, cy + 3, cx - 5, cy - 2, crack, 3)
+                arcade.draw_line(cx - 5, cy - 2, cx + 9, cy + 4, crack, 3)
+                arcade.draw_line(cx + 9, cy + 4, cx + 20, cy - 2, crack, 3)
+            else:
+                arcade.draw_line(cx - 3, cy + 22, cx + 4, cy + 7, crack, 3)
+                arcade.draw_line(cx + 4, cy + 7, cx - 4, cy - 6, crack, 3)
+                arcade.draw_line(cx - 4, cy - 6, cx + 3, cy - 21, crack, 3)
+            return
+
+        arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, wall_color)
+        arcade.draw_lrbt_rectangle_filled(left + 3, right - 3, bottom - 3, top + 3, glow_color)
+
     def _maze_player_cell(self) -> tuple[int, int]:
         ox, oy = self.maze_origin
         cs = self.maze_cell_size
@@ -154,10 +224,10 @@ class MazeModeMixin:
         FU     = FONT_UI_MENU
         FN     = FONT_NUMERIC
 
-        WALL_C  = (30, 220, 140)   # neon green
-        FLOOR_C = (6,  14,  20)    # near-black floor
-        EXIT_C  = (80, 255, 190)   # cyan-green exit
-        ENTRY_C = (90, 198, 255)   # blue entry
+        WALL_C  = (72, 205, 245)
+        FLOOR_C = (5,  10,  24)
+        EXIT_C  = (112, 255, 188)
+        ENTRY_C = (160, 132, 255)
 
         # ── Apply scrolling camera viewport ─────────
         # Activate the maze camera so all world-space drawing is offset correctly.
@@ -168,10 +238,10 @@ class MazeModeMixin:
 
         # ── Background (fill the whole world) ───────
         arcade.draw_lrbt_rectangle_filled(
-            ox, ox + maze.cols * cs, oy, oy + maze.rows * cs, (4, 8, 14))
+            ox, ox + maze.cols * cs, oy, oy + maze.rows * cs, (3, 6, 18))
         # Also fill outside-maze areas visible at edges
         arcade.draw_lrbt_rectangle_filled(
-            cam_x - 10, cam_x + w + 10, cam_y - 10, cam_y + h + 10, (2, 4, 8))
+            cam_x - 10, cam_x + w + 10, cam_y - 10, cam_y + h + 10, (1, 2, 9))
 
         # ── Floor tiles ─────────────────────────────
         # Culling: only draw cells visible in the viewport
@@ -187,7 +257,7 @@ class MazeModeMixin:
                 arcade.draw_lrbt_rectangle_filled(fl, fl + cs, fb, fb + cs, FLOOR_C)
 
         # Subtle floor grid
-        gc = (0, 35, 22, 35)
+        gc = (82, 125, 190, 28)
         for row in range(row_min, row_max + 2):
             yy = oy + row * cs
             arcade.draw_line(ox + col_min * cs, yy, ox + (col_max + 1) * cs, yy, gc, 1)
@@ -197,7 +267,12 @@ class MazeModeMixin:
 
         # ── Walls ───────────────────────────────────
         p2 = 0.5 + 0.5 * math.sin(t * 1.8)
-        wc = (int(25 + 25 * p2), int(210 + 25 * p2), int(130 + 25 * p2), 255)
+        wc = (
+            int(WALL_C[0] + 18 * p2),
+            int(WALL_C[1] + 22 * p2),
+            int(WALL_C[2] + 10 * p2),
+            255,
+        )
         gw = (*wc[:3], 60)
 
         # Outer border (always solid)
@@ -214,11 +289,13 @@ class MazeModeMixin:
                 cl2 = ox + col * cs;  cr2 = cl2 + cs
                 cb2 = oy + row * cs;  ct2 = cb2 + cs
                 if row < maze.rows - 1 and not maze.is_open(col, row, MazeGrid.N):
-                    arcade.draw_lrbt_rectangle_filled(cl2, cr2, ct2 - wt2, ct2 + wt2, wc)
-                    arcade.draw_lrbt_rectangle_filled(cl2 + wt2, cr2 - wt2, ct2 - wt2 - 2, ct2 + wt2 + 2, gw)
+                    self._draw_maze_wall_segment(
+                        cl2, cr2, ct2 - wt2, ct2 + wt2,
+                        col, row, MazeGrid.N, wc, gw)
                 if col < maze.cols - 1 and not maze.is_open(col, row, MazeGrid.E):
-                    arcade.draw_lrbt_rectangle_filled(cr2 - wt2, cr2 + wt2, cb2, ct2, wc)
-                    arcade.draw_lrbt_rectangle_filled(cr2 - wt2 - 2, cr2 + wt2 + 2, cb2 + wt2, ct2 - wt2, gw)
+                    self._draw_maze_wall_segment(
+                        cr2 - wt2, cr2 + wt2, cb2, ct2,
+                        col, row, MazeGrid.E, wc, gw)
 
         # ── Exit portal ─────────────────────────────
         ec2, er2 = self.maze_exit_col, self.maze_exit_row
@@ -226,12 +303,12 @@ class MazeModeMixin:
         ey2 = oy + (er2 + 0.5) * cs
         pr  = cs * 0.33
         ep  = 0.5 + 0.5 * math.sin(t * 4.8)
-        arcade.draw_circle_filled(ex2, ey2, pr + 10 * ep, (0, 100, 60, 50))
+        arcade.draw_circle_filled(ex2, ey2, pr + 10 * ep, (40, 155, 115, 55))
         arcade.draw_circle_filled(ex2, ey2, pr,            (*EXIT_C, 130))
         arcade.draw_circle_outline(ex2, ey2, pr,            EXIT_C, 3)
         arcade.draw_circle_outline(ex2, ey2, pr + 10 * ep, (*EXIT_C[:3], int(70 * ep)), 2)
         arcade.draw_text("EXIT", ex2, ey2,
-                         (80, 255, 180, 210), 9, anchor_x="center", anchor_y="center",
+                         (180, 255, 220, 220), 9, anchor_x="center", anchor_y="center",
                          bold=True, font_name=FU)
 
         # ── Entry glow ──────────────────────────────
@@ -258,6 +335,9 @@ class MazeModeMixin:
                     bx_, bx_ + bar_w, by_, by_ + 5, (60, 0, 0, 200))
                 arcade.draw_lrbt_rectangle_filled(
                     bx_, bx_ + bar_w * ratio_, by_, by_ + 5, (255, 55, 55, 230))
+
+        # ── Breach cells ─────────────────────────────
+        self.powerups.draw()
 
         # ── Bullets ──────────────────────────────────
         self.maze_bullets.draw()
@@ -306,18 +386,46 @@ class MazeModeMixin:
         FU     = FONT_UI_MENU
         FN     = FONT_NUMERIC
 
-        # ── Health bar ──────────────────────────────
-        hp_ratio = max(0.0, p.health / p.max_health)
-        bar_w = min(220, int(w * 0.28));  bar_h = 14
-        bx2 = 16;  by2 = h - 36
-        arcade.draw_lrbt_rectangle_filled(bx2, bx2 + bar_w, by2, by2 + bar_h, (22, 30, 48, 220))
-        fill_w = int(bar_w * hp_ratio)
-        hp_c = (60, 225, 100) if hp_ratio > 0.5 else (255, 210, 30) if hp_ratio > 0.25 else (255, 55, 55)
-        arcade.draw_lrbt_rectangle_filled(bx2, bx2 + fill_w, by2, by2 + bar_h, (*hp_c, 220))
-        arcade.draw_lrbt_rectangle_outline(bx2, bx2 + bar_w, by2, by2 + bar_h, (80, 130, 190, 180), 1)
-        self._txt_shadow(f"HP  {p.health} / {p.max_health}",
-                         bx2 + bar_w // 2, by2 + 1, (200, 225, 255, 215),
-                         8, FN, anchor_x="center")
+        # ── Health readout: classic stacked number + segmented bar ──
+        hp_ratio = max(0.0, min(1.0, p.health / max(1, p.max_health)))
+        hp_c = (70, 225, 105) if hp_ratio > 0.35 else (255, 70, 80)
+        low_flash = hp_ratio <= 0.25 and math.sin(t * 11.0) > 0
+        if low_flash:
+            hp_c = (255, 235, 120)
+
+        hx = 24
+        hy = h - 14
+        self._txt_shadow(str(int(max(0, p.health))), hx, hy,
+                         (190, 255, 205, 245), 32, FU, anchor_y="top", bold=True,
+                         ox=3, oy=-3)
+        self._txt_shadow("HEALTH", hx + 2, hy - 34,
+                         (120, 255, 160, 190), 11, FU, anchor_y="top", bold=True)
+
+        hp_text_y = hy - 58
+        self._txt_shadow(f"{int(max(0, p.health))}  /  {p.max_health}", hx, hp_text_y,
+                         (*hp_c[:3], 235), 15, FN, anchor_y="top", bold=True)
+
+        segs = 22
+        gap = 3
+        seg_w = 9
+        seg_h = 12
+        bar_x = hx
+        bar_y = hp_text_y - 19
+        filled = int(hp_ratio * segs + 0.5)
+        for i in range(segs):
+            lx = bar_x + i * (seg_w + gap)
+            rx = lx + seg_w
+            if i < filled:
+                arcade.draw_lrbt_rectangle_filled(lx, rx, bar_y, bar_y + seg_h, (*hp_c[:3], 238))
+                arcade.draw_lrbt_rectangle_filled(lx, rx, bar_y + seg_h - 4, bar_y + seg_h,
+                                                   (155, 255, 175, 160))
+            else:
+                arcade.draw_lrbt_rectangle_filled(lx, rx, bar_y, bar_y + seg_h, (35, 20, 34, 52))
+
+        glow_w = int((segs * seg_w + (segs - 1) * gap) * hp_ratio)
+        if glow_w > 0:
+            arcade.draw_lrbt_rectangle_filled(bar_x, bar_x + glow_w, bar_y - 3, bar_y - 1,
+                                               (*hp_c[:3], 95))
 
         # ── Score ───────────────────────────────────
         self._txt_shadow(f"SCORE  {self.score:,}", w - 16, h - 28,
@@ -332,8 +440,30 @@ class MazeModeMixin:
         self._txt_shadow(f"{self.time_alive:06.1f}s", w - 16, h - 52,
                          (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
 
+        # ── Breach-cell storage ─────────────────────
+        breach_count = p.inventory.get("breach", 0)
+        active = getattr(p, "breach_active", False)
+        panel_x = 16
+        panel_y = h - 118
+        panel_w = 210
+        panel_h = 28
+        amber = (255, 190, 55)
+        fill_a = 110 if active else 55
+        arcade.draw_lrbt_rectangle_filled(
+            panel_x, panel_x + panel_w, panel_y - panel_h, panel_y,
+            (*amber, fill_a))
+        arcade.draw_lrbt_rectangle_outline(
+            panel_x, panel_x + panel_w, panel_y - panel_h, panel_y,
+            (*amber, 180 if breach_count else 85), 1)
+        label = f"[4] BREACH  {breach_count}/{MAZE_BREACH_MAX_STORAGE}"
+        if active:
+            label += f"  {p.breach_timer:.0f}s"
+        self._txt_shadow(label, panel_x + 10, panel_y - 20,
+                         (*amber, 230 if breach_count or active else 130),
+                         10, FN, bold=True)
+
         # ── Hint ────────────────────────────────────
-        arcade.draw_text("WASD Move · Hold LMB to Fire · Find the EXIT · ESC Pause · H Hide HUD",
+        arcade.draw_text("WASD Move · Hold LMB to Fire · [4] Breach Walls · Find the EXIT · ESC Pause · H Hide HUD",
                          w // 2, 12, (70, 100, 155, 130), 8,
                          anchor_x="center", font_name=FN)
 
@@ -351,36 +481,40 @@ class MazeModeMixin:
         maze   = self.maze_grid
         mm_cs  = max(4, min(9, 90 // max(maze.cols, maze.rows)))
         mx     = 16
-        my     = self.height - 110 - maze.rows * mm_cs
+        my     = self.height - 185 - maze.rows * mm_cs
         mw     = maze.cols * mm_cs
         mh     = maze.rows * mm_cs
 
-        # Panel
-        arcade.draw_lrbt_rectangle_filled(mx - 4, mx + mw + 4, my - 4, my + mh + 4, (0, 0, 0, 170))
-        arcade.draw_lrbt_rectangle_outline(mx - 4, mx + mw + 4, my - 4, my + mh + 4,
-                                            (0, 170, 90, 160), 1)
+        # Panel: glassy and mostly transparent so the maze stays visible underneath.
+        arcade.draw_lrbt_rectangle_filled(mx - 8, mx + mw + 8, my - 8, my + mh + 8, (4, 8, 22, 46))
+        arcade.draw_lrbt_rectangle_outline(mx - 8, mx + mw + 8, my - 8, my + mh + 8,
+                                            (85, 220, 255, 185), 2)
+        arcade.draw_lrbt_rectangle_outline(mx - 2, mx + mw + 2, my - 2, my + mh + 2,
+                                            (175, 145, 255, 82), 1)
 
         MWTT = max(1, mm_cs // 5)
-        wc2  = (0, 200, 110, 200)
+        wc2  = (85, 220, 255, 190)
 
         # Floors
         for row in range(maze.rows):
             for col in range(maze.cols):
                 fx = mx + col * mm_cs;  fy = my + row * mm_cs
-                arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy, fy + mm_cs, (10, 26, 20))
+                arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy, fy + mm_cs, (8, 14, 34, 50))
 
         # Walls
         for row in range(maze.rows):
             for col in range(maze.cols):
                 fx = mx + col * mm_cs;  fy = my + row * mm_cs
                 if row < maze.rows - 1 and not maze.is_open(col, row, MazeGrid.N):
+                    wall_c = (255, 118, 108, 220) if maze.is_breakable_wall(col, row, MazeGrid.N) else wc2
                     arcade.draw_lrbt_rectangle_filled(
                         fx, fx + mm_cs,
-                        fy + mm_cs - MWTT, fy + mm_cs + MWTT, wc2)
+                        fy + mm_cs - MWTT, fy + mm_cs + MWTT, wall_c)
                 if col < maze.cols - 1 and not maze.is_open(col, row, MazeGrid.E):
+                    wall_c = (255, 118, 108, 220) if maze.is_breakable_wall(col, row, MazeGrid.E) else wc2
                     arcade.draw_lrbt_rectangle_filled(
                         fx + mm_cs - MWTT, fx + mm_cs + MWTT,
-                        fy, fy + mm_cs, wc2)
+                        fy, fy + mm_cs, wall_c)
 
         # Border
         arcade.draw_lrbt_rectangle_outline(mx, mx + mw, my, my + mh, wc2, MWTT)
@@ -494,6 +628,18 @@ class MazeModeMixin:
 
         self._update_particles(delta)
 
+        # ── Maze-only breach powerups ───────────────────────────────
+        self.powerups.update(delta)
+        for pu in list(self.powerups):
+            if pu.life <= 0:
+                pu.remove_from_sprite_lists()
+                continue
+            if arcade.check_for_collision(pu, p):
+                self._collect_powerup(pu.kind)
+                self._burst(pu.center_x, pu.center_y, 12,
+                            (255, 195, 65), 45, 150, 0.9, 2.1, .06, .18)
+                pu.remove_from_sprite_lists()
+
         # ── Player shooting (hold left-mouse to fire) ────────────────
         if self.mouse_held:
             self.fire_timer += delta
@@ -512,7 +658,36 @@ class MazeModeMixin:
         # ── Move player bullets + wall collision ─────────────────────
         self.maze_bullets.update(delta)
         for b in list(self.maze_bullets):
-            if b.life <= 0 or not self._maze_can_move_to(b.center_x, b.center_y, 5):
+            wall_hit = self._maze_wall_at_point(b.center_x, b.center_y, 5)
+            blocked = not self._maze_can_move_to(b.center_x, b.center_y, 5)
+            if b.life <= 0:
+                self._burst(b.center_x, b.center_y, 5,
+                            (180, 220, 255), 35, 110, 0.7, 1.6, .04, .12)
+                b.remove_from_sprite_lists()
+            elif wall_hit:
+                col, row, direction = wall_hit
+                if getattr(p, "breach_active", False):
+                    damaged, broken, hp_left = maze.damage_wall(col, row, direction)
+                    if broken:
+                        self.notif_text = "BREACH OPENED!"
+                        self.notif_color = (255, 205, 80)
+                        self.notif_timer = 0.9
+                        self._burst(b.center_x, b.center_y, 26,
+                                    (255, 190, 65), 70, 260, 1.4, 3.4, .12, .32)
+                    elif damaged:
+                        self.notif_text = f"WALL CRACKED  {hp_left} HP"
+                        self.notif_color = (255, 195, 80)
+                        self.notif_timer = max(self.notif_timer, 0.45)
+                        self._burst(b.center_x, b.center_y, 12,
+                                    (255, 185, 55), 55, 180, 0.9, 2.2, .06, .18)
+                    else:
+                        self._burst(b.center_x, b.center_y, 7,
+                                    (95, 230, 155), 35, 120, 0.6, 1.5, .04, .10)
+                else:
+                    self._burst(b.center_x, b.center_y, 5,
+                                (180, 220, 255), 35, 110, 0.7, 1.6, .04, .12)
+                b.remove_from_sprite_lists()
+            elif blocked:
                 self._burst(b.center_x, b.center_y, 5,
                             (180, 220, 255), 35, 110, 0.7, 1.6, .04, .12)
                 b.remove_from_sprite_lists()
@@ -525,7 +700,10 @@ class MazeModeMixin:
                             (255, 140, 80), 35, 110, 0.7, 1.6, .04, .12)
                 b.remove_from_sprite_lists()
 
-        max_enemies = min(12, 3 + self.maze_level * 2)
+        max_enemies = min(
+            MAZE_ENEMY_MAX_CAP,
+            MAZE_ENEMY_BASE_CAP + self.maze_level * MAZE_ENEMY_CAP_PER_FLOOR,
+        )
 
         # ── Enemy AI (move + shoot) ───────────────────────────────────
         pc, pr = self._maze_player_cell()
@@ -560,6 +738,8 @@ class MazeModeMixin:
                     self.notif_timer = 0.8
                     self._burst(enemy.center_x, enemy.center_y, 22,
                                 (255, 130, 70), 65, 240, 1.5, 3.2, .12, .32)
+                    if random.randint(1, 100) <= MAZE_BREACH_DROP_CHANCE:
+                        self._drop_maze_breach_powerup(enemy.center_x, enemy.center_y)
                     enemy.remove_from_sprite_lists()
 
         # ── Enemy splitting ─────────────────────────────────────────
@@ -589,8 +769,8 @@ class MazeModeMixin:
         self.maze_spawn_timer -= delta
         if (self.maze_spawn_timer <= 0
                 and len(self.maze_enemies) < max_enemies):
-            spawn_interval = max(2.0, MAZE_ENEMY_SPAWN_INTERVAL
-                                 - self.maze_level * 0.4)
+            spawn_interval = max(0.85, MAZE_ENEMY_SPAWN_INTERVAL
+                                 - self.maze_level * 0.28)
             self.maze_spawn_timer = spawn_interval
             self._spawn_maze_enemy()
 
@@ -629,6 +809,14 @@ class MazeModeMixin:
                 enemy = MazeEnemy(col, row, cs, ox, oy)
                 self.maze_enemies.append(enemy)
                 return
+
+    def _drop_maze_breach_powerup(self, x: float, y: float) -> None:
+        """Drop a stationary breach cell that can arm wall-breaking rounds."""
+        pu = Powerup(x, y, "breach")
+        pu.change_y = 0
+        pu.life = 10.0
+        self.powerups.append(pu)
+        self._burst(x, y, 14, (255, 195, 65), 40, 150, 0.8, 2.0, .05, .16)
 
     def _split_maze_enemy(self, enemy: MazeEnemy, max_enemies: int) -> bool:
         """Duplicate a surviving maze enemy into a nearby open cell."""
@@ -952,6 +1140,10 @@ class MazeModeMixin:
         card_y  = h // 2 - card_h // 2 - 10
 
         self._maze_preset_btns = {}
+        selected_preset = next(
+            (p for p in MAZE_PRESETS if p["key"] == self.selected_maze_preset),
+            MAZE_PRESETS[0],
+        )
 
         for i, preset in enumerate(MAZE_PRESETS):
             cl  = start_x + i * (card_w + 18)
@@ -1002,35 +1194,35 @@ class MazeModeMixin:
             wrap_limit = 22 if card_w < 190 else 28
             desc_lines = wrap_words(preset["desc"], wrap_limit)
             detail_lines = wrap_words(preset["detail"], wrap_limit + 2)
-            desc_c = (215, 245, 225, 235) if sel else (190, 225, 205, 220)
-            det_c = (130, 195, 155, 215) if sel else (105, 165, 130, 190)
+            desc_c = (238, 255, 244, 255) if sel else (222, 242, 230, 245)
+            det_c = (190, 238, 205, 245) if sel else (164, 214, 178, 225)
 
             line_y = ct - 138
             for line in desc_lines[:2]:
-                self._txt_shadow(line, cx_, line_y, desc_c, 8 if card_w < 200 else 9,
-                                 FU, anchor_x="center", bold=True, ox=1, oy=-1)
+                self._txt_shadow(line, cx_, line_y, desc_c, 9 if card_w < 200 else 10,
+                                 FU, anchor_x="center", bold=True, ox=2, oy=-2)
                 line_y -= 16
 
             line_y -= 6
             for line in detail_lines[:2]:
-                self._txt_shadow(line, cx_, line_y, det_c, 7 if card_w < 200 else 8,
-                                 FN, anchor_x="center", ox=1, oy=-1)
+                self._txt_shadow(line, cx_, line_y, det_c, 8 if card_w < 200 else 9,
+                                 FN, anchor_x="center", bold=True, ox=2, oy=-2)
                 line_y -= 14
 
             # SELECT button at bottom of card
             btn_bw = card_w - 24;  btn_bh = 26
             btn_bx = cl + 12;      btn_by = cb + 12
             btn_hov = self._is_hovering(btn_bx, btn_bx + btn_bw, btn_by, btn_by + btn_bh)
-            btn_fill   = (*mc, 220) if (sel or btn_hov) else (*mc[:3], 45)
-            btn_tc     = (10, 10, 20, 255) if (sel or btn_hov) else (*mc, 200)
+            btn_fill   = (*mc, 230) if (sel or btn_hov) else (*mc[:3], 82)
+            btn_tc     = (8, 12, 18, 255) if (sel or btn_hov) else (235, 255, 240, 235)
             arcade.draw_lrbt_rectangle_filled(btn_bx, btn_bx + btn_bw,
                                                btn_by, btn_by + btn_bh, btn_fill)
             arcade.draw_lrbt_rectangle_outline(btn_bx, btn_bx + btn_bw,
                                                 btn_by, btn_by + btn_bh, (*mc, 255), 1)
-            arcade.draw_text("▶  SELECTED" if sel else "SELECT",
-                             btn_bx + btn_bw // 2, btn_by + btn_bh // 2,
-                             btn_tc, 9, anchor_x="center", anchor_y="center",
-                             bold=True, font_name=FU)
+            self._txt_shadow("▶  SELECTED" if sel else "SELECT",
+                             btn_bx + btn_bw // 2, btn_by + btn_bh // 2 - 1,
+                             btn_tc, 10, FU, anchor_x="center", anchor_y="center",
+                             bold=True, ox=1, oy=-1)
 
             self._maze_preset_btns[preset["key"]] = (cl, cr, cb, ct)
 
@@ -1040,22 +1232,25 @@ class MazeModeMixin:
         play_y = card_y - play_h - 22
         play_hov = self._is_hovering(play_x, play_x + play_w, play_y, play_y + play_h)
         ep = 0.5 + 0.5 * math.sin(t * 3.5)
-        e_fill   = (int(20 + 20 * ep), int(160 + 40 * ep), int(90 + 30 * ep), 245)
-        e_border = (120, 255, 160, 255) if play_hov else (80, 210, 120, 220)
+        sc = selected_preset["color"]
+        e_fill   = (
+            int(sc[0] * (0.72 + 0.16 * ep)),
+            int(sc[1] * (0.72 + 0.16 * ep)),
+            int(sc[2] * (0.72 + 0.16 * ep)),
+            248,
+        )
+        e_border = (*sc, 255 if play_hov else 225)
         if play_hov:
             arcade.draw_lrbt_rectangle_filled(play_x - 2, play_x + play_w + 2,
                                                play_y - 2, play_y + play_h + 2,
-                                               (120, 255, 160, 26))
+                                               (*sc, 34))
         arcade.draw_lrbt_rectangle_filled(play_x, play_x + play_w,
                                            play_y, play_y + play_h, e_fill)
         arcade.draw_lrbt_rectangle_outline(play_x, play_x + play_w,
                                             play_y, play_y + play_h, e_border, 2)
-        arcade.draw_text("[ ENTER MAZE ]", w // 2 + 1, play_y + play_h // 2 - 1,
-                         (0, 0, 0, 85), 18, anchor_x="center", anchor_y="center",
-                         bold=True, font_name=FU)
-        arcade.draw_text("[ ENTER MAZE ]", w // 2, play_y + play_h // 2,
-                         (255, 255, 255, 255), 18, anchor_x="center", anchor_y="center",
-                         bold=True, font_name=FU)
+        self._txt_shadow("[ ENTER MAZE ]", w // 2, play_y + play_h // 2,
+                         (255, 255, 255, 255), 18, FU,
+                         anchor_x="center", anchor_y="center", bold=True, ox=2, oy=-2)
         self._maze_preset_btns["__play__"] = (play_x, play_x + play_w, play_y, play_y + play_h)
 
         # Back button

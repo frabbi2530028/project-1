@@ -25,7 +25,8 @@ def _draw_btn(x, w, y, h, fill, border, text_color, label, font_size):
 def _notif_color(kind: str) -> tuple:
     return {"speed":(255,220,120),"shield":(110,230,255),
             "triple":(255,180,120),
-            "health":(130,255,130)}.get(kind,(255,255,255))
+            "health":(130,255,130),
+            "breach":(255,205,80)}.get(kind,(255,255,255))
 
 
 class GameWindow(MazeModeMixin, arcade.Window):
@@ -112,7 +113,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                                         (255,255,110,255), 26, anchor_x="center",
                                         bold=True, font_name=FONT_UI)
         self.txt_hint    = arcade.Text(
-            "WASD · Mouse Aim · 1-3 Power-ups · 5 Reaper Special · H HUD · F11 Fullscreen · R Restart · ESC Menu",
+            "WASD · Mouse Aim · 1-3 Power-ups · 4 Maze Breach · 5 Reaper Special · H HUD · F11 Fullscreen · R Restart · ESC Menu",
             SCREEN_WIDTH//2, 11, (100, 125, 175, 140), 9,
             anchor_x="center", font_name=FONT_UI)
         self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+18,
@@ -2699,12 +2700,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self.notif_text  = "+30 HEALTH!"
             self.notif_color = (130,255,130);  self.notif_timer = 1.4
             return
-        if p.inventory[kind] < MAX_POWERUP_STORAGE:
+        storage_limit = MAZE_BREACH_MAX_STORAGE if kind == "breach" else MAX_POWERUP_STORAGE
+        if p.inventory[kind] < storage_limit:
             p.inventory[kind] += 1
-            self.notif_text  = f"{POWERUP_LABELS[kind]} STORED  [{p.inventory[kind]}/{MAX_POWERUP_STORAGE}]"
+            self.notif_text  = f"{POWERUP_LABELS[kind]} STORED  [{p.inventory[kind]}/{storage_limit}]"
             self.notif_color = _notif_color(kind);  self.notif_timer = 1.0
         else:
-            if kind == "elec360":
+            if kind in ("elec360", "breach"):
                 self.notif_text  = f"{POWERUP_LABELS[kind]} STORAGE FULL!"
                 self.notif_color = _notif_color(kind);  self.notif_timer = 1.0
             else:
@@ -2723,13 +2725,19 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 "speed":    ("SPEED BOOST!",          (255, 220, 120)),
                 "triple":   ("TRIPLE SHOT!",          (255, 180, 120)),
                 "beam360":  ("360° BEAM BURST!",      (255, 120,  50)),
-                "elec360":  ("⚡ 360° ELECTRIC MODE!", (160, 110, 255))}
+                "elec360":  ("⚡ 360° ELECTRIC MODE!", (160, 110, 255)),
+                "breach":   ("BREACH ROUNDS ARMED!",  (255, 205,  80))}
         text, color = msgs.get(kind, (kind.upper() + "!", (255, 255, 255)))
         self.notif_text  = ("STORAGE FULL - " + text) if immediate else text
         self.notif_color = color;  self.notif_timer = 1.6
         setattr(p, f"{kind}_active", True)
-        setattr(p, f"{kind}_timer",  POWERUP_DURATION
-                if kind != "elec360" else ELECTRIC_360_DURATION)
+        if kind == "elec360":
+            duration = ELECTRIC_360_DURATION
+        elif kind == "breach":
+            duration = MAZE_BREACH_DURATION
+        else:
+            duration = POWERUP_DURATION
+        setattr(p, f"{kind}_timer", duration)
 
     def _try_drop_powerup(self, x, y, boss=False):
         lucky_bonus = self.upgrades.get("lucky", 0) * 15
@@ -2738,7 +2746,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
             return
         # Build pool: universal powerups + ship-specific if applicable
         pool = [k for k in POWERUP_TYPES
-                if k not in BEAM_ONLY_POWERUPS and k not in ELECTRIC_ONLY_POWERUPS]
+                if k not in BEAM_ONLY_POWERUPS
+                and k not in ELECTRIC_ONLY_POWERUPS
+                and k not in BREACH_ONLY_POWERUPS]
         if self.selected_ship in BEAM_SHIP_INDICES:
             pool += ["beam360"] * 2     # extra weight
         if self.selected_ship in ELECTRIC_SHIP_INDICES:
@@ -3073,6 +3083,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
         elif key in POWERUP_KEYS:
             if self.game_state == STATE_PLAYING:
                 self._use_stored_powerup(POWERUP_KEYS[key])
+            elif self.game_state == STATE_MAZE and POWERUP_KEYS[key] == "breach":
+                self._use_stored_powerup("breach")
 
     def on_key_release(self, key, modifiers):
         if key in {arcade.key.W, arcade.key.A, arcade.key.S, arcade.key.D,

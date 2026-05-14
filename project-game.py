@@ -75,6 +75,7 @@ class GameWindow(arcade.Window):
         self._diff_btns:  dict  = {}
         self._shop_btns:  dict  = {}
         self._shop_return_state = STATE_MENU
+        self._pause_return_state: str | None = None
         self.shop_feedback      = ""
         self.shop_feedback_color = (160, 180, 215, 180)
 
@@ -269,6 +270,7 @@ class GameWindow(arcade.Window):
         # Cache the active preset so AI code can read it cheaply
         self._dpreset = DIFFICULTY_PRESETS[self.selected_difficulty]
 
+        self._pause_return_state = None
         self.game_state = STATE_PLAYING
         self.set_mouse_visible(False)
 
@@ -536,6 +538,7 @@ class GameWindow(arcade.Window):
         self.maze_exit_reached  = False
         self.boss_on_screen     = False
 
+        self._pause_return_state = None
         self.game_state = STATE_MAZE
         self.set_mouse_visible(False)
 
@@ -768,7 +771,7 @@ class GameWindow(arcade.Window):
                          (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
 
         # ── Hint ────────────────────────────────────
-        arcade.draw_text("WASD Move · Hold LMB to Fire · Find the EXIT · ESC Quit · H Hide HUD",
+        arcade.draw_text("WASD Move · Hold LMB to Fire · Find the EXIT · ESC Pause · H Hide HUD",
                          w // 2, 12, (70, 100, 155, 130), 8,
                          anchor_x="center", font_name=FN)
 
@@ -1160,10 +1163,12 @@ class GameWindow(arcade.Window):
             if not avail:
                 fill   = (12, 16, 40, 210)
                 border = (38, 46, 80, 130)
-            elif sel or hov:
-                alpha  = 200 if sel else 140
-                fill   = (*mc[:3], alpha) if sel else (14, 32, 80, 220)
+            elif hov:
+                fill   = (14, 32, 80, 220)
                 border = (*mc, 255)
+            elif sel:
+                fill   = (11, 22, 58, 228)
+                border = (*mc[:3], 180)
             else:
                 fill   = (9, 18, 50, 220)
                 border = (*mc[:3], 110)
@@ -1171,8 +1176,8 @@ class GameWindow(arcade.Window):
             arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, border, 2 if (sel or hov) else 1)
 
-            # Glow pulse on selected / hover
-            if sel or hov:
+            # Only hovered cards get the outer glow; selected cards stay calm
+            if hov:
                 pulse2 = 0.5 + 0.5 * math.sin(t * 4.5)
                 glow_a = int(30 + 35 * pulse2)
                 arcade.draw_lrbt_rectangle_outline(cl - 3, cr + 3, cb - 3, ct + 3,
@@ -3008,6 +3013,11 @@ class GameWindow(arcade.Window):
             self._draw_maze_over()
             return
 
+        if self.game_state == STATE_PAUSED and self._pause_return_state == STATE_MAZE:
+            self._draw_maze_world()
+            self._draw_menu()
+            return
+
         # Playing / paused / gameover — always draw the world
         tc = THEMES[self.menu_theme]   # pull once, use everywhere below
         self._draw_bg_space()
@@ -3903,15 +3913,20 @@ class GameWindow(arcade.Window):
                         if self.game_state == STATE_MENU:
                             self._start_screen_transition(STATE_MENU, STATE_LEVEL_SELECT)
                         else:
-                            self.game_state = STATE_PLAYING
-                            self.set_mouse_visible(False)
+                            self._resume_from_pause()
                     elif name == "shop":
                         self._open_shop(self.game_state)
                     elif name == "reset":
-                        self.setup()
+                        if self.game_state == STATE_PAUSED:
+                            self._reset_from_pause()
+                        else:
+                            self.setup()
                     elif name == "quit":
-                        self.game_state = STATE_MENU
-                        self.set_mouse_visible(True)
+                        if self.game_state == STATE_PAUSED:
+                            self._quit_from_pause()
+                        else:
+                            self.game_state = STATE_MENU
+                            self.set_mouse_visible(True)
                     elif name == "theme":
                         self.menu_theme = "light" if self.menu_theme=="dark" else "dark"
                     return
@@ -3978,6 +3993,37 @@ class GameWindow(arcade.Window):
             self.player.change_x = 0.0
             self.player.change_y = 0.0
 
+    def _enter_pause(self, return_state: str) -> None:
+        self._pause_return_state = return_state
+        self.game_state = STATE_PAUSED
+        self._clear_movement_input()
+        self.mouse_held = False
+        self.set_mouse_visible(True)
+
+    def _resume_from_pause(self) -> None:
+        resume_state = self._pause_return_state or STATE_PLAYING
+        self._pause_return_state = None
+        self.game_state = resume_state
+        self.mouse_held = False
+        self.set_mouse_visible(False)
+
+    def _quit_from_pause(self) -> None:
+        paused_from = self._pause_return_state or STATE_PLAYING
+        self._pause_return_state = None
+        self._clear_movement_input()
+        self.mouse_held = False
+        self.game_state = STATE_MAZE_SELECT if paused_from == STATE_MAZE else STATE_MENU
+        self.set_mouse_visible(True)
+
+    def _reset_from_pause(self) -> None:
+        paused_from = self._pause_return_state or STATE_PLAYING
+        self._pause_return_state = None
+        self.mouse_held = False
+        if paused_from == STATE_MAZE:
+            self._start_maze_with_preset()
+        else:
+            self.setup()
+
     def on_key_press(self, key, modifiers):
         if self._screen_transition and key != arcade.key.F11:
             return
@@ -3991,22 +4037,20 @@ class GameWindow(arcade.Window):
         if key == arcade.key.ESCAPE:
             if self.game_state == STATE_MODE_SELECT:
                 pass  # nothing to go back to on the first screen
+            elif self.game_state == STATE_MENU:
+                self.game_state = STATE_MODE_SELECT
+                self.set_mouse_visible(True)
             elif self.game_state == STATE_MAZE_SELECT:
                 self.game_state = STATE_MODE_SELECT
             elif self.game_state == STATE_MAZE:
-                self.game_state = STATE_MAZE_SELECT
-                self._clear_movement_input()
-                self.set_mouse_visible(True)
+                self._enter_pause(STATE_MAZE)
             elif self.game_state == STATE_MAZE_OVER:
                 self.game_state = STATE_MAZE_SELECT
                 self.set_mouse_visible(True)
             elif self.game_state == STATE_PLAYING:
-                self.game_state = STATE_PAUSED
-                self._clear_movement_input()
-                self.set_mouse_visible(True)
+                self._enter_pause(STATE_PLAYING)
             elif self.game_state == STATE_PAUSED:
-                self.game_state = STATE_PLAYING
-                self.set_mouse_visible(False)
+                self._resume_from_pause()
             elif self.game_state == STATE_SHOP:
                 self._close_shop()
             elif self.game_state == STATE_LEVEL_SELECT:

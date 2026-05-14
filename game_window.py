@@ -37,6 +37,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
     def __init__(self):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE, resizable=True)
+        self.set_update_rate(1 / 60)
         arcade.set_background_color(BG_COLOR)
         self.set_mouse_visible(True)
 

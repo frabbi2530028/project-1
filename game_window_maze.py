@@ -177,47 +177,115 @@ class MazeModeMixin:
                 return (col, row, direction)
         return None
 
+    @staticmethod
+    def _draw_round_lrbt(left: float, right: float, bottom: float, top: float,
+                         color: tuple, radius: float | None = None) -> None:
+        """Draw a rounded rectangle using primitives available in Arcade."""
+        if right <= left or top <= bottom:
+            return
+        width = right - left
+        height = top - bottom
+        r = min(radius if radius is not None else min(width, height) * 0.28,
+                width / 2, height / 2)
+        if r <= 0:
+            arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, color)
+            return
+
+        arcade.draw_lrbt_rectangle_filled(left + r, right - r, bottom, top, color)
+        arcade.draw_lrbt_rectangle_filled(left, right, bottom + r, top - r, color)
+        arcade.draw_circle_filled(left + r, bottom + r, r, color)
+        arcade.draw_circle_filled(right - r, bottom + r, r, color)
+        arcade.draw_circle_filled(left + r, top - r, r, color)
+        arcade.draw_circle_filled(right - r, top - r, r, color)
+
     def _draw_maze_wall_segment(self, left: float, right: float, bottom: float, top: float,
                                 col: int, row: int, direction: int,
                                 wall_color: tuple, glow_color: tuple) -> None:
         """Draw permanent walls and fragile breach walls with distinct material colors."""
         maze = self.maze_grid
+        horizontal = (right - left) >= (top - bottom)
+        length = (right - left) if horizontal else (top - bottom)
+        thick = (top - bottom) if horizontal else (right - left)
+        cx = (left + right) / 2
+        cy = (bottom + top) / 2
         if maze.is_breakable_wall(col, row, direction):
             hp = maze.wall_hp(col, row, direction)
             ratio = max(0.0, min(1.0, hp / max(1, maze.breakable_wall_max_hp)))
-            fill = (255, int(95 + 70 * ratio), int(88 + 34 * ratio), 245)
-            glow = (255, 120, 105, 82)
-            arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, fill)
-            arcade.draw_lrbt_rectangle_filled(left - 3, right + 3, bottom - 3, top + 3, glow)
+            pulse = 0.65 + 0.35 * math.sin(self.bg_time * 4.0 + col * 0.7 + row * 0.4)
+            basalt = (58, 32, 30, 255)
+            ember = (255, int(86 + 80 * pulse), int(22 + 28 * ratio), 245)
+            lava_glow = (255, 72, 20, int(70 + 65 * pulse))
+            corner_r = min(thick * 0.28, 18)
+            self._draw_round_lrbt(left - 4, right + 4, bottom - 4, top + 4, lava_glow, corner_r + 4)
+            self._draw_round_lrbt(left, right, bottom, top, basalt, corner_r)
 
-            cx = (left + right) / 2
-            cy = (bottom + top) / 2
-            crack = (45, 12, 25, 185)
-            if direction == MazeGrid.N:
-                arcade.draw_line(cx - 18, cy + 3, cx - 5, cy - 2, crack, 3)
-                arcade.draw_line(cx - 5, cy - 2, cx + 9, cy + 4, crack, 3)
-                arcade.draw_line(cx + 9, cy + 4, cx + 20, cy - 2, crack, 3)
+            rim = max(5, int(thick * 0.18))
+            vein = max(4, int(thick * 0.11))
+            if horizontal:
+                arcade.draw_lrbt_rectangle_filled(left + corner_r, right - corner_r,
+                                                   top - rim, top, ember)
+                arcade.draw_lrbt_rectangle_filled(left + corner_r, right - corner_r,
+                                                   bottom, bottom + rim, (205, 42, 24, 235))
+                wave_y = cy + math.sin(self.bg_time * 3.0 + col) * thick * 0.10
+                arcade.draw_lrbt_rectangle_filled(left + 14, right - 14,
+                                                   wave_y - vein / 2, wave_y + vein / 2, ember)
+                crack = (22, 9, 7, 210)
+                arcade.draw_line(cx - 23, cy + 7, cx - 7, cy - 5, crack, 4)
+                arcade.draw_line(cx - 7, cy - 5, cx + 11, cy + 8, crack, 4)
+                arcade.draw_line(cx + 11, cy + 8, cx + 25, cy - 4, crack, 4)
             else:
-                arcade.draw_line(cx - 3, cy + 22, cx + 4, cy + 7, crack, 3)
-                arcade.draw_line(cx + 4, cy + 7, cx - 4, cy - 6, crack, 3)
-                arcade.draw_line(cx - 4, cy - 6, cx + 3, cy - 21, crack, 3)
+                arcade.draw_lrbt_rectangle_filled(left, left + rim,
+                                                   bottom + corner_r, top - corner_r,
+                                                   (205, 42, 24, 235))
+                arcade.draw_lrbt_rectangle_filled(right - rim, right,
+                                                   bottom + corner_r, top - corner_r, ember)
+                wave_x = cx + math.sin(self.bg_time * 3.0 + row) * thick * 0.10
+                arcade.draw_lrbt_rectangle_filled(wave_x - vein / 2, wave_x + vein / 2,
+                                                   bottom + 14, top - 14, ember)
+                crack = (22, 9, 7, 210)
+                arcade.draw_line(cx - 8, cy + 27, cx + 6, cy + 9, crack, 4)
+                arcade.draw_line(cx + 6, cy + 9, cx - 7, cy - 8, crack, 4)
+                arcade.draw_line(cx - 7, cy - 8, cx + 7, cy - 26, crack, 4)
             return
 
-        arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, wall_color)
-        arcade.draw_lrbt_rectangle_filled(left - 3, right + 3, bottom - 3, top + 3, glow_color)
-        inset = max(4, MAZE_WALL_THICK // 4)
-        arcade.draw_lrbt_rectangle_filled(left + inset, right - inset, bottom + inset,
-                                          top - inset, (*wall_color[:3], 235))
-        stripe = max(3, MAZE_WALL_THICK // 7)
-        accent = (*glow_color[:3], 220)
-        if (right - left) >= (top - bottom):
-            cy = (bottom + top) / 2
+        shadow = (2, 4, 8, 170)
+        edge_dark = (16, 18, 25, 255)
+        facet = (48, 53, 66, 245)
+        highlight = (78, 86, 104, 180)
+        mark = (142, 149, 160, 145)
+
+        corner_r = min(thick * 0.30, 20)
+        self._draw_round_lrbt(left + 6, right + 6, bottom - 6, top - 6, shadow, corner_r)
+        self._draw_round_lrbt(left, right, bottom, top, wall_color, corner_r)
+        bevel = max(7, int(thick * 0.18))
+        inset = max(10, int(thick * 0.28))
+
+        if horizontal:
+            arcade.draw_lrbt_rectangle_filled(left + corner_r, right - corner_r,
+                                               top - bevel, top, highlight)
+            arcade.draw_lrbt_rectangle_filled(left + corner_r, right - corner_r,
+                                               bottom, bottom + bevel, edge_dark)
             arcade.draw_lrbt_rectangle_filled(left + inset, right - inset,
-                                              cy - stripe / 2, cy + stripe / 2, accent)
+                                               cy - thick * 0.18, cy + thick * 0.18, facet)
+            if length >= 74:
+                arcade.draw_circle_filled(cx, cy + 1, thick * 0.08, mark)
+                arcade.draw_circle_filled(cx - thick * 0.03, cy + thick * 0.02,
+                                          thick * 0.018, edge_dark)
+                arcade.draw_circle_filled(cx + thick * 0.03, cy + thick * 0.02,
+                                          thick * 0.018, edge_dark)
         else:
-            cx = (left + right) / 2
-            arcade.draw_lrbt_rectangle_filled(cx - stripe / 2, cx + stripe / 2,
-                                              bottom + inset, top - inset, accent)
+            arcade.draw_lrbt_rectangle_filled(left, left + bevel,
+                                               bottom + corner_r, top - corner_r, edge_dark)
+            arcade.draw_lrbt_rectangle_filled(right - bevel, right,
+                                               bottom + corner_r, top - corner_r, highlight)
+            arcade.draw_lrbt_rectangle_filled(cx - thick * 0.18, cx + thick * 0.18,
+                                               bottom + inset, top - inset, facet)
+            if length >= 74:
+                arcade.draw_circle_filled(cx - 1, cy, thick * 0.08, mark)
+                arcade.draw_circle_filled(cx - thick * 0.02, cy + thick * 0.03,
+                                          thick * 0.018, edge_dark)
+                arcade.draw_circle_filled(cx - thick * 0.02, cy - thick * 0.03,
+                                          thick * 0.018, edge_dark)
 
     def _maze_player_cell(self) -> tuple[int, int]:
         ox, oy = self.maze_origin
@@ -238,8 +306,18 @@ class MazeModeMixin:
         FN     = FONT_NUMERIC
 
         mode_c = tuple((getattr(self, "maze_preset", None) or MAZE_PRESETS[0])["color"][:3])
-        WALL_BASE_C = (178, 198, 210)
-        FLOOR_C = (8,  12,  22)
+        bg_c = (
+            max(4, int(mode_c[0] * 0.10)),
+            max(6, int(mode_c[1] * 0.10)),
+            max(12, int(mode_c[2] * 0.12)),
+        )
+        floor_c = (
+            max(8, int(mode_c[0] * 0.16)),
+            max(10, int(mode_c[1] * 0.16)),
+            max(18, int(mode_c[2] * 0.18)),
+        )
+        WALL_BASE_C = (31, 35, 45)
+        FLOOR_C = floor_c
         EXIT_C  = (112, 255, 188)
         ENTRY_C = mode_c
 
@@ -252,10 +330,11 @@ class MazeModeMixin:
 
         # ── Background (fill the whole world) ───────
         arcade.draw_lrbt_rectangle_filled(
-            ox, ox + maze.cols * cs, oy, oy + maze.rows * cs, (3, 6, 18))
+            ox, ox + maze.cols * cs, oy, oy + maze.rows * cs, bg_c)
         # Also fill outside-maze areas visible at edges
         arcade.draw_lrbt_rectangle_filled(
-            cam_x - 10, cam_x + w + 10, cam_y - 10, cam_y + h + 10, (1, 2, 9))
+            cam_x - 10, cam_x + w + 10, cam_y - 10, cam_y + h + 10,
+            tuple(max(0, c - 8) for c in bg_c))
 
         # ── Floor tiles ─────────────────────────────
         # Culling: only draw cells visible in the viewport
@@ -271,7 +350,7 @@ class MazeModeMixin:
                 arcade.draw_lrbt_rectangle_filled(fl, fl + cs, fb, fb + cs, FLOOR_C)
 
         # Subtle floor grid
-        gc = (82, 125, 190, 28)
+        gc = (*mode_c, 30)
         for row in range(row_min, row_max + 2):
             yy = oy + row * cs
             arcade.draw_line(ox + col_min * cs, yy, ox + (col_max + 1) * cs, yy, gc, 1)
@@ -282,21 +361,22 @@ class MazeModeMixin:
         # ── Walls ───────────────────────────────────
         p2 = 0.5 + 0.5 * math.sin(t * 1.8)
         wc = (
-            int(WALL_BASE_C[0] + 22 * p2),
-            int(WALL_BASE_C[1] + 22 * p2),
-            int(WALL_BASE_C[2] + 22 * p2),
+            int(WALL_BASE_C[0] + 12 * p2),
+            int(WALL_BASE_C[1] + 12 * p2),
+            int(WALL_BASE_C[2] + 12 * p2),
             255,
         )
-        gw = (*mode_c, 105)
+        gw = (0, 0, 0, 85)
 
         # Outer border (always solid)
         bx = ox - wt2;  by = oy - wt2
         bw2 = maze.cols * cs + wt;  bh2 = maze.rows * cs + wt
-        arcade.draw_lrbt_rectangle_filled(bx, bx + bw2, by, by + wt, wc)
-        arcade.draw_lrbt_rectangle_filled(bx, bx + bw2, by + bh2 - wt, by + bh2, wc)
-        arcade.draw_lrbt_rectangle_filled(bx, bx + wt,  by, by + bh2, wc)
-        arcade.draw_lrbt_rectangle_filled(bx + bw2 - wt, bx + bw2, by, by + bh2, wc)
-        arcade.draw_lrbt_rectangle_outline(bx, bx + bw2, by, by + bh2, (*mode_c, 190), 4)
+        border_r = min(wt * 0.30, 20)
+        self._draw_round_lrbt(bx, bx + bw2, by, by + wt, wc, border_r)
+        self._draw_round_lrbt(bx, bx + bw2, by + bh2 - wt, by + bh2, wc, border_r)
+        self._draw_round_lrbt(bx, bx + wt, by, by + bh2, wc, border_r)
+        self._draw_round_lrbt(bx + bw2 - wt, bx + bw2, by, by + bh2, wc, border_r)
+        arcade.draw_lrbt_rectangle_outline(bx, bx + bw2, by, by + bh2, (90, 96, 105, 220), 4)
 
         # Internal walls — only visible cells, only closed passages
         for row in range(row_min, row_max + 1):
@@ -500,22 +580,27 @@ class MazeModeMixin:
         my     = self.height - 185 - maze.rows * mm_cs
         mw     = maze.cols * mm_cs
         mh     = maze.rows * mm_cs
+        mini_bg = (
+            max(4, int(mode_c[0] * 0.10)),
+            max(6, int(mode_c[1] * 0.10)),
+            max(12, int(mode_c[2] * 0.12)),
+        )
 
         # Panel: glassy and mostly transparent so the maze stays visible underneath.
-        arcade.draw_lrbt_rectangle_filled(mx - 8, mx + mw + 8, my - 8, my + mh + 8, (4, 8, 22, 46))
+        arcade.draw_lrbt_rectangle_filled(mx - 8, mx + mw + 8, my - 8, my + mh + 8, (*mini_bg, 58))
         arcade.draw_lrbt_rectangle_outline(mx - 8, mx + mw + 8, my - 8, my + mh + 8,
                                             (*mode_c, 185), 2)
         arcade.draw_lrbt_rectangle_outline(mx - 2, mx + mw + 2, my - 2, my + mh + 2,
                                             (220, 232, 240, 96), 1)
 
         MWTT = max(1, mm_cs // 5)
-        wc2  = (210, 225, 232, 198)
+        wc2  = (58, 64, 72, 220)
 
         # Floors
         for row in range(maze.rows):
             for col in range(maze.cols):
                 fx = mx + col * mm_cs;  fy = my + row * mm_cs
-                arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy, fy + mm_cs, (8, 14, 34, 50))
+                arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy, fy + mm_cs, (*mini_bg, 80))
 
         # Walls
         for row in range(maze.rows):

@@ -1227,7 +1227,7 @@ class MazeModeMixin:
                          (0, 0, 0, 80), 32, anchor_x="center", bold=True, font_name=FU)
         arcade.draw_text("MAZE MODE", w // 2, h - 54,
                          (120, 255, 160, 255), 32, anchor_x="center", bold=True, font_name=FU)
-        arcade.draw_text("SELECT MAZE TYPE", w // 2, h - 92,
+        arcade.draw_text("SELECT MAZE PLAN", w // 2, h - 92,
                          (100, 200, 130, 190), 13, anchor_x="center", font_name=FU)
         arcade.draw_line(w // 2 - 180, h - 106, w // 2 + 180, h - 106,
                          (60, 180, 100, 80), 1)
@@ -1368,7 +1368,7 @@ class MazeModeMixin:
                          bold=True, font_name=FU)
         self._maze_preset_btns["__back__"] = (back_x, back_x + back_w, back_y, back_y + back_h)
 
-        arcade.draw_text("Select a maze type, then press ENTER MAZE  ·  ESC to go back",
+        arcade.draw_text("Select a maze plan, then press ENTER MAZE  ·  ESC to go back",
                          w // 2, 16, (70, 130, 95, 140), 9,
                          anchor_x="center", font_name=FN)
 

@@ -456,6 +456,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
     def _draw_menu(self, anim: dict | None = None, draw_background: bool = True):
         anim = anim or {}
         is_pause = (self.game_state == STATE_PAUSED)
+        is_maze_loadout = (self.game_state == STATE_MAZE_LOADOUT)
         # Pause overlay always uses the dark theme for a clean dark panel look.
         # Only the main menu respects the user's light/dark preference.
         theme_c  = THEMES["dark"] if is_pause else THEMES[self.menu_theme]
@@ -517,13 +518,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
         # ── Title ────────────────────────────────────
         font_display = FONT_UI_DISPLAY
         font_ui_local = FONT_UI_MENU
-        title = "PAUSED" if is_pause else "NEON  DRIFT"
+        title = "PAUSED" if is_pause else ("MAZE  MODE" if is_maze_loadout else "NEON  DRIFT")
         ty    = ptop - 52
         arcade.draw_text(title, w//2+4, ty-4, theme_c["title_shadow"], scaled(42),
                          anchor_x="center", bold=True, font_name=font_display)
         arcade.draw_text(title, w//2,   ty,   theme_c["title"],        scaled(42),
                          anchor_x="center", bold=True, font_name=font_display)
-        sub = "GAME SUSPENDED" if is_pause else "S P A C E   S H O O T E R"
+        sub = "GAME SUSPENDED" if is_pause else ("S E L E C T   L O A D O U T" if is_maze_loadout else "S P A C E   S H O O T E R")
         arcade.draw_text(sub, w//2+1, ty-31, (0,0,0,80), scaled(12),
                          anchor_x="center", font_name=font_ui_local)
         arcade.draw_text(sub, w//2, ty-30, theme_c["subtitle"], scaled(12),
@@ -839,10 +840,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
         bw, bh = scaled(230), scaled(50)
         bx = w//2-bw//2;  by = play_y - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
+        play_label = "[ RESUME ]" if is_pause else ("[ CHOOSE PLAN ]" if is_maze_loadout else "[ PLAY GAME ]")
         _draw_btn(bx, bw, by, bh,
                   theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
                   theme_c["btn_border"], theme_c["btn_text"],
-                  "[ RESUME ]" if is_pause else "[ PLAY GAME ]", scaled(20))
+                  play_label, scaled(20))
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
 
         # ── Shop button (main menu only) ─────────────
@@ -1996,6 +1998,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self._draw_menu()
             return
 
+        if self.game_state == STATE_MAZE_LOADOUT:
+            self._draw_menu()
+            return
+
         if self.game_state == STATE_SHOP:
             self._draw_shop()
             return
@@ -2885,8 +2891,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         if self.selected_mode == "normal":
                             self.game_state = STATE_MENU
                         elif self.selected_mode == "maze":
-                            self.game_state = STATE_MAZE_SELECT
-                    elif name in ("normal", "maze"):
+                            self.game_state = STATE_MAZE_LOADOUT
+                    elif name == "maze":
+                        self.selected_mode = name
+                        self.game_state = STATE_MAZE_LOADOUT
+                    elif name == "normal":
                         self.selected_mode = name
                     return
             return
@@ -2898,13 +2907,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     if name == "__play__":
                         self._start_maze_with_preset()
                     elif name == "__back__":
-                        self.game_state = STATE_MODE_SELECT
+                        self.game_state = STATE_MAZE_LOADOUT
                     else:
                         self.selected_maze_preset = name
                     return
             return
 
-        if self.game_state in (STATE_MENU, STATE_PAUSED):
+        if self.game_state in (STATE_MENU, STATE_MAZE_LOADOUT, STATE_PAUSED):
             # difficulty button click
             for dkey, rect in self._diff_btns.items():
                 l, r, b, t = rect
@@ -2924,6 +2933,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     if name == "play":
                         if self.game_state == STATE_MENU:
                             self._start_screen_transition(STATE_MENU, STATE_LEVEL_SELECT)
+                        elif self.game_state == STATE_MAZE_LOADOUT:
+                            self.game_state = STATE_MAZE_SELECT
                         else:
                             self._resume_from_pause()
                     elif name == "shop":
@@ -3052,8 +3063,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
             elif self.game_state == STATE_MENU:
                 self.game_state = STATE_MODE_SELECT
                 self.set_mouse_visible(True)
-            elif self.game_state == STATE_MAZE_SELECT:
+            elif self.game_state == STATE_MAZE_LOADOUT:
                 self.game_state = STATE_MODE_SELECT
+                self.set_mouse_visible(True)
+            elif self.game_state == STATE_MAZE_SELECT:
+                self.game_state = STATE_MAZE_LOADOUT
             elif self.game_state == STATE_MAZE:
                 self._enter_pause(STATE_MAZE)
             elif self.game_state == STATE_MAZE_OVER:
@@ -3080,6 +3094,17 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         elif key == arcade.key.F11:
             self._toggle_fullscreen()
+
+        elif key in (arcade.key.ENTER, arcade.key.RETURN):
+            if self.game_state == STATE_MODE_SELECT:
+                if self.selected_mode == "normal":
+                    self.game_state = STATE_MENU
+                elif self.selected_mode == "maze":
+                    self.game_state = STATE_MAZE_LOADOUT
+            elif self.game_state == STATE_MAZE_LOADOUT:
+                self.game_state = STATE_MAZE_SELECT
+            elif self.game_state == STATE_MAZE_SELECT:
+                self._start_maze_with_preset()
 
         elif key in POWERUP_KEYS:
             if self.game_state == STATE_PLAYING:

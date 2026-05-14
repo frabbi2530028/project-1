@@ -215,6 +215,7 @@ MAZE_BREAKABLE_WALL_HP    = 3      # breach hits needed to crack a fragile wall
 MAZE_BREAKABLE_WALL_CHANCE = 0.24  # only some closed internal walls can be destroyed
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
+STATE_MAZE_LOADOUT = "maze_loadout"
 STATE_MAZE_SELECT = "maze_select"
 
 # ─────────────────────────────────────────────────────

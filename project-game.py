@@ -506,7 +506,10 @@ class GameWindow(arcade.Window):
         self.coins_list    = arcade.SpriteList()
 
         # ── No enemies in maze mode — pure navigation ──
-        self.maze_enemies = []
+        self.maze_enemies       = arcade.SpriteList()   # MazeEnemy sprites
+        self.maze_bullets       = arcade.SpriteList()   # player bullets (wall-blocked)
+        self.maze_enemy_bullets = arcade.SpriteList()   # enemy bullets  (wall-blocked)
+        self.maze_spawn_timer   = 3.0                   # first enemy after 3 s
 
         # ── Initialise camera centred on player spawn ──
         total_w = cols * cs
@@ -674,6 +677,27 @@ class GameWindow(arcade.Window):
         # ── Particles (world space) ──────────────────
         self._draw_particles()
 
+        # ── Enemies ──────────────────────────────────
+        for enemy in self.maze_enemies:
+            # Glow ring
+            arcade.draw_circle_filled(
+                enemy.center_x, enemy.center_y, 26, (255, 70, 70, 45))
+            arcade.draw_sprite(enemy)
+            # Health bar (only when damaged)
+            if enemy.health < enemy.max_health:
+                bar_w  = cs * 0.68
+                bx_    = enemy.center_x - bar_w / 2
+                by_    = enemy.center_y + 24
+                ratio_ = max(0.0, enemy.health / enemy.max_health)
+                arcade.draw_lrbt_rectangle_filled(
+                    bx_, bx_ + bar_w, by_, by_ + 5, (60, 0, 0, 200))
+                arcade.draw_lrbt_rectangle_filled(
+                    bx_, bx_ + bar_w * ratio_, by_, by_ + 5, (255, 55, 55, 230))
+
+        # ── Bullets ──────────────────────────────────
+        self.maze_bullets.draw()
+        self.maze_enemy_bullets.draw()
+
         # ── Player ──────────────────────────────────
         if self.player:
             p  = self.player
@@ -744,7 +768,7 @@ class GameWindow(arcade.Window):
                          (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
 
         # ── Hint ────────────────────────────────────
-        arcade.draw_text("WASD Move · Find the EXIT · ESC Quit · H Hide HUD",
+        arcade.draw_text("WASD Move · Hold LMB to Fire · Find the EXIT · ESC Quit · H Hide HUD",
                          w // 2, 12, (70, 100, 155, 130), 8,
                          anchor_x="center", font_name=FN)
 
@@ -905,6 +929,98 @@ class GameWindow(arcade.Window):
 
         self._update_particles(delta)
 
+        # ── Player shooting (hold left-mouse to fire) ────────────────
+        if self.mouse_held:
+            self.fire_timer += delta
+            while self.fire_timer >= NORMAL_FIRE_RATE:
+                self.fire_timer -= NORMAL_FIRE_RATE
+                # Convert screen-space mouse → world coords
+                mx_w = self.maze_cam_x + self.mouse_x
+                my_w = self.maze_cam_y + self.mouse_y
+                ang  = math.atan2(my_w - p.center_y, mx_w - p.center_x)
+                b    = Bullet(p.center_x, p.center_y, ang)
+                self.maze_bullets.append(b)
+                self._spawn_muzzle(p.center_x, p.center_y, ang)
+        else:
+            self.fire_timer = 0.0
+
+        # ── Move player bullets + wall collision ─────────────────────
+        self.maze_bullets.update(delta)
+        for b in list(self.maze_bullets):
+            if b.life <= 0 or not self._maze_can_move_to(b.center_x, b.center_y, 5):
+                self._burst(b.center_x, b.center_y, 5,
+                            (180, 220, 255), 35, 110, 0.7, 1.6, .04, .12)
+                b.remove_from_sprite_lists()
+
+        # ── Move enemy bullets + wall collision ──────────────────────
+        self.maze_enemy_bullets.update(delta)
+        for b in list(self.maze_enemy_bullets):
+            if b.life <= 0 or not self._maze_can_move_to(b.center_x, b.center_y, 5):
+                self._burst(b.center_x, b.center_y, 5,
+                            (255, 140, 80), 35, 110, 0.7, 1.6, .04, .12)
+                b.remove_from_sprite_lists()
+
+        # ── Enemy AI (move + shoot) ───────────────────────────────────
+        pc, pr = self._maze_player_cell()
+        for enemy in list(self.maze_enemies):
+            enemy.maze_update(delta, pc, pr, maze, cs, ox, oy)
+
+            enemy.shoot_timer -= delta
+            if enemy.shoot_timer <= 0:
+                enemy.shoot_timer = (MAZE_ENEMY_FIRE_RATE
+                                     + random.uniform(-0.6, 0.6))
+                ang = math.atan2(p.center_y - enemy.center_y,
+                                 p.center_x  - enemy.center_x)
+                eb = EnemyBullet(enemy.center_x, enemy.center_y,
+                                 angle_rad=ang,
+                                 speed=MAZE_ENEMY_BULLET_SPEED)
+                eb.life = MAZE_ENEMY_BULLET_LIFE
+                self.maze_enemy_bullets.append(eb)
+
+        # ── Bullet → enemy collision ─────────────────────────────────
+        for b in list(self.maze_bullets):
+            hits = arcade.check_for_collision_with_list(b, self.maze_enemies)
+            if hits:
+                b.remove_from_sprite_lists()
+                enemy = hits[0]
+                enemy.health -= 20
+                self._burst(b.center_x, b.center_y, 8,
+                            (255, 220, 100), 55, 180, 1.0, 2.2, .07, .18)
+                if enemy.health <= 0:
+                    self.score += 20
+                    self.notif_text  = f"+20  ENEMY DOWN!"
+                    self.notif_color = (120, 255, 160)
+                    self.notif_timer = 0.8
+                    self._burst(enemy.center_x, enemy.center_y, 22,
+                                (255, 130, 70), 65, 240, 1.5, 3.2, .12, .32)
+                    enemy.remove_from_sprite_lists()
+
+        # ── Enemy bullet → player collision ─────────────────────────
+        for b in list(self.maze_enemy_bullets):
+            if arcade.check_for_collision(b, p):
+                b.remove_from_sprite_lists()
+                if p.shield_active:
+                    self._burst(b.center_x, b.center_y, 7,
+                                (90, 220, 255), 50, 160, 0.9, 2.0, .06, .14)
+                else:
+                    p.health -= MAZE_ENEMY_BULLET_DAMAGE
+                    self.damage_flash = max(self.damage_flash, 0.75)
+                    self._burst(b.center_x, b.center_y, 12,
+                                (255, 75, 75), 60, 200, 1.0, 2.2, .08, .20)
+                    if p.health <= 0:
+                        self._maze_gameover()
+                        return
+
+        # ── Enemy spawn timer ────────────────────────────────────────
+        self.maze_spawn_timer -= delta
+        max_enemies = min(12, 3 + self.maze_level * 2)
+        if (self.maze_spawn_timer <= 0
+                and len(self.maze_enemies) < max_enemies):
+            spawn_interval = max(2.0, MAZE_ENEMY_SPAWN_INTERVAL
+                                 - self.maze_level * 0.4)
+            self.maze_spawn_timer = spawn_interval
+            self._spawn_maze_enemy()
+
         # ── Smooth camera follow (Among Us style) ───────
         total_w = maze.cols * cs
         total_h = maze.rows * cs
@@ -923,6 +1039,23 @@ class GameWindow(arcade.Window):
                 self.maze_cam_x + w / 2,
                 self.maze_cam_y + h / 2,
             )
+
+    def _spawn_maze_enemy(self) -> None:
+        """Pick a random cell far from the player and place a MazeEnemy there."""
+        maze   = self.maze_grid
+        cs     = self.maze_cell_size
+        ox, oy = self.maze_origin
+        pc, pr = self._maze_player_cell()
+
+        for _ in range(40):          # up to 40 attempts to find a valid cell
+            col = random.randint(0, maze.cols - 1)
+            row = random.randint(0, maze.rows - 1)
+            # Must be far from player, not on the exit
+            if (abs(col - pc) + abs(row - pr) >= 7
+                    and not (col == self.maze_exit_col and row == self.maze_exit_row)):
+                enemy = MazeEnemy(col, row, cs, ox, oy)
+                self.maze_enemies.append(enemy)
+                return
 
     def _maze_gameover(self):
         self.player.health = 0
@@ -3715,6 +3848,11 @@ class GameWindow(arcade.Window):
         if button != arcade.MOUSE_BUTTON_LEFT:
             return
         if self._screen_transition:
+            return
+
+        # ── Maze mode: left-click starts firing ──────
+        if self.game_state == STATE_MAZE:
+            self.mouse_held = True
             return
 
         if self.game_state == STATE_MODE_SELECT:

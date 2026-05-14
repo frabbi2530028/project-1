@@ -194,6 +194,15 @@ MAZE_CELL_SIZE    = 64          # pixels per cell
 MAZE_WALL_THICK   = 10          # wall line thickness
 MAZE_BASE_COLS    = 23          # starting grid width  — larger than screen
 MAZE_BASE_ROWS    = 17          # starting grid height — larger than screen
+
+# ── Maze enemy constants ──────────────────────────────────────────────────────
+MAZE_ENEMY_HEALTH         = 60     # HP per maze enemy
+MAZE_ENEMY_SPEED          = 72     # px/s movement speed
+MAZE_ENEMY_BULLET_DAMAGE  = 5      # much less than normal (10)
+MAZE_ENEMY_BULLET_SPEED   = 270    # px/s  (slower than normal 430)
+MAZE_ENEMY_FIRE_RATE      = 2.6    # seconds between shots
+MAZE_ENEMY_SPAWN_INTERVAL = 5.0    # seconds between spawns
+MAZE_ENEMY_BULLET_LIFE    = 4.0    # max seconds before auto-removal
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
 STATE_MAZE_SELECT = "maze_select"

@@ -191,7 +191,7 @@ STATE_MODE_SELECT  = "mode_select"
 #  MAZE MODE CONSTANTS
 # ─────────────────────────────────────────────────────
 
-MAZE_CELL_SIZE    = 176         # pixels per cell
+MAZE_CELL_SIZE    = 240         # pixels per cell
 MAZE_WALL_THICK   = 60          # wall line thickness
 MAZE_BASE_COLS    = 23          # starting grid width  — larger than screen
 MAZE_BASE_ROWS    = 17          # starting grid height — larger than screen

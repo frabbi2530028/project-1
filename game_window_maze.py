@@ -684,7 +684,9 @@ class MazeModeMixin:
         p.change_x += (ix * ship_spd - p.change_x) * sm
         p.change_y += (iy * ship_spd - p.change_y) * sm
 
-        PLAYER_R = cs * 0.30
+        # Keep the ship hitbox small even when maze cells are large, so it can
+        # slide through corridors and pass beside walls without feeling stuck.
+        PLAYER_R = max(18, min(28, getattr(p, "width", 72) * 0.32))
         new_x = p.center_x + p.change_x * delta
         new_y = p.center_y + p.change_y * delta
 

@@ -203,13 +203,14 @@ MAZE_ENEMY_BULLET_SPEED   = 270    # px/s  (slower than normal 430)
 MAZE_ENEMY_FIRE_RATE      = 2.6    # seconds between shots
 MAZE_ENEMY_SPAWN_INTERVAL = 5.0    # seconds between spawns
 MAZE_ENEMY_BULLET_LIFE    = 4.0    # max seconds before auto-removal
+MAZE_ENEMY_SPLIT_TIME     = 3.0    # seconds before a surviving enemy splits
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
 STATE_MAZE_SELECT = "maze_select"
 
 # ─────────────────────────────────────────────────────
 #  MAZE PRESETS  (player chooses one before starting)
-#  No enemies — pure navigation challenge
+#  Used by maze mode for different layouts and pacing
 # ─────────────────────────────────────────────────────
 
 MAZE_PRESETS = [
@@ -1331,6 +1332,30 @@ class MazeGrid:
             return False
         return direction in self.open_walls[row][col]
 
+    def carve_passage(self, col: int, row: int, direction: int) -> bool:
+        """Force a passage open between a cell and its neighbor."""
+        if not (0 <= col < self.cols and 0 <= row < self.rows):
+            return False
+        nc = col + self.DX[direction]
+        nr = row + self.DY[direction]
+        if not (0 <= nc < self.cols and 0 <= nr < self.rows):
+            return False
+        self.open_walls[row][col].add(direction)
+        self.open_walls[nr][nc].add(self.OPP[direction])
+        return True
+
+    def open_start_area(self) -> None:
+        """Give the spawn cell more than one opening so the run starts with choices."""
+        start_col = 0
+        start_row = self.rows - 1
+
+        self.carve_passage(start_col, start_row, self.E)
+        self.carve_passage(start_col, start_row, self.S)
+
+        if self.cols > 1 and self.rows > 1:
+            self.carve_passage(start_col + 1, start_row, self.S)
+            self.carve_passage(start_col, start_row - 1, self.E)
+
     def bfs(self, sc: int, sr: int, ec: int, er: int) -> list:
         """Return list of (col,row) steps from (sc,sr) to (ec,er), exclusive of start."""
         from collections import deque
@@ -1375,6 +1400,7 @@ class MazeEnemy(arcade.Sprite):
         self.path: list  = []
         self.path_timer  = random.uniform(0.0, 0.5)   # stagger first recalc
         self.shoot_timer = random.uniform(1.8, 3.5)
+        self.split_timer = MAZE_ENEMY_SPLIT_TIME
 
     def maze_update(self, delta: float, player_col: int, player_row: int,
                     maze: MazeGrid, cs: int, ox: float, oy: float) -> None:

@@ -475,6 +475,7 @@ class GameWindow(arcade.Window):
         oy = 0
 
         self.maze_grid      = MazeGrid(cols, rows, seed=random.randint(0, 999999))
+        self.maze_grid.open_start_area()
         self.maze_cell_size = cs
         self.maze_origin    = (float(ox), float(oy))
         self.maze_exit_col  = cols - 1
@@ -507,7 +508,7 @@ class GameWindow(arcade.Window):
         self.powerups      = arcade.SpriteList()
         self.coins_list    = arcade.SpriteList()
 
-        # ── No enemies in maze mode — pure navigation ──
+        # ── Maze combat state ────────────────────────
         self.maze_enemies       = arcade.SpriteList()   # MazeEnemy sprites
         self.maze_bullets       = arcade.SpriteList()   # player bullets (wall-blocked)
         self.maze_enemy_bullets = arcade.SpriteList()   # enemy bullets  (wall-blocked)
@@ -963,6 +964,8 @@ class GameWindow(arcade.Window):
                             (255, 140, 80), 35, 110, 0.7, 1.6, .04, .12)
                 b.remove_from_sprite_lists()
 
+        max_enemies = min(12, 3 + self.maze_level * 2)
+
         # ── Enemy AI (move + shoot) ───────────────────────────────────
         pc, pr = self._maze_player_cell()
         for enemy in list(self.maze_enemies):
@@ -998,6 +1001,13 @@ class GameWindow(arcade.Window):
                                 (255, 130, 70), 65, 240, 1.5, 3.2, .12, .32)
                     enemy.remove_from_sprite_lists()
 
+        # ── Enemy splitting ─────────────────────────────────────────
+        for enemy in list(self.maze_enemies):
+            enemy.split_timer -= delta
+            if enemy.split_timer <= 0:
+                enemy.split_timer += MAZE_ENEMY_SPLIT_TIME
+                self._split_maze_enemy(enemy, max_enemies)
+
         # ── Enemy bullet → player collision ─────────────────────────
         for b in list(self.maze_enemy_bullets):
             if arcade.check_for_collision(b, p):
@@ -1016,7 +1026,6 @@ class GameWindow(arcade.Window):
 
         # ── Enemy spawn timer ────────────────────────────────────────
         self.maze_spawn_timer -= delta
-        max_enemies = min(12, 3 + self.maze_level * 2)
         if (self.maze_spawn_timer <= 0
                 and len(self.maze_enemies) < max_enemies):
             spawn_interval = max(2.0, MAZE_ENEMY_SPAWN_INTERVAL
@@ -1059,6 +1068,50 @@ class GameWindow(arcade.Window):
                 enemy = MazeEnemy(col, row, cs, ox, oy)
                 self.maze_enemies.append(enemy)
                 return
+
+    def _split_maze_enemy(self, enemy: MazeEnemy, max_enemies: int) -> bool:
+        """Duplicate a surviving maze enemy into a nearby open cell."""
+        if len(self.maze_enemies) >= max_enemies or enemy.health <= 1:
+            return False
+
+        maze = self.maze_grid
+        cs = self.maze_cell_size
+        ox, oy = self.maze_origin
+        occupied = {
+            (other.maze_col, other.maze_row)
+            for other in self.maze_enemies
+            if other is not enemy
+        }
+        options = []
+        for direction in (MazeGrid.N, MazeGrid.E, MazeGrid.S, MazeGrid.W):
+            if not maze.is_open(enemy.maze_col, enemy.maze_row, direction):
+                continue
+            col = enemy.maze_col + MazeGrid.DX[direction]
+            row = enemy.maze_row + MazeGrid.DY[direction]
+            if ((col, row) == (self.maze_exit_col, self.maze_exit_row)
+                    or (col, row) in occupied):
+                continue
+            options.append((col, row))
+
+        if not options:
+            return False
+
+        col, row = random.choice(options)
+        child = MazeEnemy(col, row, cs, ox, oy)
+        split_health = max(1, enemy.health // 2)
+        if enemy.health - split_health < 1:
+            return False
+        enemy.health -= split_health
+        child.health = split_health
+        enemy.split_timer = MAZE_ENEMY_SPLIT_TIME
+        child.split_timer = MAZE_ENEMY_SPLIT_TIME
+        self.maze_enemies.append(child)
+        self.notif_text = "ENEMY SPLIT!"
+        self.notif_color = (255, 170, 110)
+        self.notif_timer = max(self.notif_timer, 0.45)
+        self._burst(enemy.center_x, enemy.center_y, 10,
+                    (255, 120, 90), 45, 140, 0.8, 1.8, .05, .14)
+        return True
 
     def _maze_gameover(self):
         self.player.health = 0
@@ -1291,6 +1344,21 @@ class GameWindow(arcade.Window):
         FU   = ("Futura", "Century Gothic", "Trebuchet MS", "Arial")
         FN   = ("Courier New", "Menlo", "Monaco", "monospace")
 
+        def wrap_words(text: str, max_chars: int) -> list[str]:
+            words = text.split()
+            lines: list[str] = []
+            current = ""
+            for word in words:
+                candidate = f"{current} {word}".strip()
+                if current and len(candidate) > max_chars:
+                    lines.append(current)
+                    current = word
+                else:
+                    current = candidate
+            if current:
+                lines.append(current)
+            return lines
+
         # Animated background
         arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
         p2 = (math.sin(t * 0.55) + 1) * 0.5
@@ -1316,8 +1384,8 @@ class GameWindow(arcade.Window):
 
         # Preset cards
         n_cards = len(MAZE_PRESETS)
-        card_w  = min(170, int((w - 80) / n_cards - 18))
-        card_h  = min(240, int(h * 0.44))
+        card_w  = min(250, int((w - 120) / n_cards - 18))
+        card_h  = min(260, int(h * 0.46))
         total_w = n_cards * card_w + (n_cards - 1) * 18
         start_x = (w - total_w) // 2
         card_y  = h // 2 - card_h // 2 - 10
@@ -1336,14 +1404,14 @@ class GameWindow(arcade.Window):
 
             arcade.draw_lrbt_rectangle_filled(cl + 5, cr + 5, cb - 5, ct - 5, (0, 0, 0, 60))
             if sel:
-                fill   = (*mc[:3], 185); border = (*mc, 255); bthk = 3
+                fill   = (10, 24, 18, 235); border = (*mc[:3], 195); bthk = 2
             elif hov:
                 fill   = (14, 32, 22, 220); border = (*mc, 230); bthk = 2
             else:
                 fill   = (9, 18, 14, 220); border = (*mc[:3], 100); bthk = 1
             arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, border, bthk)
-            if sel or hov:
+            if hov:
                 pulse2 = 0.5 + 0.5 * math.sin(t * 4.5)
                 arcade.draw_lrbt_rectangle_outline(
                     cl - 3, cr + 3, cb - 3, ct + 3, (*mc, int(28 + 30 * pulse2)), 3)
@@ -1365,19 +1433,28 @@ class GameWindow(arcade.Window):
                              (*mc[:3], 75 if not sel else 130), 1)
 
             # Name
-            lbl_c = (10, 10, 20, 255) if sel else (*mc, 255)
-            arcade.draw_text(preset["name"], cx_ + 1, ct - 108,
-                             (0, 0, 0, 70), 13, anchor_x="center", bold=True, font_name=FU)
-            arcade.draw_text(preset["name"], cx_, ct - 106,
-                             lbl_c, 13, anchor_x="center", bold=True, font_name=FU)
+            lbl_c = (225, 255, 235, 255) if sel else (*mc, 255)
+            self._txt_shadow(preset["name"], cx_, ct - 106,
+                             lbl_c, 13, FU, anchor_x="center", bold=True)
 
             # Desc + detail
-            desc_c = (10, 10, 20, 230) if sel else (180, 215, 195, 210)
-            arcade.draw_text(preset["desc"], cx_, ct - 136,
-                             desc_c, 9, anchor_x="center", font_name=FU)
-            det_c = (10, 10, 20, 180) if sel else (100, 160, 120, 155)
-            arcade.draw_text(preset["detail"], cx_, ct - 156,
-                             det_c, 8, anchor_x="center", font_name=FN)
+            wrap_limit = 22 if card_w < 190 else 28
+            desc_lines = wrap_words(preset["desc"], wrap_limit)
+            detail_lines = wrap_words(preset["detail"], wrap_limit + 2)
+            desc_c = (215, 245, 225, 235) if sel else (190, 225, 205, 220)
+            det_c = (130, 195, 155, 215) if sel else (105, 165, 130, 190)
+
+            line_y = ct - 138
+            for line in desc_lines[:2]:
+                self._txt_shadow(line, cx_, line_y, desc_c, 8 if card_w < 200 else 9,
+                                 FU, anchor_x="center", bold=True, ox=1, oy=-1)
+                line_y -= 16
+
+            line_y -= 6
+            for line in detail_lines[:2]:
+                self._txt_shadow(line, cx_, line_y, det_c, 7 if card_w < 200 else 8,
+                                 FN, anchor_x="center", ox=1, oy=-1)
+                line_y -= 14
 
             # SELECT button at bottom of card
             btn_bw = card_w - 24;  btn_bh = 26

@@ -396,14 +396,14 @@ class MazeModeMixin:
         ec2, er2 = self.maze_exit_col, self.maze_exit_row
         ex2 = ox + (ec2 + 0.5) * cs
         ey2 = oy + (er2 + 0.5) * cs
-        pr  = cs * 0.33
+        pr  = min(34, cs * 0.20)
         ep  = 0.5 + 0.5 * math.sin(t * 4.8)
-        arcade.draw_circle_filled(ex2, ey2, pr + 10 * ep, (40, 155, 115, 55))
+        arcade.draw_circle_filled(ex2, ey2, pr + 6 * ep, (40, 155, 115, 55))
         arcade.draw_circle_filled(ex2, ey2, pr,            (*EXIT_C, 130))
         arcade.draw_circle_outline(ex2, ey2, pr,            EXIT_C, 3)
-        arcade.draw_circle_outline(ex2, ey2, pr + 10 * ep, (*EXIT_C[:3], int(70 * ep)), 2)
+        arcade.draw_circle_outline(ex2, ey2, pr + 6 * ep, (*EXIT_C[:3], int(70 * ep)), 2)
         arcade.draw_text("EXIT", ex2, ey2,
-                         (180, 255, 220, 220), 9, anchor_x="center", anchor_y="center",
+                         (180, 255, 220, 220), 8, anchor_x="center", anchor_y="center",
                          bold=True, font_name=FU)
 
         # ── Entry glow ──────────────────────────────

@@ -204,7 +204,20 @@ class MazeModeMixin:
             return
 
         arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, wall_color)
-        arcade.draw_lrbt_rectangle_filled(left + 3, right - 3, bottom - 3, top + 3, glow_color)
+        arcade.draw_lrbt_rectangle_filled(left - 3, right + 3, bottom - 3, top + 3, glow_color)
+        inset = max(4, MAZE_WALL_THICK // 4)
+        arcade.draw_lrbt_rectangle_filled(left + inset, right - inset, bottom + inset,
+                                          top - inset, (*wall_color[:3], 235))
+        stripe = max(3, MAZE_WALL_THICK // 7)
+        accent = (*glow_color[:3], 220)
+        if (right - left) >= (top - bottom):
+            cy = (bottom + top) / 2
+            arcade.draw_lrbt_rectangle_filled(left + inset, right - inset,
+                                              cy - stripe / 2, cy + stripe / 2, accent)
+        else:
+            cx = (left + right) / 2
+            arcade.draw_lrbt_rectangle_filled(cx - stripe / 2, cx + stripe / 2,
+                                              bottom + inset, top - inset, accent)
 
     def _maze_player_cell(self) -> tuple[int, int]:
         ox, oy = self.maze_origin
@@ -224,10 +237,11 @@ class MazeModeMixin:
         FU     = FONT_UI_MENU
         FN     = FONT_NUMERIC
 
-        WALL_C  = (72, 205, 245)
-        FLOOR_C = (5,  10,  24)
+        mode_c = tuple((getattr(self, "maze_preset", None) or MAZE_PRESETS[0])["color"][:3])
+        WALL_BASE_C = (178, 198, 210)
+        FLOOR_C = (8,  12,  22)
         EXIT_C  = (112, 255, 188)
-        ENTRY_C = (160, 132, 255)
+        ENTRY_C = mode_c
 
         # ── Apply scrolling camera viewport ─────────
         # Activate the maze camera so all world-space drawing is offset correctly.
@@ -268,12 +282,12 @@ class MazeModeMixin:
         # ── Walls ───────────────────────────────────
         p2 = 0.5 + 0.5 * math.sin(t * 1.8)
         wc = (
-            int(WALL_C[0] + 18 * p2),
-            int(WALL_C[1] + 22 * p2),
-            int(WALL_C[2] + 10 * p2),
+            int(WALL_BASE_C[0] + 22 * p2),
+            int(WALL_BASE_C[1] + 22 * p2),
+            int(WALL_BASE_C[2] + 22 * p2),
             255,
         )
-        gw = (*wc[:3], 60)
+        gw = (*mode_c, 105)
 
         # Outer border (always solid)
         bx = ox - wt2;  by = oy - wt2
@@ -282,6 +296,7 @@ class MazeModeMixin:
         arcade.draw_lrbt_rectangle_filled(bx, bx + bw2, by + bh2 - wt, by + bh2, wc)
         arcade.draw_lrbt_rectangle_filled(bx, bx + wt,  by, by + bh2, wc)
         arcade.draw_lrbt_rectangle_filled(bx + bw2 - wt, bx + bw2, by, by + bh2, wc)
+        arcade.draw_lrbt_rectangle_outline(bx, bx + bw2, by, by + bh2, (*mode_c, 190), 4)
 
         # Internal walls — only visible cells, only closed passages
         for row in range(row_min, row_max + 1):
@@ -479,6 +494,7 @@ class MazeModeMixin:
 
     def _draw_maze_minimap(self):
         maze   = self.maze_grid
+        mode_c = tuple((getattr(self, "maze_preset", None) or MAZE_PRESETS[0])["color"][:3])
         mm_cs  = max(4, min(9, 90 // max(maze.cols, maze.rows)))
         mx     = 16
         my     = self.height - 185 - maze.rows * mm_cs
@@ -488,12 +504,12 @@ class MazeModeMixin:
         # Panel: glassy and mostly transparent so the maze stays visible underneath.
         arcade.draw_lrbt_rectangle_filled(mx - 8, mx + mw + 8, my - 8, my + mh + 8, (4, 8, 22, 46))
         arcade.draw_lrbt_rectangle_outline(mx - 8, mx + mw + 8, my - 8, my + mh + 8,
-                                            (85, 220, 255, 185), 2)
+                                            (*mode_c, 185), 2)
         arcade.draw_lrbt_rectangle_outline(mx - 2, mx + mw + 2, my - 2, my + mh + 2,
-                                            (175, 145, 255, 82), 1)
+                                            (220, 232, 240, 96), 1)
 
         MWTT = max(1, mm_cs // 5)
-        wc2  = (85, 220, 255, 190)
+        wc2  = (210, 225, 232, 198)
 
         # Floors
         for row in range(maze.rows):

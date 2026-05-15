@@ -2880,6 +2880,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         # ── Maze mode: left-click starts firing ──────
         if self.game_state == STATE_MAZE:
+            if getattr(self, "maze_map_open", False):
+                self._close_maze_map_overlay()
+                return
+            if self._maze_minimap_hit(x, y):
+                self._open_maze_map_overlay()
+                return
             self.mouse_held = True
             return
 
@@ -3049,6 +3055,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
     def on_key_press(self, key, modifiers):
         if self._screen_transition and key != arcade.key.F11:
+            return
+
+        if self.game_state == STATE_MAZE and getattr(self, "maze_map_open", False):
+            if key == arcade.key.ESCAPE:
+                self._close_maze_map_overlay()
+            elif key == arcade.key.F11:
+                self._toggle_fullscreen()
             return
 
         if key in {arcade.key.W, arcade.key.A, arcade.key.S, arcade.key.D,

@@ -53,6 +53,10 @@ class MazeModeMixin:
         self.maze_origin    = (float(ox), float(oy))
         self.maze_exit_col  = cols - 1
         self.maze_exit_row  = 0           # bottom-right cell
+        self.maze_start_to_exit_steps = 1
+        self.maze_progress_best = 0.0
+        self.maze_map_open = False
+        self.maze_enemies_created = 0
 
         # ── Player ──────────────────────────────────
         ship = SHIPS[self.selected_ship]
@@ -70,7 +74,11 @@ class MazeModeMixin:
         self.player.center_x = player_start_x
         self.player.center_y = player_start_y
         self.player.change_x = 0.0;  self.player.change_y = 0.0
-        self.player.angle    = -90.0   # face RIGHT (90° clockwise from default up)
+        self.player.angle    = 90.0   # art points up by default; rotate nose to face RIGHT
+        self.maze_start_to_exit_steps = max(
+            1,
+            len(self.maze_grid.bfs(0, rows - 1, self.maze_exit_col, self.maze_exit_row)),
+        )
 
         self.player_list = arcade.SpriteList()
         self.player_list.append(self.player)
@@ -115,6 +123,11 @@ class MazeModeMixin:
         self._pause_return_state = None
         self.game_state = STATE_MAZE
         self.set_mouse_visible(False)
+
+    def _maze_player_angle_from_motion(self, vx: float, vy: float) -> float:
+        """Return sprite angle with the plane nose leading its movement."""
+        raw = math.degrees(math.atan2(vx, vy))
+        return (raw + 180.0) % 360.0 - 180.0
 
     # ══════════════════════════════════════════════════
     #  MAZE MODE — DRAW
@@ -293,6 +306,46 @@ class MazeModeMixin:
         col = max(0, min(self.maze_grid.cols - 1, int((self.player.center_x - ox) / cs)))
         row = max(0, min(self.maze_grid.rows - 1, int((self.player.center_y - oy) / cs)))
         return col, row
+
+    def _maze_completion_ratio(self) -> float:
+        pc, pr = self._maze_player_cell()
+        if (pc, pr) == (self.maze_exit_col, self.maze_exit_row):
+            return 1.0
+        remaining = len(self.maze_grid.bfs(pc, pr, self.maze_exit_col, self.maze_exit_row))
+        total = max(1, getattr(self, "maze_start_to_exit_steps", 1))
+        return max(0.0, min(1.0, 1.0 - remaining / total))
+
+    def _maze_enemy_spawn_interval(self) -> float:
+        progress = max(getattr(self, "maze_progress_best", 0.0), self._maze_completion_ratio())
+        pressure = max(0.0, min(1.0, progress)) ** 0.85
+        slow = MAZE_ENEMY_SPAWN_INTERVAL
+        fast = MAZE_ENEMY_SPAWN_MIN_INTERVAL
+        return slow + (fast - slow) * pressure
+
+    def _maze_minimap_layout(self) -> tuple[int, int, int, int, int, int]:
+        maze = self.maze_grid
+        mm_cs = max(4, min(9, 90 // max(maze.cols, maze.rows)))
+        mx = 16
+        my = self.height - 185 - maze.rows * mm_cs
+        mw = maze.cols * mm_cs
+        mh = maze.rows * mm_cs
+        return mx, my, mw, mh, mm_cs, 8
+
+    def _maze_minimap_hit(self, x: float, y: float) -> bool:
+        mx, my, mw, mh, _mm_cs, pad = self._maze_minimap_layout()
+        return mx - pad <= x <= mx + mw + pad and my - pad <= y <= my + mh + pad
+
+    def _open_maze_map_overlay(self) -> None:
+        self.maze_map_open = True
+        self.mouse_held = False
+        if hasattr(self, "_clear_movement_input"):
+            self._clear_movement_input()
+        self.set_mouse_visible(True)
+
+    def _close_maze_map_overlay(self) -> None:
+        self.maze_map_open = False
+        self.mouse_held = False
+        self.set_mouse_visible(False)
 
     def _draw_maze_world(self):
         w, h   = self.width, self.height
@@ -531,9 +584,34 @@ class MazeModeMixin:
         self._txt_shadow(lbl, w // 2, h - 28, (100, 255, 160, 230),
                          14, FU, anchor_x="center", bold=True)
 
+        # ── Maze completion line ─────────────────────
+        progress = max(getattr(self, "maze_progress_best", 0.0), self._maze_completion_ratio())
+        progress = max(0.0, min(1.0, progress))
+        line_w = min(430, max(240, int(w * 0.34)))
+        line_h = 6
+        line_x = w // 2 - line_w // 2
+        line_y = h - 57
+        fill_w = int(line_w * progress)
+        track_c = (35, 48, 70, 150)
+        fill_c = (105, 255, 170, 230)
+        glow_c = (105, 255, 170, 70)
+        arcade.draw_lrbt_rectangle_filled(line_x, line_x + line_w, line_y, line_y + line_h, track_c)
+        if fill_w > 0:
+            arcade.draw_lrbt_rectangle_filled(line_x, line_x + fill_w, line_y, line_y + line_h, fill_c)
+            arcade.draw_lrbt_rectangle_filled(line_x, line_x + fill_w, line_y - 3, line_y - 1, glow_c)
+        arcade.draw_circle_filled(line_x, line_y + line_h / 2, 4, (90, 155, 220, 210))
+        arcade.draw_circle_filled(line_x + line_w, line_y + line_h / 2, 5, (105, 255, 170, 230))
+        self._txt_shadow(f"MAZE  {int(progress * 100):02d}%",
+                         w // 2, line_y - 9, (170, 230, 210, 210),
+                         9, FN, anchor_x="center", anchor_y="top", bold=True)
+
         # ── Timer ───────────────────────────────────
         self._txt_shadow(f"{self.time_alive:06.1f}s", w - 16, h - 52,
                          (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
+        enemies_created = min(MAZE_ENEMIES_PER_FLOOR, getattr(self, "maze_enemies_created", 0))
+        self._txt_shadow(f"ENEMIES  {enemies_created}/{MAZE_ENEMIES_PER_FLOOR}",
+                         w - 16, h - 72, (255, 145, 120, 190),
+                         10, FN, anchor_x="right", bold=True)
 
         # ── Breach-cell storage ─────────────────────
         breach_count = p.inventory.get("breach", 0)
@@ -571,15 +649,13 @@ class MazeModeMixin:
 
         # ── Minimap ─────────────────────────────────
         self._draw_maze_minimap()
+        if getattr(self, "maze_map_open", False):
+            self._draw_maze_map_overlay()
 
     def _draw_maze_minimap(self):
         maze   = self.maze_grid
         mode_c = tuple((getattr(self, "maze_preset", None) or MAZE_PRESETS[0])["color"][:3])
-        mm_cs  = max(4, min(9, 90 // max(maze.cols, maze.rows)))
-        mx     = 16
-        my     = self.height - 185 - maze.rows * mm_cs
-        mw     = maze.cols * mm_cs
-        mh     = maze.rows * mm_cs
+        mx, my, mw, mh, mm_cs, pad = self._maze_minimap_layout()
         mini_bg = (
             max(4, int(mode_c[0] * 0.10)),
             max(6, int(mode_c[1] * 0.10)),
@@ -587,8 +663,8 @@ class MazeModeMixin:
         )
 
         # Panel: glassy and mostly transparent so the maze stays visible underneath.
-        arcade.draw_lrbt_rectangle_filled(mx - 8, mx + mw + 8, my - 8, my + mh + 8, (*mini_bg, 58))
-        arcade.draw_lrbt_rectangle_outline(mx - 8, mx + mw + 8, my - 8, my + mh + 8,
+        arcade.draw_lrbt_rectangle_filled(mx - pad, mx + mw + pad, my - pad, my + mh + pad, (*mini_bg, 58))
+        arcade.draw_lrbt_rectangle_outline(mx - pad, mx + mw + pad, my - pad, my + mh + pad,
                                             (*mode_c, 185), 2)
         arcade.draw_lrbt_rectangle_outline(mx - 2, mx + mw + 2, my - 2, my + mh + 2,
                                             (220, 232, 240, 96), 1)
@@ -631,6 +707,94 @@ class MazeModeMixin:
         py3 = my + (pr2 + 0.5) * mm_cs
         arcade.draw_circle_filled(px3, py3, mm_cs * 0.46, (90, 200, 255, 245))
 
+        enemy_count = len(self.maze_enemies)
+        for enemy in self.maze_enemies:
+            ex3 = mx + (enemy.maze_col + 0.5) * mm_cs
+            ey3 = my + (enemy.maze_row + 0.5) * mm_cs
+            arcade.draw_circle_filled(ex3, ey3, max(2, mm_cs * 0.34), (255, 70, 70, 230))
+            arcade.draw_circle_outline(ex3, ey3, max(3, mm_cs * 0.48), (255, 150, 120, 150), 1)
+
+        self._txt_shadow(f"ENEMY {enemy_count}", mx + mw + pad, my - 14,
+                         (255, 135, 115, 210), 8, FONT_NUMERIC,
+                         anchor_x="right", anchor_y="top", bold=True)
+
+    def _draw_maze_map_overlay(self):
+        maze = self.maze_grid
+        mode_c = tuple((getattr(self, "maze_preset", None) or MAZE_PRESETS[0])["color"][:3])
+        w, h = self.width, self.height
+        FU = FONT_UI_MENU
+        FN = FONT_NUMERIC
+
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 4, 12, 168))
+
+        max_map_w = w * 0.82
+        max_map_h = h * 0.72
+        mm_cs = max(3.0, min(max_map_w / maze.cols, max_map_h / maze.rows))
+        mw = maze.cols * mm_cs
+        mh = maze.rows * mm_cs
+        mx = (w - mw) / 2
+        my = (h - mh) / 2 - 8
+
+        bg_c = (
+            max(5, int(mode_c[0] * 0.12)),
+            max(7, int(mode_c[1] * 0.12)),
+            max(15, int(mode_c[2] * 0.14)),
+        )
+        wall_c = (82, 90, 110, 215)
+        break_c = (255, 105, 85, 218)
+
+        arcade.draw_lrbt_rectangle_filled(mx - 18, mx + mw + 18, my - 18, my + mh + 18, (*bg_c, 104))
+        arcade.draw_lrbt_rectangle_outline(mx - 18, mx + mw + 18, my - 18, my + mh + 18, (*mode_c, 210), 3)
+        arcade.draw_lrbt_rectangle_outline(mx - 8, mx + mw + 8, my - 8, my + mh + 8, (220, 235, 245, 80), 1)
+
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                fx = mx + col * mm_cs
+                fy = my + row * mm_cs
+                arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy, fy + mm_cs, (*bg_c, 96))
+
+        wt = max(1.5, mm_cs * 0.20)
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                fx = mx + col * mm_cs
+                fy = my + row * mm_cs
+                if row < maze.rows - 1 and not maze.is_open(col, row, MazeGrid.N):
+                    c = break_c if maze.is_breakable_wall(col, row, MazeGrid.N) else wall_c
+                    arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy + mm_cs - wt, fy + mm_cs + wt, c)
+                if col < maze.cols - 1 and not maze.is_open(col, row, MazeGrid.E):
+                    c = break_c if maze.is_breakable_wall(col, row, MazeGrid.E) else wall_c
+                    arcade.draw_lrbt_rectangle_filled(fx + mm_cs - wt, fx + mm_cs + wt, fy, fy + mm_cs, c)
+
+        arcade.draw_lrbt_rectangle_outline(mx, mx + mw, my, my + mh, wall_c, max(2, int(wt)))
+
+        ex = mx + (self.maze_exit_col + 0.5) * mm_cs
+        ey = my + (self.maze_exit_row + 0.5) * mm_cs
+        arcade.draw_circle_filled(ex, ey, max(5, mm_cs * 0.34), (105, 255, 170, 225))
+        arcade.draw_circle_outline(ex, ey, max(8, mm_cs * 0.56), (105, 255, 170, 160), 2)
+
+        pc, pr = self._maze_player_cell()
+        px = mx + (pc + 0.5) * mm_cs
+        py = my + (pr + 0.5) * mm_cs
+        arcade.draw_circle_filled(px, py, max(5, mm_cs * 0.36), (90, 200, 255, 245))
+        arcade.draw_circle_outline(px, py, max(8, mm_cs * 0.58), (180, 235, 255, 190), 2)
+
+        enemy_count = len(self.maze_enemies)
+        for enemy in self.maze_enemies:
+            ex3 = mx + (enemy.maze_col + 0.5) * mm_cs
+            ey3 = my + (enemy.maze_row + 0.5) * mm_cs
+            arcade.draw_circle_filled(ex3, ey3, max(4, mm_cs * 0.28), (255, 72, 72, 232))
+            arcade.draw_circle_outline(ex3, ey3, max(7, mm_cs * 0.50), (255, 145, 115, 150), 2)
+
+        progress = int(max(getattr(self, "maze_progress_best", 0.0), self._maze_completion_ratio()) * 100)
+        self._txt_shadow("MAZE MAP", w // 2, my + mh + 52, (190, 255, 220, 245),
+                         22, FU, anchor_x="center", bold=True)
+        self._txt_shadow(f"FLOOR {self.maze_level + 1}   {progress:02d}% COMPLETE   ENEMIES {enemy_count}",
+                         w // 2, my + mh + 28, (150, 210, 230, 220),
+                         11, FN, anchor_x="center", bold=True)
+        self._txt_shadow("CLICK ANYWHERE OR PRESS ESC TO CLOSE",
+                         w // 2, max(20, my - 42), (135, 170, 210, 185),
+                         10, FN, anchor_x="center", bold=True)
+
     def _draw_maze_over(self):
         """Overlay shown on maze death."""
         w, h  = self.width, self.height
@@ -667,6 +831,10 @@ class MazeModeMixin:
 
     def _update_maze(self, delta: float):
         """Full game-logic tick for maze mode."""
+        if getattr(self, "maze_map_open", False):
+            self.mouse_held = False
+            return
+
         self.time_alive += delta
         w, h   = self.width, self.height
         p      = self.player
@@ -699,18 +867,27 @@ class MazeModeMixin:
         else:
             p.change_y = 0.0
 
-        # Ship faces RIGHT (-90°) and tilts slightly based on vertical speed
-        tilt = max(-20, min(20, p.change_y * 0.06))
-        p.angle = -90.0 + tilt
+        # Maze ship art has its nose at the top and wings on the sides.
+        # Rotate the nose into the direction the ship is actually moving.
+        speed_len = math.hypot(p.change_x, p.change_y)
+        if speed_len > 4.0:
+            target_angle = self._maze_player_angle_from_motion(p.change_x, p.change_y)
+            diff = (target_angle - p.angle + 180.0) % 360.0 - 180.0
+            p.angle += diff * min(1.0, 18.0 * delta)
         p.update_powerups(delta)
 
-        # Engine trail — particles stream from the LEFT side (behind a rightward ship)
-        mv = abs(p.change_x) + abs(p.change_y)
-        if mv > 60 and random.random() < 0.50:
-            ang = math.atan2(-p.change_y, -p.change_x) + random.uniform(-0.35, 0.35)
+        # Engine trail comes from the right-side tail, opposite the movement direction.
+        if speed_len > 60 and random.random() < 0.50:
+            move_ang = math.atan2(p.change_y, p.change_x)
+            tail_dist = max(12.0, min(24.0, getattr(p, "width", 72) * 0.22))
+            side_ang = move_ang + math.pi / 2
+            tail_spread = random.uniform(-5.0, 5.0)
+            tail_x = p.center_x - math.cos(move_ang) * tail_dist + math.cos(side_ang) * tail_spread
+            tail_y = p.center_y - math.sin(move_ang) * tail_dist + math.sin(side_ang) * tail_spread
+            ang = move_ang + math.pi + random.uniform(-0.35, 0.35)
             self._add_particle(
-                p.center_x + random.uniform(-4, 4),
-                p.center_y + random.uniform(-4, 4),
+                tail_x,
+                tail_y,
                 math.cos(ang) * random.uniform(55, 130),
                 math.sin(ang) * random.uniform(55, 130),
                 random.uniform(1.2, 2.2), random.uniform(0.10, 0.22),
@@ -718,6 +895,10 @@ class MazeModeMixin:
 
         # ── Exit check ───────────────────────────────
         pc2, pr2 = self._maze_player_cell()
+        self.maze_progress_best = max(
+            getattr(self, "maze_progress_best", 0.0),
+            self._maze_completion_ratio(),
+        )
         if (pc2 == self.maze_exit_col and pr2 == self.maze_exit_row
                 and not self.maze_exit_reached):
             self.maze_exit_reached = True
@@ -870,11 +1051,11 @@ class MazeModeMixin:
 
         # ── Enemy spawn timer ────────────────────────────────────────
         self.maze_spawn_timer -= delta
+        created = getattr(self, "maze_enemies_created", 0)
         if (self.maze_spawn_timer <= 0
+                and created < MAZE_ENEMIES_PER_FLOOR
                 and len(self.maze_enemies) < max_enemies):
-            spawn_interval = max(0.85, MAZE_ENEMY_SPAWN_INTERVAL
-                                 - self.maze_level * 0.28)
-            self.maze_spawn_timer = spawn_interval
+            self.maze_spawn_timer = self._maze_enemy_spawn_interval()
             self._spawn_maze_enemy()
 
         # ── Smooth camera follow (Among Us style) ───────
@@ -896,8 +1077,11 @@ class MazeModeMixin:
                 self.maze_cam_y + h / 2,
             )
 
-    def _spawn_maze_enemy(self) -> None:
+    def _spawn_maze_enemy(self) -> bool:
         """Pick a random cell far from the player and place a MazeEnemy there."""
+        if getattr(self, "maze_enemies_created", 0) >= MAZE_ENEMIES_PER_FLOOR:
+            return False
+
         maze   = self.maze_grid
         cs     = self.maze_cell_size
         ox, oy = self.maze_origin
@@ -911,7 +1095,9 @@ class MazeModeMixin:
                     and not (col == self.maze_exit_col and row == self.maze_exit_row)):
                 enemy = MazeEnemy(col, row, cs, ox, oy)
                 self.maze_enemies.append(enemy)
-                return
+                self.maze_enemies_created += 1
+                return True
+        return False
 
     def _drop_maze_breach_powerup(self, x: float, y: float) -> None:
         """Drop a stationary breach cell that can arm wall-breaking rounds."""
@@ -923,7 +1109,9 @@ class MazeModeMixin:
 
     def _split_maze_enemy(self, enemy: MazeEnemy, max_enemies: int) -> bool:
         """Duplicate a surviving maze enemy into a nearby open cell."""
-        if len(self.maze_enemies) >= max_enemies or enemy.health <= 1:
+        if (len(self.maze_enemies) >= max_enemies
+                or getattr(self, "maze_enemies_created", 0) >= MAZE_ENEMIES_PER_FLOOR
+                or enemy.health <= 1):
             return False
 
         maze = self.maze_grid
@@ -958,6 +1146,7 @@ class MazeModeMixin:
         enemy.split_timer = MAZE_ENEMY_SPLIT_TIME
         child.split_timer = MAZE_ENEMY_SPLIT_TIME
         self.maze_enemies.append(child)
+        self.maze_enemies_created += 1
         self.notif_text = "ENEMY SPLIT!"
         self.notif_color = (255, 170, 110)
         self.notif_timer = max(self.notif_timer, 0.45)

@@ -67,11 +67,17 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.game_state    = STATE_MODE_SELECT
         self.selected_mode      = None          # "normal" | "maze" | "multiplayer"
         self._mode_btns:  dict  = {}
+        self._reset_confirm_btns: dict = {}
+        self.reset_confirm_open = False
+        self.reset_confirm_started = 0.0
         self.selected_maze_preset: str = "classic"
         self._maze_preset_btns: dict   = {}
         self.maze_preset: dict | None  = None   # active preset params
         self.menu_theme         = "dark"
         self.selected_ship      = 0
+        self._ship_carousel_from: int | None = None
+        self._ship_carousel_dir = 0
+        self._ship_carousel_started = 0.0
         self.selected_difficulty = "medium"
         self._menu_btns:  dict  = {}
         self._ship_cards: dict  = {}
@@ -81,6 +87,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._pause_return_state: str | None = None
         self.shop_feedback      = ""
         self.shop_feedback_color = (160, 180, 215, 180)
+        self.mode_feedback      = ""
+        self.mode_feedback_color = (160, 180, 215, 180)
 
         # ── Level system ──────────────────────────────
         self.selected_level:    int  = 0
@@ -371,6 +379,20 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
     def _is_hovering(self, l, r, b, t):
         return l <= self.mouse_x <= r and b <= self.mouse_y <= t
+
+    def _cycle_selected_ship(self, step: int) -> None:
+        if not SHIPS:
+            return
+        old_idx = self.selected_ship
+        idx = old_idx
+        for _ in range(len(SHIPS)):
+            idx = (idx + step) % len(SHIPS)
+            if SHIPS[idx]["available"]:
+                self._ship_carousel_from = old_idx
+                self._ship_carousel_dir = 1 if step > 0 else -1
+                self._ship_carousel_started = self.bg_time
+                self.selected_ship = idx
+                return
 
     @staticmethod
     def _draw_stat_pips(cx: int, y: int, value: int, max_v: int,
@@ -668,119 +690,125 @@ class GameWindow(MazeModeMixin, arcade.Window):
         arcade.draw_text("SELECT YOUR SHIP", w//2, div_y-22,
                          theme_c["text"], scaled(13), anchor_x="center", bold=True, font_name=font_ui_local)
 
-        # ── Ship cards ───────────────────────────────
-        n   = len(SHIPS)
-        gap = scaled(12)
-        # Dynamic card width: fill panel interior (22px margin each side) exactly
+        # ── Ship carousel ─────────────────────────────
+        ship = SHIPS[self.selected_ship]
+        avl = ship["available"]
         panel_inner_w = pw - 44
-        cw = (panel_inner_w - gap * (n - 1)) // n
-        card_height_limit = max(132, ph - 388)
-        ch  = min(220, int(cw * 1.24), card_height_limit)
-        total_cw = cw * n + gap * (n - 1)
-        cx0  = pl + 22                   # start at panel left margin
-        cy0  = div_y - 54 - ch           # card bottom y
+        cw = min(scaled(430), max(scaled(320), int(panel_inner_w * 0.48)))
+        card_height_limit = max(150, ph - 388)
+        ch = min(scaled(232), card_height_limit)
+        cl = w // 2 - cw // 2
+        cr = cl + cw
+        cb = div_y - 54 - ch
+        ct = cb + ch
+        pcx = w // 2
 
-        for i, ship in enumerate(SHIPS):
-            cl  = cx0+i*(cw+gap);  cr = cl+cw
-            cb  = cy0;             ct = cy0+ch
-            sel = (i == self.selected_ship)
-            avl = ship["available"]
-            hov = self._is_hovering(cl,cr,cb,ct)
+        fill = theme_c["card_sel_fill"] if avl else theme_c["locked_fill"]
+        bord = theme_c["card_sel_border"] if avl else theme_c["locked_border"]
+        bthk = 3 if avl else 1
+        arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
+        arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, bord, bthk)
 
-            if not avl:
-                fill = theme_c["locked_fill"];  bord = theme_c["locked_border"];  bthk = 1
-            elif sel:
-                fill = theme_c["card_sel_fill"]; bord = theme_c["card_sel_border"]; bthk = 3
-            elif hov:
-                fill = theme_c["card_hover_fill"]; bord = theme_c["card_border"]; bthk = 2
-            else:
-                fill = theme_c["card_fill"]; bord = theme_c["card_border"]; bthk = 1
+        if avl:
+            pulse = 0.5 + 0.5 * math.sin(t * 4.5)
+            arcade.draw_lrbt_rectangle_outline(
+                cl - 3, cr + 3, cb - 3, ct + 3, (*ship["color"], int(55 + 50 * pulse)), 2)
 
-            arcade.draw_lrbt_rectangle_filled(cl,cr,cb,ct, fill)
-            arcade.draw_lrbt_rectangle_outline(cl,cr,cb,ct, bord, bthk)
+        content_pad = max(16, int(cw * 0.06))
+        fname_sz = max(22, min(32, cw // 12))
+        ftag_sz = max(13, min(16, cw // 24))
+        fstat_sz = max(12, min(15, cw // 26))
 
-            # selection pulse
-            if sel and avl:
-                pulse = 0.5+0.5*math.sin(t*4.5)
-                g = ship["color"]
-                arcade.draw_lrbt_rectangle_outline(
-                    cl-3,cr+3,cb-3,ct+3, (*g,int(55+50*pulse)), 2)
+        badge_y = cb + 18
+        stats_y = cb + 54
+        tag_y = cb + 96
+        name_y = cb + 126
+        preview_bottom = name_y + fname_sz + 10
+        preview_top = ct - content_pad
+        preview_height = max(54, preview_top - preview_bottom)
+        preview_width = max(140, cw - content_pad * 2)
+        pcy = preview_bottom + preview_height * 0.52
 
-            content_pad = max(10, int(cw * 0.07))
-            fname_sz = max(14, min(18, cw // 9))
-            if len(ship["name"]) >= 11:
-                fname_sz -= 1
-            if len(ship["name"]) >= 12:
-                fname_sz -= 1
-            ftag_sz  = max(11, min(13, cw // 12))
-            fstat_sz = max(10, min(12, cw // 13))
+        if avl and ship["texture"]:
+            anim_from = getattr(self, "_ship_carousel_from", None)
+            anim_dir = getattr(self, "_ship_carousel_dir", 0)
+            anim_age = max(0.0, t - getattr(self, "_ship_carousel_started", 0.0))
+            anim_p = min(1.0, anim_age / 0.34) if anim_from is not None else 1.0
+            ease = 1.0 - (1.0 - anim_p) ** 3
+            slide = min(cw * 0.42, scaled(170))
+            bob = math.sin(t * 4.0) * 1.2 if anim_p >= 1.0 else 0.0
 
-            badge_y  = cb + int(ch * 0.05)
-            def_y    = cb + int(ch * 0.14)
-            atk_y    = cb + int(ch * 0.23)
-            spd_y    = cb + int(ch * 0.32)
-            tag_y    = cb + int(ch * 0.40)
-            name_y   = cb + int(ch * 0.49)
+            if anim_from is not None and anim_from != self.selected_ship and anim_p < 1.0:
+                prev_ship = SHIPS[anim_from]
+                if prev_ship["available"] and prev_ship["texture"]:
+                    prev_tex = load_texture_clean(prev_ship["texture"], prev_ship["tex_scale"])
+                    prev_x = pcx - anim_dir * slide * ease
+                    prev_scale = 1.0 - 0.16 * ease
+                    arcade.draw_circle_filled(prev_x, pcy, min(48, preview_width * 0.17),
+                                              (*prev_ship["color"], int(34 * (1.0 - ease))))
+                    _draw_texture_fitted(prev_tex, prev_x, pcy, preview_width * prev_scale,
+                                         preview_height * prev_scale)
+            elif anim_p >= 1.0:
+                self._ship_carousel_from = None
 
-            preview_bottom = name_y + fname_sz + 12
-            preview_top = ct - content_pad
-            preview_height = max(24, preview_top - preview_bottom)
-            preview_width = max(24, cw - content_pad * 2)
+            tex = load_texture_clean(ship["texture"], ship["tex_scale"])
+            draw_x = pcx + anim_dir * slide * (1.0 - ease) if anim_from is not None else pcx
+            draw_y = pcy + bob
+            draw_scale = 0.88 + 0.12 * ease
+            arcade.draw_circle_filled(draw_x, pcy, min(52, preview_width * 0.18),
+                                      (*ship["color"], 42 + int(18 * math.sin(t * 3))))
+            _draw_texture_fitted(tex, draw_x, draw_y, preview_width * draw_scale,
+                                 preview_height * draw_scale)
+        else:
+            arcade.draw_circle_outline(pcx, pcy, 40, theme_c["locked_border"], 2)
+            arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 34,
+                             anchor_x="center", anchor_y="center", bold=True,
+                             font_name=FONT_UI_MENU)
 
-            pcx = cl + cw // 2
-            pcy = preview_bottom + preview_height * 0.55
+        nc = theme_c["card_sel_border"] if avl else theme_c["locked_text"]
+        tagline_c = (*theme_c["text"][:3], 220) if avl else theme_c["locked_text"]
+        stat_c = (*theme_c["text"][:3], 235) if avl else theme_c["locked_text"]
+        self._txt_shadow(ship["name"], pcx, name_y, nc, fname_sz, FONT_UI_MENU,
+                         anchor_x="center", bold=True, ox=1, oy=-1)
+        self._txt_shadow(ship["tagline"] if avl else "COMING SOON", pcx, tag_y,
+                         tagline_c, ftag_sz, FONT_UI_MENU,
+                         anchor_x="center", ox=1, oy=-1)
+        arcade.draw_line(cl + 24, tag_y - 12, cr - 24, tag_y - 12,
+                         (*theme_c["divider"][:3], 90), 1)
 
-            if avl and ship["texture"]:
-                tex  = load_texture_clean(ship["texture"], ship["tex_scale"])
-                draw_y = pcy + (math.sin(t*2.8)*4 if sel else 0)
-                arcade.draw_circle_filled(pcx, pcy, min(30, preview_width * 0.24),
-                                          (*ship["color"], 35+int(20*math.sin(t*3))))
-                _draw_texture_fitted(tex, pcx, draw_y, preview_width, preview_height)
-            else:
-                arcade.draw_circle_outline(pcx,pcy,28, theme_c["locked_border"],2)
-                arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 28,
-                                 anchor_x="center", anchor_y="center", bold=True,
-                                 font_name=FONT_UI_MENU)
-
-            nc = theme_c["locked_text"] if not avl else \
-                 (theme_c["card_sel_border"] if sel else theme_c["text"])
-            tagline_c = theme_c["locked_text"] if not avl else (*theme_c["text"][:3], 220)
-            stat_c = theme_c["locked_text"] if not avl else (*theme_c["text"][:3], 235)
-            self._txt_shadow(ship["name"], pcx, name_y, nc, fname_sz, FONT_UI_MENU,
+        stat_gap = cw / 3
+        for idx, (lbl, val) in enumerate((
+            ("SPD", ship["stat_spd"]),
+            ("ATK", ship["stat_atk"]),
+            ("DEF", ship["stat_def"]),
+        )):
+            sx = cl + stat_gap * (idx + 0.5)
+            self._txt_shadow(lbl, sx, stats_y + 16, stat_c, fstat_sz, FONT_NUMERIC,
                              anchor_x="center", bold=True, ox=1, oy=-1)
+            self._draw_stat_pips(sx, stats_y, val, 5,
+                                 theme_c["stat_filled"], theme_c["stat_empty"], max(72, int(stat_gap * 0.58)))
 
-            if avl:
-                # tagline
-                self._txt_shadow(ship["tagline"], pcx, tag_y, tagline_c, ftag_sz, FONT_UI_MENU,
-                                 anchor_x="center", ox=1, oy=-1)
+        if avl:
+            self._txt_shadow("✔ SELECTED", pcx, badge_y, theme_c["selected_badge"],
+                             fstat_sz, FONT_UI_MENU, anchor_x="center", bold=True, ox=1, oy=-1)
 
-                # thin divider between tagline and stats
-                arcade.draw_line(cl+8, tag_y-6, cr-8, tag_y-6,
-                                 (*theme_c["divider"][:3], 80), 1)
+        self._ship_cards[self.selected_ship] = (cl, cr, cb, ct)
 
-                # stat rows — SPD / ATK / DEF
-                pip_x = cl + int(cw * 0.68)
-                pip_span = max(54, int(cw * 0.32))
-                for row_y, lbl, val in [(spd_y, "SPD", ship["stat_spd"]),
-                                         (atk_y, "ATK", ship["stat_atk"]),
-                                         (def_y, "DEF", ship["stat_def"])]:
-                    self._txt_shadow(lbl, cl + content_pad, row_y, stat_c, fstat_sz, FONT_NUMERIC,
-                                     anchor_y="center", bold=True, ox=1, oy=-1)
-                    self._draw_stat_pips(pip_x, row_y, val, 5,
-                                         theme_c["stat_filled"], theme_c["stat_empty"], pip_span)
-
-                # SELECTED badge
-                if sel:
-                    self._txt_shadow("✔ SELECTED", pcx, badge_y, theme_c["selected_badge"],
-                                     fstat_sz, FONT_UI_MENU, anchor_x="center", bold=True, ox=1, oy=-1)
-            else:
-                self._txt_shadow("COMING SOON", pcx, tag_y, theme_c["locked_text"], ftag_sz,
-                                 FONT_UI_MENU, anchor_x="center", ox=1, oy=-1)
-
-            self._ship_cards[i] = (cl, cr, cb, ct)
+        arrow_w = scaled(58)
+        arrow_h = scaled(82)
+        arrow_y = cb + ch // 2 - arrow_h // 2
+        left_x = max(pl + 34, cl - arrow_w - scaled(30))
+        right_x = min(pr - 34 - arrow_w, cr + scaled(30))
+        for name, x, label in (("ship_prev", left_x, "<"), ("ship_next", right_x, ">")):
+            hov = self._is_hovering(x, x + arrow_w, arrow_y, arrow_y + arrow_h)
+            _draw_btn(x, arrow_w, arrow_y, arrow_h,
+                      theme_c["btn_hover"] if hov else (*theme_c["btn_fill"][:3], 185),
+                      theme_c["btn_border"], theme_c["btn_text"],
+                      label, scaled(30))
+            self._menu_btns[name] = (x, x + arrow_w, arrow_y, arrow_y + arrow_h)
 
         # ── Buttons ──────────────────────────────────
-        btn_top = cy0 - 12
+        btn_top = cb - 12
 
         # ── Difficulty selector ──────────────────────
         arcade.draw_text("SELECT DIFFICULTY", w//2+1, btn_top-3, (0,0,0,90), scaled(12),
@@ -2790,6 +2818,26 @@ class GameWindow(MazeModeMixin, arcade.Window):
         except OSError:
             pass
 
+    def _reset_saved_game_progress(self) -> None:
+        self.coins = 0
+        self.run_coins = 0
+        self.upgrades = {item["id"]: 0 for item in SHOP_ITEMS}
+        self.best_scores = {}
+        self.completed_levels = set()
+        self.selected_level = 0
+        self.selected_ship = 0
+        self.selected_mode = None
+        self.selected_difficulty = "medium"
+        self._dpreset = DIFFICULTY_PRESETS[self.selected_difficulty]
+        self._clear_movement_input()
+        self.mouse_held = False
+        self._save_progress()
+        self.mode_feedback = "SAVE FILE RESET"
+        self.mode_feedback_color = (120, 255, 160, 230)
+        self.reset_confirm_open = False
+        self.game_state = STATE_MODE_SELECT
+        self.set_mouse_visible(True)
+
     def _load_progress(self) -> None:
         try:
             import json
@@ -2890,10 +2938,23 @@ class GameWindow(MazeModeMixin, arcade.Window):
             return
 
         if self.game_state == STATE_MODE_SELECT:
+            if self.reset_confirm_open:
+                for name, rect in self._reset_confirm_btns.items():
+                    l, r, b, t = rect
+                    if l <= x <= r and b <= y <= t:
+                        if name == "confirm":
+                            self._reset_saved_game_progress()
+                        elif name == "cancel":
+                            self.reset_confirm_open = False
+                        return
+                return
             for name, rect in self._mode_btns.items():
                 l, r, b, t = rect
                 if l <= x <= r and b <= y <= t:
-                    if name == "__enter__":
+                    if name == "__reset_save__":
+                        self.reset_confirm_open = True
+                        self.reset_confirm_started = self.bg_time
+                    elif name == "__enter__":
                         if self.selected_mode == "normal":
                             self.game_state = STATE_MENU
                         elif self.selected_mode == "maze":
@@ -2958,6 +3019,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
                             self.set_mouse_visible(True)
                     elif name == "theme":
                         self.menu_theme = "light" if self.menu_theme=="dark" else "dark"
+                    elif name == "ship_prev":
+                        self._cycle_selected_ship(-1)
+                    elif name == "ship_next":
+                        self._cycle_selected_ship(1)
                     return
             return
 

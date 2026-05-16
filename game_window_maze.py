@@ -1238,6 +1238,31 @@ class MazeModeMixin:
 
         self._mode_btns = {}
 
+        reset_w = 118
+        reset_h = 32
+        reset_x = w - reset_w - 22
+        reset_y = 22
+        reset_hov = self._is_hovering(reset_x, reset_x + reset_w, reset_y, reset_y + reset_h)
+        reset_fill = (130, 32, 48, 230) if reset_hov else (70, 24, 38, 190)
+        reset_border = (255, 110, 125, 230) if reset_hov else (210, 85, 105, 150)
+        reset_text = (255, 225, 230, 255) if reset_hov else (255, 160, 172, 215)
+        arcade.draw_lrbt_rectangle_filled(reset_x, reset_x + reset_w,
+                                           reset_y, reset_y + reset_h, reset_fill)
+        arcade.draw_lrbt_rectangle_outline(reset_x, reset_x + reset_w,
+                                            reset_y, reset_y + reset_h, reset_border, 1)
+        arcade.draw_text("RESET", reset_x + reset_w // 2, reset_y + reset_h // 2,
+                         reset_text, 12, anchor_x="center", anchor_y="center",
+                         bold=True, font_name=FU)
+        self._mode_btns["__reset_save__"] = (
+            reset_x, reset_x + reset_w, reset_y, reset_y + reset_h
+        )
+
+        mode_feedback = getattr(self, "mode_feedback", "")
+        if mode_feedback:
+            arcade.draw_text(mode_feedback, w // 2, h - 164,
+                             getattr(self, "mode_feedback_color", (160, 180, 215, 180)),
+                             11, anchor_x="center", bold=True, font_name=FU)
+
         for i, mode in enumerate(modes):
             cl = start_x + i * (card_w + 24)
             cr = cl + card_w
@@ -1372,6 +1397,92 @@ class MazeModeMixin:
         arcade.draw_text("Click a mode card, then press ENTER GAME  ·  F11 Fullscreen",
                          w // 2, 16, (80, 108, 165, 140), 9,
                          anchor_x="center", font_name=FN)
+
+        self._reset_confirm_btns = {}
+        if getattr(self, "reset_confirm_open", False):
+            elapsed = max(0.0, self.bg_time - getattr(self, "reset_confirm_started", self.bg_time))
+            raw = min(1.0, elapsed / 0.32)
+            c1 = 1.70158
+            c3 = c1 + 1.0
+            pop = 1.0 + c3 * (raw - 1.0) ** 3 + c1 * (raw - 1.0) ** 2
+            fade = 1.0 - (1.0 - raw) ** 3
+            scale = 0.72 + 0.28 * pop
+
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (0, 0, 0, int(155 * fade)))
+
+            popup_w = min(max(430, int(w * 0.58)), w - 52)
+            popup_h = min(max(260, int(h * 0.44)), h - 70)
+            draw_w = popup_w * scale
+            draw_h = popup_h * scale
+            cx = w / 2
+            cy = h / 2
+            popup_l = cx - draw_w / 2
+            popup_r = cx + draw_w / 2
+            popup_b = cy - draw_h / 2
+            popup_t = cy + draw_h / 2
+
+            panel_alpha = int(246 * fade)
+            border_alpha = int(210 * fade)
+            inner_alpha = int(90 * fade)
+            text_alpha = int(255 * fade)
+            shadow_alpha = int(95 * fade)
+
+            arcade.draw_lrbt_rectangle_filled(popup_l + 8 * scale, popup_r + 8 * scale,
+                                               popup_b - 8 * scale, popup_t - 8 * scale,
+                                               (0, 0, 0, int(105 * fade)))
+            arcade.draw_lrbt_rectangle_filled(popup_l, popup_r, popup_b, popup_t,
+                                               (9, 18, 48, panel_alpha))
+            arcade.draw_lrbt_rectangle_outline(popup_l, popup_r, popup_b, popup_t,
+                                                (90, 198, 255, border_alpha), max(1, int(2 * scale)))
+            arcade.draw_lrbt_rectangle_outline(popup_l + 8 * scale, popup_r - 8 * scale,
+                                                popup_b + 8 * scale, popup_t - 8 * scale,
+                                                (70, 112, 205, inner_alpha), 1)
+
+            accent = (90, 198, 255, int(170 * fade))
+            accent_len = 30 * scale
+            for ax, ay, sx, sy in ((popup_l, popup_t, 1, -1), (popup_r, popup_t, -1, -1),
+                                   (popup_l, popup_b, 1, 1), (popup_r, popup_b, -1, 1)):
+                arcade.draw_line(ax, ay, ax + sx * accent_len, ay, accent, 2)
+                arcade.draw_line(ax, ay, ax, ay + sy * accent_len, accent, 2)
+
+            title_size = max(18, int(30 * scale))
+            title_y = popup_t - draw_h * 0.30
+            arcade.draw_text("Reset The Game?", cx + 2 * scale, title_y - 2 * scale,
+                             (0, 0, 0, shadow_alpha), title_size, anchor_x="center",
+                             anchor_y="center", bold=True, font_name=FU)
+            arcade.draw_text("Reset The Game?", cx, title_y,
+                             (235, 245, 255, text_alpha), title_size, anchor_x="center",
+                             anchor_y="center", bold=True, font_name=FU)
+
+            btn_w = max(118, int(draw_w * 0.24))
+            btn_h = max(38, int(draw_h * 0.15))
+            gap = max(20, int(draw_w * 0.06))
+            yes_x = w // 2 - gap // 2 - btn_w
+            no_x = w // 2 + gap // 2
+            btn_y = popup_b + draw_h * 0.23
+
+            yes_hov = self._is_hovering(yes_x, yes_x + btn_w, btn_y, btn_y + btn_h)
+            no_hov = self._is_hovering(no_x, no_x + btn_w, btn_y, btn_y + btn_h)
+
+            yes_fill = (55, 220, 100, int(245 * fade)) if yes_hov else (35, 168, 78, int(230 * fade))
+            no_fill = (255, 82, 92, int(245 * fade)) if no_hov else (185, 45, 56, int(230 * fade))
+
+            arcade.draw_lrbt_rectangle_filled(yes_x, yes_x + btn_w, btn_y, btn_y + btn_h, yes_fill)
+            arcade.draw_lrbt_rectangle_outline(yes_x, yes_x + btn_w, btn_y, btn_y + btn_h,
+                                                (140, 255, 170, text_alpha), 2)
+            arcade.draw_text("YES", yes_x + btn_w // 2, btn_y + btn_h // 2,
+                             (8, 18, 12, text_alpha), max(14, int(16 * scale)), anchor_x="center",
+                             anchor_y="center", bold=True, font_name=FU)
+
+            arcade.draw_lrbt_rectangle_filled(no_x, no_x + btn_w, btn_y, btn_y + btn_h, no_fill)
+            arcade.draw_lrbt_rectangle_outline(no_x, no_x + btn_w, btn_y, btn_y + btn_h,
+                                                (255, 155, 165, text_alpha), 2)
+            arcade.draw_text("NO", no_x + btn_w // 2, btn_y + btn_h // 2,
+                             (255, 245, 245, text_alpha), max(14, int(16 * scale)), anchor_x="center",
+                             anchor_y="center", bold=True, font_name=FU)
+
+            self._reset_confirm_btns["confirm"] = (yes_x, yes_x + btn_w, btn_y, btn_y + btn_h)
+            self._reset_confirm_btns["cancel"] = (no_x, no_x + btn_w, btn_y, btn_y + btn_h)
 
     # ══════════════════════════════════════════════════
     #  MAZE SELECT SCREEN

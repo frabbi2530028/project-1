@@ -535,6 +535,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         arcade.draw_lrbt_rectangle_filled(pl+7,pr+7,pb-7,ptop-7,(0,0,0,70))
         arcade.draw_lrbt_rectangle_filled(pl,pr,pb,ptop, theme_c["panel_fill"])
+        if not is_pause:
+            panel_accent = tuple(SHIPS[self.selected_ship]["color"][:3])
+            panel_gap = max(18, scaled(24))
+            panel_off = int((t * 26) % panel_gap)
+            for sy in range(int(pb + 18 + panel_off), int(ptop - 18), panel_gap):
+                arcade.draw_line(pl + 24, sy, pr - 24, sy, (*panel_accent, 22), 1)
+            sweep_y = pb + ((t * 52) % max(1, ph))
+            arcade.draw_line(pl + 24, sweep_y, pr - 24, sweep_y,
+                             (*panel_accent, 58), 2)
         arcade.draw_lrbt_rectangle_outline(pl,pr,pb,ptop, theme_c["panel_border"], 2)
         arcade.draw_lrbt_rectangle_outline(pl+5,pr-5,pb+5,ptop-5, theme_c["panel_inner"], 1)
 
@@ -711,47 +720,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         pcx = w // 2
 
         if avl:
-            pulse = 0.5 + 0.5 * math.sin(t * 4.5)
-            sweep = 0.5 + 0.5 * math.sin(t * 2.0)
             ship_c = tuple(ship["color"][:3])
-            mode_c = (120, 255, 160) if is_maze_loadout else ship_c
-            glass_fill = (
-                max(4, int(mode_c[0] * 0.08)),
-                max(7, int(mode_c[1] * 0.08)),
-                max(14, int(mode_c[2] * 0.10)),
-                238,
-            )
-            wash = (
-                max(12, int(ship_c[0] * 0.18)),
-                max(16, int(ship_c[1] * 0.18)),
-                max(22, int(ship_c[2] * 0.18)),
-                82,
-            )
-            border = (
-                min(255, int((ship_c[0] + mode_c[0]) * 0.55)),
-                min(255, int((ship_c[1] + mode_c[1]) * 0.55)),
-                min(255, int((ship_c[2] + mode_c[2]) * 0.55)),
-                255,
-            )
-
-            arcade.draw_lrbt_rectangle_filled(cl + 8, cr + 8, cb - 8, ct - 8, (0, 0, 0, 86))
-            arcade.draw_lrbt_rectangle_filled(
-                cl - 7, cr + 7, cb - 7, ct + 7, (*mode_c, int(22 + 30 * pulse)))
-            arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, glass_fill)
-            arcade.draw_lrbt_rectangle_filled(cl + 2, cr - 2, cb + ch * 0.48, ct - 2, wash)
-            arcade.draw_lrbt_rectangle_filled(
-                cl + 2, cr - 2, ct - 9, ct - 3, (*border[:3], int(90 + 70 * sweep)))
-            arcade.draw_lrbt_rectangle_filled(
-                cl + 2, cr - 2, cb + 3, cb + 8, (*mode_c, int(44 + 46 * pulse)))
-
-            scan_gap = max(12, scaled(18))
-            scan_off = int((t * 24) % scan_gap)
-            for sy in range(int(cb + 14 + scan_off), int(ct - 14), scan_gap):
-                arcade.draw_line(cl + 18, sy, cr - 18, sy, (*mode_c, 24), 1)
-
-            arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, border, 2)
-            arcade.draw_lrbt_rectangle_outline(
-                cl - 3, cr + 3, cb - 3, ct + 3, (*ship_c, int(58 + 52 * pulse)), 2)
         else:
             fill = theme_c["locked_fill"]
             bord = theme_c["locked_border"]
@@ -759,7 +728,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, bord, 1)
 
         content_pad = max(16, int(cw * 0.06))
-        fname_sz = max(22, min(32, cw // 12))
+        fname_sz = max(18, min(25, cw // 15))
         ftag_sz = max(13, min(16, cw // 24))
         fstat_sz = max(12, min(15, cw // 26))
 
@@ -771,7 +740,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
         preview_top = ct - content_pad
         preview_height = max(54, preview_top - preview_bottom)
         preview_width = max(140, cw - content_pad * 2)
-        pcy = preview_bottom + preview_height * 0.52
+        preview_draw_w = preview_width * 1.46
+        preview_draw_h = max(44, preview_height - 6)
+        pcy = (preview_bottom + preview_top) * 0.5
 
         if avl and ship["texture"]:
             anim_from = getattr(self, "_ship_carousel_from", None)
@@ -788,8 +759,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     prev_tex = load_texture_clean(prev_ship["texture"], prev_ship["tex_scale"])
                     prev_x = pcx - anim_dir * slide * ease
                     prev_scale = 1.0 - 0.16 * ease
-                    _draw_texture_fitted(prev_tex, prev_x, pcy, preview_width * prev_scale,
-                                         preview_height * prev_scale)
+                    _draw_texture_fitted(prev_tex, prev_x, pcy, preview_draw_w * prev_scale,
+                                         preview_draw_h * prev_scale)
             elif anim_p >= 1.0:
                 self._ship_carousel_from = None
 
@@ -797,8 +768,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
             draw_x = pcx + anim_dir * slide * (1.0 - ease) if anim_from is not None else pcx
             draw_y = pcy + bob
             draw_scale = 0.88 + 0.12 * ease
-            _draw_texture_fitted(tex, draw_x, draw_y, preview_width * draw_scale,
-                                 preview_height * draw_scale)
+            _draw_texture_fitted(tex, draw_x, draw_y, preview_draw_w * draw_scale,
+                                 preview_draw_h * draw_scale)
         else:
             arcade.draw_circle_outline(pcx, pcy, 40, theme_c["locked_border"], 2)
             arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 34,
@@ -850,16 +821,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
         right_x = min(pr - 34 - arrow_w, cr + scaled(30))
         for name, x, label in (("ship_prev", left_x, "<"), ("ship_next", right_x, ">")):
             hov = self._is_hovering(x, x + arrow_w, arrow_y, arrow_y + arrow_h)
-            arrow_idle = (
-                max(9, int(mode_accent[0] * 0.13)),
-                max(12, int(mode_accent[1] * 0.13)),
-                max(18, int(mode_accent[2] * 0.13)),
-                205,
-            )
-            _draw_btn(x, arrow_w, arrow_y, arrow_h,
-                      (*mode_accent, 132) if hov else arrow_idle,
-                      (*mode_accent, 232), theme_c["btn_text"],
-                      label, scaled(30))
+            arrow_c = theme_c["btn_text"] if hov else theme_c["btn_text_dim"]
+            if hov:
+                arcade.draw_circle_filled(x + arrow_w // 2, arrow_y + arrow_h // 2,
+                                          max(26, arrow_h * 0.40), (*ship_accent, 46))
+            self._txt_shadow(label, x + arrow_w // 2, arrow_y + arrow_h // 2,
+                             arrow_c, scaled(34), FONT_UI_MENU,
+                             anchor_x="center", anchor_y="center", bold=True, ox=2, oy=-2)
             self._menu_btns[name] = (x, x + arrow_w, arrow_y, arrow_y + arrow_h)
 
         # ── Buttons ──────────────────────────────────
@@ -924,15 +892,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
         bx = w//2-bw//2;  by = play_y - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
         play_label = "[ RESUME ]" if is_pause else ("[ CHOOSE PLAN ]" if is_maze_loadout else "[ PLAY GAME ]")
-        play_idle = (
-            max(10, int(mode_accent[0] * 0.18)),
-            max(14, int(mode_accent[1] * 0.18)),
-            max(20, int(mode_accent[2] * 0.18)),
-            224,
-        )
         _draw_btn(bx, bw, by, bh,
-                  (*mode_accent, 168) if hov_p else play_idle,
-                  (*mode_accent, 238), theme_c["btn_text"],
+                  theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
+                  theme_c["btn_border"], theme_c["btn_text"],
                   play_label, scaled(20))
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
 
@@ -2466,7 +2428,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self.bullets.append(Bullet(px,py,ang))
             self._spawn_muzzle(px,py,ang)
 
-    def _fire_beam(self, full_360: bool = False) -> None:
+    def _fire_beam(self, full_360: bool = False, aim_x=None, aim_y=None) -> None:
         """Fire a beam (or 360° burst) from the player's position."""
         px, py = self.player.center_x, self.player.center_y
         bc     = (255, 100, 40)   # beam core colour
@@ -2479,7 +2441,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
             # Burst particle effect
             self._burst(px, py, 24, (255,120,50), 80, 260, 1.8, 3.5, .12, .28)
         else:
-            base = math.atan2(self.mouse_y - py, self.mouse_x - px)
+            tx = self.mouse_x if aim_x is None else aim_x
+            ty = self.mouse_y if aim_y is None else aim_y
+            base = math.atan2(ty - py, tx - px)
             for ang in ([base - 0.18, base, base + 0.18]
                         if self.player.triple_active else [base]):
                 self.beams.append(BeamRay(px, py, ang, color=bc))

@@ -98,6 +98,8 @@ class MazeModeMixin:
         self.maze_enemies       = arcade.SpriteList()   # MazeEnemy sprites
         self.maze_bullets       = arcade.SpriteList()   # player bullets (wall-blocked)
         self.maze_enemy_bullets = arcade.SpriteList()   # enemy bullets  (wall-blocked)
+        self.beams              = []                    # Interceptor beams in maze mode
+        self.elec_bolts         = arcade.SpriteList()   # Reaper bolts in maze mode
         self.maze_spawn_timer   = 1.2                   # first enemy arrives quickly
 
         # ── Initialise camera centred on player spawn ──
@@ -197,6 +199,64 @@ class MazeModeMixin:
             if touched and not maze.is_open(col, row, direction):
                 return (col, row, direction)
         return None
+
+    def _maze_ray_open_length(self, ox: float, oy: float, angle: float,
+                              max_length: float = BEAM_RANGE) -> float:
+        """Distance a beam can travel before it reaches a maze wall."""
+        length, _wall_hit, _hit_x, _hit_y = self._maze_ray_wall_contact(
+            ox, oy, angle, max_length)
+        return length
+
+    def _maze_ray_wall_contact(self, ox: float, oy: float, angle: float,
+                               max_length: float = BEAM_RANGE) -> tuple[float, tuple | None, float, float]:
+        """Return beam travel length plus the wall it reaches, if any."""
+        step = 8.0
+        dist = step
+        while dist <= max_length:
+            x = ox + math.cos(angle) * dist
+            y = oy + math.sin(angle) * dist
+            wall_hit = self._maze_wall_at_point(x, y, 5)
+            if wall_hit is not None or not self._maze_can_move_to(x, y, 5):
+                return max(0.0, dist - step), wall_hit, x, y
+            dist += step
+        return max_length, None, ox + math.cos(angle) * max_length, oy + math.sin(angle) * max_length
+
+    def _clip_new_maze_beams(self, start_index: int) -> None:
+        for beam in self.beams[start_index:]:
+            length, wall_hit, hit_x, hit_y = self._maze_ray_wall_contact(
+                beam.ox, beam.oy, beam.angle_rad, beam.length)
+            beam.length = length
+            self._damage_maze_wall_with_breach(wall_hit, hit_x, hit_y, (255, 150, 70))
+
+    def _damage_maze_wall_with_breach(self, wall_hit: tuple | None,
+                                      hit_x: float, hit_y: float,
+                                      color: tuple) -> bool:
+        if wall_hit is None or not getattr(self.player, "breach_active", False):
+            return False
+        col, row, direction = wall_hit
+        damaged, broken, hp_left = self.maze_grid.damage_wall(col, row, direction)
+        if broken:
+            self.notif_text = "BREACH OPENED!"
+            self.notif_color = (255, 205, 80)
+            self.notif_timer = 0.9
+            self._burst(hit_x, hit_y, 26, color, 70, 260, 1.4, 3.4, .12, .32)
+        elif damaged:
+            self.notif_text = f"WALL CRACKED  {hp_left} HP"
+            self.notif_color = (255, 195, 80)
+            self.notif_timer = max(self.notif_timer, 0.45)
+            self._burst(hit_x, hit_y, 12, color, 55, 180, 0.9, 2.2, .06, .18)
+        return damaged
+
+    def _maze_kill_enemy(self, enemy: MazeEnemy, color: tuple = (255, 130, 70)) -> None:
+        self.score += 20
+        self.notif_text  = "+20  ENEMY DOWN!"
+        self.notif_color = (120, 255, 160)
+        self.notif_timer = 0.8
+        self._burst(enemy.center_x, enemy.center_y, 22,
+                    color, 65, 240, 1.5, 3.2, .12, .32)
+        if random.randint(1, 100) <= MAZE_BREACH_DROP_CHANCE:
+            self._drop_maze_breach_powerup(enemy.center_x, enemy.center_y)
+        enemy.remove_from_sprite_lists()
 
     @staticmethod
     def _draw_round_lrbt(left: float, right: float, bottom: float, top: float,
@@ -721,6 +781,10 @@ class MazeModeMixin:
         # ── Bullets ──────────────────────────────────
         self.maze_bullets.draw()
         self.maze_enemy_bullets.draw()
+        for beam in self.beams:
+            beam.draw()
+        for bolt in self.elec_bolts:
+            bolt.draw_bolt()
 
         # ── Player ──────────────────────────────────
         if self.player:
@@ -1220,18 +1284,49 @@ class MazeModeMixin:
 
         # ── Player shooting (hold left-mouse to fire) ────────────────
         if self.mouse_held:
+            is_beam_ship = (self.selected_ship in BEAM_SHIP_INDICES)
+            is_electric_ship = (self.selected_ship in ELECTRIC_SHIP_INDICES)
+            if is_electric_ship and p.elec360_active:
+                fire_rate = ELECTRIC_360_FIRE_RATE
+            else:
+                fire_rate = ELECTRIC_FIRE_RATE if is_electric_ship else NORMAL_FIRE_RATE
             self.fire_timer += delta
-            while self.fire_timer >= NORMAL_FIRE_RATE:
-                self.fire_timer -= NORMAL_FIRE_RATE
+            while self.fire_timer >= fire_rate:
+                self.fire_timer -= fire_rate
                 # Convert screen-space mouse → world coords
                 mx_w = self.maze_cam_x + self.mouse_x
                 my_w = self.maze_cam_y + self.mouse_y
-                ang  = math.atan2(my_w - p.center_y, mx_w - p.center_x)
-                b    = Bullet(p.center_x, p.center_y, ang)
-                self.maze_bullets.append(b)
-                self._spawn_muzzle(p.center_x, p.center_y, ang)
+                if is_beam_ship:
+                    first_new = len(self.beams)
+                    self._fire_beam(p.beam360_active, aim_x=mx_w, aim_y=my_w)
+                    self._clip_new_maze_beams(first_new)
+                elif is_electric_ship:
+                    self._fire_electric(full_360=p.elec360_active, aim_x=mx_w, aim_y=my_w)
+                else:
+                    ang = math.atan2(my_w - p.center_y, mx_w - p.center_x)
+                    b = Bullet(p.center_x, p.center_y, ang)
+                    self.maze_bullets.append(b)
+                    self._spawn_muzzle(p.center_x, p.center_y, ang)
         else:
             self.fire_timer = 0.0
+
+        # ── Update beam/electric weapons in maze space ───────────────
+        self.beams = [beam for beam in self.beams if beam.life > 0]
+        for beam in self.beams:
+            beam.update(delta)
+
+        self.elec_bolts.update(delta)
+        for bolt in list(self.elec_bolts):
+            wall_hit = self._maze_wall_at_point(bolt.center_x, bolt.center_y, 5)
+            blocked = not self._maze_can_move_to(bolt.center_x, bolt.center_y, 5)
+            if bolt.life <= 0 or wall_hit is not None or blocked:
+                if wall_hit is not None:
+                    self._damage_maze_wall_with_breach(
+                        wall_hit, bolt.center_x, bolt.center_y, (150, 110, 255))
+                if bolt.life > 0:
+                    self._burst(bolt.center_x, bolt.center_y, 6,
+                                (150, 110, 255), 42, 135, 0.8, 1.8, .04, .12)
+                bolt.remove_from_sprite_lists()
 
         # ── Move player bullets + wall collision ─────────────────────
         self.maze_bullets.update(delta)
@@ -1300,6 +1395,27 @@ class MazeModeMixin:
                 eb.life = MAZE_ENEMY_BULLET_LIFE
                 self.maze_enemy_bullets.append(eb)
 
+        # ── Beam/electric → enemy collision ──────────────────────────
+        for beam in list(self.beams):
+            for enemy in list(self.maze_enemies):
+                hit_r = max(enemy.width, enemy.height) * 0.45
+                if beam.intersects_circle(enemy.center_x, enemy.center_y, hit_r):
+                    self._maze_kill_enemy(enemy, (255, 130, 70))
+
+        for bolt in list(self.elec_bolts):
+            hits = arcade.check_for_collision_with_list(bolt, self.maze_enemies)
+            if not hits:
+                continue
+            enemy = hits[0]
+            enemy.health -= bolt.damage
+            self._burst(bolt.center_x, bolt.center_y, 10,
+                        (140, 100, 255), 55, 200, 1.2, 2.6, .06, .18)
+            self._burst(bolt.center_x, bolt.center_y, 4,
+                        (220, 200, 255), 80, 260, 0.8, 1.8, .04, .10)
+            bolt.remove_from_sprite_lists()
+            if enemy.health <= 0:
+                self._maze_kill_enemy(enemy, (130, 90, 255))
+
         # ── Bullet → enemy collision ─────────────────────────────────
         for b in list(self.maze_bullets):
             hits = arcade.check_for_collision_with_list(b, self.maze_enemies)
@@ -1310,15 +1426,7 @@ class MazeModeMixin:
                 self._burst(b.center_x, b.center_y, 8,
                             (255, 220, 100), 55, 180, 1.0, 2.2, .07, .18)
                 if enemy.health <= 0:
-                    self.score += 20
-                    self.notif_text  = f"+20  ENEMY DOWN!"
-                    self.notif_color = (120, 255, 160)
-                    self.notif_timer = 0.8
-                    self._burst(enemy.center_x, enemy.center_y, 22,
-                                (255, 130, 70), 65, 240, 1.5, 3.2, .12, .32)
-                    if random.randint(1, 100) <= MAZE_BREACH_DROP_CHANCE:
-                        self._drop_maze_breach_powerup(enemy.center_x, enemy.center_y)
-                    enemy.remove_from_sprite_lists()
+                    self._maze_kill_enemy(enemy, (255, 130, 70))
 
         # ── Enemy splitting ─────────────────────────────────────────
         for enemy in list(self.maze_enemies):

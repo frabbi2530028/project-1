@@ -187,6 +187,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.maze_exit_col:   int   = 0
         self.maze_exit_row:   int   = 0
         self.maze_exit_reached: bool = False
+        self.maze_run_complete: bool = False
+        self.maze_keys:       list  = []
+        self.maze_keys_collected: int = 0
+        self.maze_key_relocate_timer: float = MAZE_KEY_RELOCATE_TIME
+        self.maze_corner_wave_timer: float = MAZE_CORNER_WAVE_INTERVAL
+        self.maze_potion_spawn_timer: float = MAZE_POTION_SPAWN_INTERVAL
+        self.maze_exit_lock_notice_timer: float = 0.0
         # ── Maze scrolling camera (world-space bottom-left corner) ──
         self.maze_cam_x:     float = 0.0
         self.maze_cam_y:     float = 0.0

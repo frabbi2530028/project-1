@@ -195,6 +195,13 @@ MAZE_CELL_SIZE    = 240         # pixels per cell
 MAZE_WALL_THICK   = 60          # wall line thickness
 MAZE_BASE_COLS    = 23          # starting grid width  — larger than screen
 MAZE_BASE_ROWS    = 17          # starting grid height — larger than screen
+MAZE_MAX_LEVELS   = 50          # final maze floor
+MAZE_KEYS_REQUIRED = 3          # keys needed to unlock the floor exit
+MAZE_KEY_RELOCATE_TIME = 110.0  # seconds before uncollected keys jump elsewhere
+MAZE_CORNER_WAVE_INTERVAL = 3.0 # seconds between corner enemy waves
+MAZE_CORNER_WAVE_SIZE = 5       # enemies spawned per corner wave
+MAZE_POTION_SPAWN_INTERVAL = 16.0 # seconds between maze potion spawns
+MAZE_MAX_POTIONS = 4            # max health/speed potions waiting in the maze
 
 # ── Maze enemy constants ──────────────────────────────────────────────────────
 MAZE_ENEMY_HEALTH         = 60     # HP per maze enemy
@@ -207,9 +214,9 @@ MAZE_ENEMY_SPAWN_MIN_INTERVAL = 0.55  # fastest spawn pace near maze completion
 MAZE_ENEMIES_PER_FLOOR    = 100    # total enemies created per maze floor
 MAZE_ENEMY_BULLET_LIFE    = 4.0    # max seconds before auto-removal
 MAZE_ENEMY_SPLIT_TIME     = 1.8    # seconds before a surviving enemy splits
-MAZE_ENEMY_BASE_CAP       = 7      # starting max enemies on a maze floor
+MAZE_ENEMY_BASE_CAP       = 15     # starting max enemies on a maze floor
 MAZE_ENEMY_CAP_PER_FLOOR  = 4      # extra enemy capacity per floor
-MAZE_ENEMY_MAX_CAP        = 28     # hard cap to keep performance under control
+MAZE_ENEMY_MAX_CAP        = 45     # hard cap to keep performance under control
 MAZE_BREACH_DROP_CHANCE   = 36     # % chance a maze enemy drops a breach cell
 MAZE_BREACH_DURATION      = 5.0    # seconds breach rounds can damage fragile walls
 MAZE_BREACH_MAX_STORAGE   = 4      # player can bank up to 4 wall-breaking charges
@@ -805,11 +812,14 @@ POWERUP_COLORS = {
     "beam360":  (255, 60,  20,  220),   # fiery orange-red
     "elec360":  (120, 80,  255, 220),   # electric violet
     "breach":   (255, 205, 60,  220),   # maze wall breaker
+    "maze_health": (30, 255, 105, 230),  # maze health potion
+    "maze_speed":  (255, 215, 35, 230),  # maze speed potion
 }
 POWERUP_LABELS = {
     "health":  "+HP",   "shield":  "SHIELD",
     "speed":   "SPEED", "triple":  "TRIPLE",  "beam360":  "360°",
     "elec360": "⚡360°", "breach": "BREACH",
+    "maze_health": "+HP", "maze_speed": "BLITZ",
 }
 # Types that only drop when the beam ship is active
 BEAM_ONLY_POWERUPS     = {"beam360"}
@@ -835,6 +845,28 @@ def _make_powerup_texture(kind: str) -> arcade.Texture:
 
     col = POWERUP_COLORS.get(kind, (200, 200, 200))
     r, g, b = col[0], col[1], col[2]
+
+    if kind in ("maze_health", "maze_speed"):
+        # Maze potions use a bottle silhouette instead of the square pickup panel.
+        d.ellipse((0, 0, S - 1, S - 1), fill=(r, g, b, 35))
+        d.ellipse((4, 4, S - 5, S - 5), fill=(r, g, b, 62))
+        d.rounded_rectangle((17, 4, 23, 12), radius=2, fill=(230, 250, 220, 235))
+        d.rounded_rectangle((15, 10, 25, 16), radius=3, fill=(35, 45, 44, 245),
+                            outline=(230, 250, 220, 210), width=1)
+        d.rounded_rectangle((10, 14, 30, 35), radius=7, fill=(r, g, b, 205),
+                            outline=(230, 255, 220, 235), width=2)
+        d.rounded_rectangle((13, 17, 27, 32), radius=5, fill=(r, g, b, 92))
+        d.line((15, 18, 13, 27), fill=(255, 255, 255, 115), width=2)
+        if kind == "maze_speed":
+            bolt = [(22, 17), (15, 25), (20, 25), (17, 33), (27, 22), (22, 22)]
+            d.polygon(bolt, fill=(255, 255, 185, 255))
+        else:
+            d.rectangle((18, 19, 22, 31), fill=(225, 255, 225, 245))
+            d.rectangle((14, 23, 26, 27), fill=(225, 255, 225, 245))
+        d.ellipse((S - 13, 7, S - 8, 12), fill=(255, 255, 255, 105))
+        tex = arcade.Texture(image=img)
+        _texture_cache[key] = tex
+        return tex
 
     # ── Outer glow ring ──────────────────────────────
     d.ellipse((1, 1, S-2, S-2),    fill=(r, g, b, 35))

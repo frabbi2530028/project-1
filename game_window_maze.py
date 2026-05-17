@@ -57,6 +57,11 @@ class MazeModeMixin:
         self.maze_progress_best = 0.0
         self.maze_map_open = False
         self.maze_enemies_created = 0
+        self.maze_keys_collected = 0
+        self.maze_key_relocate_timer = MAZE_KEY_RELOCATE_TIME
+        self.maze_corner_wave_timer = MAZE_CORNER_WAVE_INTERVAL
+        self.maze_potion_spawn_timer = MAZE_POTION_SPAWN_INTERVAL
+        self.maze_exit_lock_notice_timer = 0.0
 
         # ── Player ──────────────────────────────────
         ship = SHIPS[self.selected_ship]
@@ -119,6 +124,9 @@ class MazeModeMixin:
         self.particles          = []
         self.maze_exit_reached  = False
         self.boss_on_screen     = False
+        self._place_maze_keys()
+        self._spawn_maze_potion("maze_health")
+        self._spawn_maze_potion("maze_speed")
 
         self._pause_return_state = None
         self.game_state = STATE_MAZE
@@ -315,6 +323,160 @@ class MazeModeMixin:
         total = max(1, getattr(self, "maze_start_to_exit_steps", 1))
         return max(0.0, min(1.0, 1.0 - remaining / total))
 
+    def _maze_key_world(self, col: int, row: int) -> tuple[float, float]:
+        cs = self.maze_cell_size
+        ox, oy = self.maze_origin
+        return ox + (col + 0.5) * cs, oy + (row + 0.5) * cs
+
+    def _maze_key_reserved_cells(self) -> set[tuple[int, int]]:
+        maze = self.maze_grid
+        reserved = {
+            (0, maze.rows - 1),
+            (self.maze_exit_col, self.maze_exit_row),
+        }
+        if self.player is not None:
+            reserved.add(self._maze_player_cell())
+        for key in getattr(self, "maze_keys", []):
+            if not key.get("collected", False):
+                reserved.add((key["col"], key["row"]))
+        for enemy in getattr(self, "maze_enemies", []):
+            reserved.add((enemy.maze_col, enemy.maze_row))
+        return reserved
+
+    def _random_maze_key_cell(self, reserved: set[tuple[int, int]]) -> tuple[int, int]:
+        maze = self.maze_grid
+        start = (0, maze.rows - 1)
+        exit_cell = (self.maze_exit_col, self.maze_exit_row)
+        for _ in range(500):
+            col = random.randint(0, maze.cols - 1)
+            row = random.randint(0, maze.rows - 1)
+            if (col, row) in reserved:
+                continue
+            if abs(col - start[0]) + abs(row - start[1]) < 5:
+                continue
+            if abs(col - exit_cell[0]) + abs(row - exit_cell[1]) < 4:
+                continue
+            return col, row
+
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                if (col, row) not in reserved:
+                    return col, row
+        return start
+
+    def _place_maze_keys(self) -> None:
+        """Place the three glowing exit keys for this floor."""
+        self.maze_keys = []
+        reserved = self._maze_key_reserved_cells()
+        for idx in range(MAZE_KEYS_REQUIRED):
+            col, row = self._random_maze_key_cell(reserved)
+            reserved.add((col, row))
+            self.maze_keys.append({
+                "id": idx,
+                "col": col,
+                "row": row,
+                "collected": False,
+                "phase": random.uniform(0.0, math.tau),
+            })
+
+    def _relocate_maze_keys(self) -> None:
+        """Move any uncollected keys to fresh cells."""
+        reserved = self._maze_key_reserved_cells()
+        for key in getattr(self, "maze_keys", []):
+            if key.get("collected", False):
+                continue
+            reserved.discard((key["col"], key["row"]))
+            col, row = self._random_maze_key_cell(reserved)
+            key["col"] = col
+            key["row"] = row
+            key["phase"] = random.uniform(0.0, math.tau)
+            reserved.add((col, row))
+
+        self.maze_key_relocate_timer = MAZE_KEY_RELOCATE_TIME
+        self.notif_text = "KEYS SHIFTED!"
+        self.notif_color = (255, 220, 90)
+        self.notif_timer = 1.2
+
+    def _collect_maze_key_at_player(self) -> None:
+        pc, pr = self._maze_player_cell()
+        for key in getattr(self, "maze_keys", []):
+            if key.get("collected", False):
+                continue
+            if (key["col"], key["row"]) != (pc, pr):
+                continue
+            key["collected"] = True
+            self.maze_keys_collected = min(MAZE_KEYS_REQUIRED, self.maze_keys_collected + 1)
+            kx, ky = self._maze_key_world(pc, pr)
+            self.notif_text = f"KEY {self.maze_keys_collected}/{MAZE_KEYS_REQUIRED} ACQUIRED"
+            self.notif_color = (255, 230, 95)
+            self.notif_timer = 1.4
+            self._burst(kx, ky, 34, (255, 220, 90), 70, 260, 1.7, 3.5, .10, .28)
+            break
+
+    def _maze_pickup_reserved_cells(self) -> set[tuple[int, int]]:
+        reserved = self._maze_key_reserved_cells()
+        for pu in getattr(self, "powerups", []):
+            col = max(0, min(self.maze_grid.cols - 1,
+                             int((pu.center_x - self.maze_origin[0]) / self.maze_cell_size)))
+            row = max(0, min(self.maze_grid.rows - 1,
+                             int((pu.center_y - self.maze_origin[1]) / self.maze_cell_size)))
+            reserved.add((col, row))
+        return reserved
+
+    def _maze_random_pickup_cell(self) -> tuple[int, int]:
+        reserved = self._maze_pickup_reserved_cells()
+        return self._random_maze_key_cell(reserved)
+
+    def _maze_potion_count(self) -> int:
+        return sum(
+            1 for pu in getattr(self, "powerups", [])
+            if getattr(pu, "kind", "") in ("maze_health", "maze_speed")
+        )
+
+    def _spawn_maze_potion(self, kind: str | None = None) -> bool:
+        if self._maze_potion_count() >= MAZE_MAX_POTIONS:
+            return False
+        if kind is None:
+            need_health = self.player.health < self.player.max_health * 0.70
+            kind = "maze_health" if need_health or random.random() < 0.55 else "maze_speed"
+
+        col, row = self._maze_random_pickup_cell()
+        x, y = self._maze_key_world(col, row)
+        pu = Powerup(x, y, kind)
+        pu.change_y = 0
+        pu.life = 42.0
+        pu.scale = 1.25
+        self.powerups.append(pu)
+        glow = (30, 255, 105) if kind == "maze_health" else (255, 215, 35)
+        self._burst(x, y, 18, glow, 36, 140, 0.8, 2.2, .06, .18)
+        return True
+
+    def _collect_maze_potion(self, pu: Powerup) -> bool:
+        p = self.player
+        if pu.kind == "maze_health":
+            healed = min(45, p.max_health - p.health)
+            p.health = min(p.max_health, p.health + 45)
+            self.notif_text = (
+                f"+{int(healed)} HEALTH POTION!" if healed > 0 else "HEALTH ALREADY FULL!"
+            )
+            self.notif_color = (95, 255, 135)
+            self.notif_timer = 1.3
+            self._burst(pu.center_x, pu.center_y, 26,
+                        (35, 255, 120), 70, 240, 1.4, 3.0, .08, .24)
+            return True
+
+        if pu.kind == "maze_speed":
+            p.speed_active = True
+            p.speed_timer = max(getattr(p, "speed_timer", 0.0), POWERUP_DURATION + 2.0)
+            self.notif_text = "BLITZ SPEED!"
+            self.notif_color = (255, 225, 80)
+            self.notif_timer = 1.4
+            self._burst(pu.center_x, pu.center_y, 30,
+                        (255, 220, 45), 85, 285, 1.5, 3.4, .08, .24)
+            return True
+
+        return False
+
     def _maze_enemy_spawn_interval(self) -> float:
         progress = max(getattr(self, "maze_progress_best", 0.0), self._maze_completion_ratio())
         pressure = max(0.0, min(1.0, progress)) ** 0.85
@@ -346,6 +508,33 @@ class MazeModeMixin:
         self.maze_map_open = False
         self.mouse_held = False
         self.set_mouse_visible(False)
+
+    def _draw_maze_key(self, col: int, row: int, phase: float) -> None:
+        x, y = self._maze_key_world(col, row)
+        t = self.bg_time + phase
+        pulse = 0.5 + 0.5 * math.sin(t * 4.2)
+        y += math.sin(t * 2.6) * 5
+
+        glow = int(70 + 75 * pulse)
+        arcade.draw_circle_filled(x, y, 42 + 8 * pulse, (255, 205, 65, glow))
+        arcade.draw_circle_filled(x, y, 24 + 4 * pulse, (255, 240, 120, 80))
+        arcade.draw_circle_outline(x, y, 34 + 5 * pulse, (255, 245, 170, 155), 2)
+
+        head_r = 10
+        arcade.draw_circle_filled(x - 9, y + 7, head_r + 5, (255, 174, 38, 255))
+        arcade.draw_circle_filled(x - 9, y + 7, head_r - 1, (38, 24, 36, 245))
+        arcade.draw_circle_outline(x - 9, y + 7, head_r + 5, (255, 248, 180, 255), 3)
+        arcade.draw_lrbt_rectangle_filled(x + 1, x + 32, y + 1, y + 10, (255, 202, 58, 255))
+        arcade.draw_lrbt_rectangle_filled(x + 18, x + 24, y - 9, y + 2, (255, 202, 58, 255))
+        arcade.draw_lrbt_rectangle_filled(x + 28, x + 35, y - 12, y + 2, (255, 202, 58, 255))
+        arcade.draw_lrbt_rectangle_filled(x + 1, x + 32, y + 7, y + 10, (255, 250, 165, 225))
+        arcade.draw_circle_filled(x - 14, y + 12, 3, (255, 255, 210, 245))
+
+    def _draw_maze_keys(self) -> None:
+        for key in getattr(self, "maze_keys", []):
+            if key.get("collected", False):
+                continue
+            self._draw_maze_key(key["col"], key["row"], key.get("phase", 0.0))
 
     def _draw_maze_world(self):
         w, h   = self.width, self.height
@@ -451,11 +640,14 @@ class MazeModeMixin:
         ey2 = oy + (er2 + 0.5) * cs
         pr  = min(34, cs * 0.20)
         ep  = 0.5 + 0.5 * math.sin(t * 4.8)
-        arcade.draw_circle_filled(ex2, ey2, pr + 6 * ep, (40, 155, 115, 55))
-        arcade.draw_circle_filled(ex2, ey2, pr,            (*EXIT_C, 130))
-        arcade.draw_circle_outline(ex2, ey2, pr,            EXIT_C, 3)
-        arcade.draw_circle_outline(ex2, ey2, pr + 6 * ep, (*EXIT_C[:3], int(70 * ep)), 2)
-        arcade.draw_text("EXIT", ex2, ey2,
+        exit_unlocked = self.maze_keys_collected >= MAZE_KEYS_REQUIRED
+        exit_c = EXIT_C if exit_unlocked else (255, 165, 60)
+        exit_label = "EXIT" if exit_unlocked else "LOCK"
+        arcade.draw_circle_filled(ex2, ey2, pr + 6 * ep, (*exit_c[:3], 55))
+        arcade.draw_circle_filled(ex2, ey2, pr,            (*exit_c[:3], 130))
+        arcade.draw_circle_outline(ex2, ey2, pr,            exit_c, 3)
+        arcade.draw_circle_outline(ex2, ey2, pr + 6 * ep, (*exit_c[:3], int(70 * ep)), 2)
+        arcade.draw_text(exit_label, ex2, ey2,
                          (180, 255, 220, 220), 8, anchor_x="center", anchor_y="center",
                          bold=True, font_name=FU)
 
@@ -463,6 +655,9 @@ class MazeModeMixin:
         enx = ox + 0.5 * cs
         eny = oy + (maze.rows - 0.5) * cs
         arcade.draw_circle_filled(enx, eny, 14, (*ENTRY_C[:3], 45))
+
+        # ── Exit keys ───────────────────────────────
+        self._draw_maze_keys()
 
         # ── Particles (world space) ──────────────────
         self._draw_particles()
@@ -485,6 +680,22 @@ class MazeModeMixin:
                     bx_, bx_ + bar_w * ratio_, by_, by_ + 5, (255, 55, 55, 230))
 
         # ── Breach cells ─────────────────────────────
+        for pu in self.powerups:
+            if pu.kind not in ("maze_health", "maze_speed"):
+                continue
+            color = (30, 255, 105) if pu.kind == "maze_health" else (255, 215, 35)
+            pulse = 0.5 + 0.5 * math.sin(t * 5.5 + pu.wobble_phase)
+            arcade.draw_circle_filled(
+                pu.center_x, pu.center_y,
+                28 + 7 * pulse,
+                (*color, int(58 + 55 * pulse)),
+            )
+            arcade.draw_circle_outline(
+                pu.center_x, pu.center_y,
+                33 + 5 * pulse,
+                (*color, int(150 + 55 * pulse)),
+                2,
+            )
         self.powerups.draw()
 
         # ── Bullets ──────────────────────────────────
@@ -580,7 +791,7 @@ class MazeModeMixin:
                          (210, 235, 255, 240), 18, FU, anchor_x="right", bold=True)
 
         # ── Maze floor badge ────────────────────────
-        lbl = f"FLOOR  {self.maze_level + 1}"
+        lbl = f"FLOOR  {self.maze_level + 1}/{MAZE_MAX_LEVELS}"
         self._txt_shadow(lbl, w // 2, h - 28, (100, 255, 160, 230),
                          14, FU, anchor_x="center", bold=True)
 
@@ -608,9 +819,17 @@ class MazeModeMixin:
         # ── Timer ───────────────────────────────────
         self._txt_shadow(f"{self.time_alive:06.1f}s", w - 16, h - 52,
                          (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
-        enemies_created = min(MAZE_ENEMIES_PER_FLOOR, getattr(self, "maze_enemies_created", 0))
-        self._txt_shadow(f"ENEMIES  {enemies_created}/{MAZE_ENEMIES_PER_FLOOR}",
+        enemy_cap = min(
+            MAZE_ENEMY_BASE_CAP + self.maze_level * MAZE_ENEMY_CAP_PER_FLOOR,
+            MAZE_ENEMY_MAX_CAP,
+        )
+        self._txt_shadow(f"ENEMIES  {len(self.maze_enemies)}/{enemy_cap}",
                          w - 16, h - 72, (255, 145, 120, 190),
+                         10, FN, anchor_x="right", bold=True)
+        keys_left = max(0, MAZE_KEYS_REQUIRED - self.maze_keys_collected)
+        key_time = max(0, int(math.ceil(getattr(self, "maze_key_relocate_timer", 0.0))))
+        self._txt_shadow(f"KEYS  {self.maze_keys_collected}/{MAZE_KEYS_REQUIRED}   SHIFT {key_time:03d}s",
+                         w - 16, h - 90, (255, 220, 95, 215 if keys_left else 170),
                          10, FN, anchor_x="right", bold=True)
 
         # ── Breach-cell storage ─────────────────────
@@ -699,7 +918,17 @@ class MazeModeMixin:
         # Exit marker
         ex2 = mx + (self.maze_exit_col + 0.5) * mm_cs
         ey2 = my + (self.maze_exit_row + 0.5) * mm_cs
-        arcade.draw_circle_filled(ex2, ey2, mm_cs * 0.45, (0, 255, 155, 210))
+        exit_mini_c = (0, 255, 155, 210) if self.maze_keys_collected >= MAZE_KEYS_REQUIRED else (255, 165, 60, 210)
+        arcade.draw_circle_filled(ex2, ey2, mm_cs * 0.45, exit_mini_c)
+
+        # Key markers
+        for key in getattr(self, "maze_keys", []):
+            if key.get("collected", False):
+                continue
+            kx = mx + (key["col"] + 0.5) * mm_cs
+            ky = my + (key["row"] + 0.5) * mm_cs
+            arcade.draw_circle_filled(kx, ky, max(2, mm_cs * 0.36), (255, 220, 70, 235))
+            arcade.draw_circle_outline(kx, ky, max(3, mm_cs * 0.55), (255, 245, 160, 160), 1)
 
         # Player marker
         pc2, pr2 = self._maze_player_cell()
@@ -769,8 +998,17 @@ class MazeModeMixin:
 
         ex = mx + (self.maze_exit_col + 0.5) * mm_cs
         ey = my + (self.maze_exit_row + 0.5) * mm_cs
-        arcade.draw_circle_filled(ex, ey, max(5, mm_cs * 0.34), (105, 255, 170, 225))
-        arcade.draw_circle_outline(ex, ey, max(8, mm_cs * 0.56), (105, 255, 170, 160), 2)
+        exit_map_c = (105, 255, 170, 225) if self.maze_keys_collected >= MAZE_KEYS_REQUIRED else (255, 165, 60, 225)
+        arcade.draw_circle_filled(ex, ey, max(5, mm_cs * 0.34), exit_map_c)
+        arcade.draw_circle_outline(ex, ey, max(8, mm_cs * 0.56), (*exit_map_c[:3], 160), 2)
+
+        for key in getattr(self, "maze_keys", []):
+            if key.get("collected", False):
+                continue
+            kx = mx + (key["col"] + 0.5) * mm_cs
+            ky = my + (key["row"] + 0.5) * mm_cs
+            arcade.draw_circle_filled(kx, ky, max(4, mm_cs * 0.30), (255, 220, 70, 240))
+            arcade.draw_circle_outline(kx, ky, max(7, mm_cs * 0.52), (255, 245, 160, 170), 2)
 
         pc, pr = self._maze_player_cell()
         px = mx + (pc + 0.5) * mm_cs
@@ -812,13 +1050,18 @@ class MazeModeMixin:
         cx2 = (w - cw2) // 2;           cy2 = h // 2 - ch2 // 2
         arcade.draw_lrbt_rectangle_filled(cx2 + 6, cx2 + cw2 + 6, cy2 - 6, cy2 + ch2 - 6, (0, 0, 0, 70))
         arcade.draw_lrbt_rectangle_filled(cx2, cx2 + cw2, cy2, cy2 + ch2, (7, 10, 26, 240))
-        arcade.draw_lrbt_rectangle_outline(cx2, cx2 + cw2, cy2, cy2 + ch2, (200, 35, 35, 200), 2)
+        complete = getattr(self, "maze_run_complete", False)
+        accent = (120, 255, 160, 220) if complete else (200, 35, 35, 200)
+        title = "MAZE CLEAR" if complete else "MAZE OVER"
+        title_color = (120, 255, 160, 255) if complete else (255, 50, 50, 255)
+
+        arcade.draw_lrbt_rectangle_outline(cx2, cx2 + cw2, cy2, cy2 + ch2, accent, 2)
 
         mid = w // 2
-        self._txt_shadow("MAZE OVER", mid, cy2 + ch2 - 58, (255, 50, 50, 255),
+        self._txt_shadow(title, mid, cy2 + ch2 - 58, title_color,
                          50, FU, anchor_x="center", bold=True)
-        arcade.draw_line(cx2 + 24, cy2 + ch2 - 78, cx2 + cw2 - 24, cy2 + ch2 - 78, (200, 35, 35, 130), 1)
-        self._txt_shadow(f"FLOOR  {self.maze_level + 1}",
+        arcade.draw_line(cx2 + 24, cy2 + ch2 - 78, cx2 + cw2 - 24, cy2 + ch2 - 78, (*accent[:3], 130), 1)
+        self._txt_shadow(f"FLOOR  {min(self.maze_level + 1, MAZE_MAX_LEVELS)}/{MAZE_MAX_LEVELS}",
                          mid, cy2 + ch2 - 112, (120, 155, 215, 210), 12, FU, anchor_x="center")
         self._txt_shadow(f"SCORE  {self.score:,}", mid, cy2 + ch2 - 148,
                          (210, 235, 255, 245), 30, FN, anchor_x="center", bold=True)
@@ -836,6 +1079,16 @@ class MazeModeMixin:
             return
 
         self.time_alive += delta
+        self.maze_exit_lock_notice_timer = max(
+            0.0, getattr(self, "maze_exit_lock_notice_timer", 0.0) - delta)
+        self.maze_key_relocate_timer -= delta
+        if (self.maze_key_relocate_timer <= 0
+                and self.maze_keys_collected < MAZE_KEYS_REQUIRED):
+            self._relocate_maze_keys()
+        self.maze_potion_spawn_timer -= delta
+        if self.maze_potion_spawn_timer <= 0:
+            self.maze_potion_spawn_timer += MAZE_POTION_SPAWN_INTERVAL
+            self._spawn_maze_potion()
         w, h   = self.width, self.height
         p      = self.player
         maze   = self.maze_grid
@@ -893,6 +1146,9 @@ class MazeModeMixin:
                 random.uniform(1.2, 2.2), random.uniform(0.10, 0.22),
                 (90, 200, 255), 0.88)
 
+        # ── Key collection ───────────────────────────
+        self._collect_maze_key_at_player()
+
         # ── Exit check ───────────────────────────────
         pc2, pr2 = self._maze_player_cell()
         self.maze_progress_best = max(
@@ -901,14 +1157,30 @@ class MazeModeMixin:
         )
         if (pc2 == self.maze_exit_col and pr2 == self.maze_exit_row
                 and not self.maze_exit_reached):
-            self.maze_exit_reached = True
-            bonus = max(0, 2000 - int(self.time_alive * 5))
-            self.score += bonus
-            self.maze_level += 1
-            self.notif_text  = f"EXIT FOUND!  +{bonus} TIME BONUS  →  FLOOR {self.maze_level + 1}"
-            self.notif_color = (120, 255, 160)
-            self.notif_timer = 1.8
-            self.setup_maze(keep_player=True)
+            if self.maze_keys_collected < MAZE_KEYS_REQUIRED:
+                if self.maze_exit_lock_notice_timer <= 0:
+                    needed = MAZE_KEYS_REQUIRED - self.maze_keys_collected
+                    self.notif_text = f"EXIT LOCKED!  {needed} KEY{'S' if needed != 1 else ''} NEEDED"
+                    self.notif_color = (255, 190, 70)
+                    self.notif_timer = 1.1
+                    self.maze_exit_lock_notice_timer = 1.25
+            else:
+                self.maze_exit_reached = True
+                bonus = max(0, 2000 - int(self.time_alive * 5))
+                self.score += bonus
+                if self.maze_level + 1 >= MAZE_MAX_LEVELS:
+                    self.maze_run_complete = True
+                    self.notif_text = f"MAZE COMPLETE!  +{bonus} TIME BONUS"
+                    self.notif_color = (120, 255, 160)
+                    self.notif_timer = 1.8
+                    self.game_state = STATE_MAZE_OVER
+                    self.set_mouse_visible(True)
+                    return
+                self.maze_level += 1
+                self.notif_text  = f"EXIT FOUND!  +{bonus} TIME BONUS  →  FLOOR {self.maze_level + 1}"
+                self.notif_color = (120, 255, 160)
+                self.notif_timer = 1.8
+                self.setup_maze(keep_player=True)
 
         self._update_particles(delta)
 
@@ -919,9 +1191,10 @@ class MazeModeMixin:
                 pu.remove_from_sprite_lists()
                 continue
             if arcade.check_for_collision(pu, p):
-                self._collect_powerup(pu.kind)
-                self._burst(pu.center_x, pu.center_y, 12,
-                            (255, 195, 65), 45, 150, 0.9, 2.1, .06, .18)
+                if not self._collect_maze_potion(pu):
+                    self._collect_powerup(pu.kind)
+                    self._burst(pu.center_x, pu.center_y, 12,
+                                (255, 195, 65), 45, 150, 0.9, 2.1, .06, .18)
                 pu.remove_from_sprite_lists()
 
         # ── Player shooting (hold left-mouse to fire) ────────────────
@@ -1051,12 +1324,16 @@ class MazeModeMixin:
 
         # ── Enemy spawn timer ────────────────────────────────────────
         self.maze_spawn_timer -= delta
-        created = getattr(self, "maze_enemies_created", 0)
         if (self.maze_spawn_timer <= 0
-                and created < MAZE_ENEMIES_PER_FLOOR
                 and len(self.maze_enemies) < max_enemies):
             self.maze_spawn_timer = self._maze_enemy_spawn_interval()
             self._spawn_maze_enemy()
+
+        # ── Corner ambush wave ──────────────────────────────────────
+        self.maze_corner_wave_timer -= delta
+        if self.maze_corner_wave_timer <= 0:
+            self.maze_corner_wave_timer += MAZE_CORNER_WAVE_INTERVAL
+            self._spawn_maze_corner_wave(max_enemies)
 
         # ── Smooth camera follow (Among Us style) ───────
         total_w = maze.cols * cs
@@ -1079,25 +1356,86 @@ class MazeModeMixin:
 
     def _spawn_maze_enemy(self) -> bool:
         """Pick a random cell far from the player and place a MazeEnemy there."""
-        if getattr(self, "maze_enemies_created", 0) >= MAZE_ENEMIES_PER_FLOOR:
-            return False
-
         maze   = self.maze_grid
-        cs     = self.maze_cell_size
-        ox, oy = self.maze_origin
         pc, pr = self._maze_player_cell()
+        key_cells = {
+            (key["col"], key["row"])
+            for key in getattr(self, "maze_keys", [])
+            if not key.get("collected", False)
+        }
 
         for _ in range(40):          # up to 40 attempts to find a valid cell
             col = random.randint(0, maze.cols - 1)
             row = random.randint(0, maze.rows - 1)
             # Must be far from player, not on the exit
             if (abs(col - pc) + abs(row - pr) >= 7
-                    and not (col == self.maze_exit_col and row == self.maze_exit_row)):
-                enemy = MazeEnemy(col, row, cs, ox, oy)
-                self.maze_enemies.append(enemy)
-                self.maze_enemies_created += 1
-                return True
+                    and not (col == self.maze_exit_col and row == self.maze_exit_row)
+                    and (col, row) not in key_cells):
+                return self._spawn_maze_enemy_at(col, row)
         return False
+
+    def _spawn_maze_enemy_at(self, col: int, row: int) -> bool:
+        enemy = MazeEnemy(col, row, self.maze_cell_size, *self.maze_origin)
+        self.maze_enemies.append(enemy)
+        self.maze_enemies_created += 1
+        return True
+
+    def _spawn_maze_corner_wave(self, max_enemies: int) -> int:
+        """Spawn a five-enemy wave from a random maze corner when there is room."""
+        if len(self.maze_enemies) >= max_enemies:
+            return 0
+
+        maze = self.maze_grid
+        pc, pr = self._maze_player_cell()
+        corners = [
+            (0, 0),
+            (maze.cols - 1, 0),
+            (0, maze.rows - 1),
+            (maze.cols - 1, maze.rows - 1),
+        ]
+        random.shuffle(corners)
+        occupied = {
+            (enemy.maze_col, enemy.maze_row)
+            for enemy in self.maze_enemies
+        }
+        blocked = {
+            (0, maze.rows - 1),
+            (self.maze_exit_col, self.maze_exit_row),
+            (pc, pr),
+        }
+        for key in getattr(self, "maze_keys", []):
+            if not key.get("collected", False):
+                blocked.add((key["col"], key["row"]))
+
+        for corner_col, corner_row in corners:
+            candidates = []
+            col_range = range(0, min(5, maze.cols)) if corner_col == 0 else range(max(0, maze.cols - 5), maze.cols)
+            row_range = range(0, min(5, maze.rows)) if corner_row == 0 else range(max(0, maze.rows - 5), maze.rows)
+            for col in col_range:
+                for row in row_range:
+                    cell = (col, row)
+                    if cell in occupied or cell in blocked:
+                        continue
+                    if abs(col - pc) + abs(row - pr) < 6:
+                        continue
+                    candidates.append(cell)
+
+            random.shuffle(candidates)
+            spawned = 0
+            for col, row in candidates:
+                if spawned >= MAZE_CORNER_WAVE_SIZE or len(self.maze_enemies) >= max_enemies:
+                    break
+                self._spawn_maze_enemy_at(col, row)
+                occupied.add((col, row))
+                spawned += 1
+
+            if spawned:
+                self.notif_text = f"CORNER WAVE!  +{spawned}"
+                self.notif_color = (255, 120, 90)
+                self.notif_timer = max(self.notif_timer, 0.9)
+                return spawned
+
+        return 0
 
     def _drop_maze_breach_powerup(self, x: float, y: float) -> None:
         """Drop a stationary breach cell that can arm wall-breaking rounds."""
@@ -1110,7 +1448,6 @@ class MazeModeMixin:
     def _split_maze_enemy(self, enemy: MazeEnemy, max_enemies: int) -> bool:
         """Duplicate a surviving maze enemy into a nearby open cell."""
         if (len(self.maze_enemies) >= max_enemies
-                or getattr(self, "maze_enemies_created", 0) >= MAZE_ENEMIES_PER_FLOOR
                 or enemy.health <= 1):
             return False
 
@@ -1122,6 +1459,11 @@ class MazeModeMixin:
             for other in self.maze_enemies
             if other is not enemy
         }
+        key_cells = {
+            (key["col"], key["row"])
+            for key in getattr(self, "maze_keys", [])
+            if not key.get("collected", False)
+        }
         options = []
         for direction in (MazeGrid.N, MazeGrid.E, MazeGrid.S, MazeGrid.W):
             if not maze.is_open(enemy.maze_col, enemy.maze_row, direction):
@@ -1129,7 +1471,8 @@ class MazeModeMixin:
             col = enemy.maze_col + MazeGrid.DX[direction]
             row = enemy.maze_row + MazeGrid.DY[direction]
             if ((col, row) == (self.maze_exit_col, self.maze_exit_row)
-                    or (col, row) in occupied):
+                    or (col, row) in occupied
+                    or (col, row) in key_cells):
                 continue
             options.append((col, row))
 
@@ -1155,6 +1498,7 @@ class MazeModeMixin:
         return True
 
     def _maze_gameover(self):
+        self.maze_run_complete = False
         self.player.health = 0
         self.game_state = STATE_MAZE_OVER
         self.set_mouse_visible(True)
@@ -1214,7 +1558,7 @@ class MazeModeMixin:
                 "label":   "MAZE MODE",
                 "icon":    "⬡",
                 "desc":    "Navigate & survive",
-                "detail":  "Procedural maze arenas",
+                "detail":  f"{MAZE_MAX_LEVELS} floors · Procedural arenas",
                 "color":   (120, 255, 160),
                 "available": True,
             },
@@ -1681,6 +2025,7 @@ class MazeModeMixin:
             MAZE_PRESETS[0]
         )
         self.maze_level = 0
+        self.maze_run_complete = False
         self.score      = 0
         self.time_alive = 0.0
         self.run_coins  = 0

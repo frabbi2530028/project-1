@@ -1088,7 +1088,8 @@ class MazeModeMixin:
         self.maze_potion_spawn_timer -= delta
         if self.maze_potion_spawn_timer <= 0:
             self.maze_potion_spawn_timer += MAZE_POTION_SPAWN_INTERVAL
-            self._spawn_maze_potion()
+            self._spawn_maze_potion("maze_health")
+            self._spawn_maze_potion("maze_speed")
         w, h   = self.width, self.height
         p      = self.player
         maze   = self.maze_grid
@@ -1329,7 +1330,7 @@ class MazeModeMixin:
             self.maze_spawn_timer = self._maze_enemy_spawn_interval()
             self._spawn_maze_enemy()
 
-        # ── Corner ambush wave ──────────────────────────────────────
+        # ── Five-enemy ambush wave every 10 seconds ─────────────────
         self.maze_corner_wave_timer -= delta
         if self.maze_corner_wave_timer <= 0:
             self.maze_corner_wave_timer += MAZE_CORNER_WAVE_INTERVAL
@@ -1546,7 +1547,7 @@ class MazeModeMixin:
         modes = [
             {
                 "key":     "normal",
-                "label":   "NORMAL",
+                "label":   "CLASSIC",
                 "icon":    "◈",
                 "desc":    "Classic space combat",
                 "detail":  "10 levels · Shop · Boss fights",
@@ -1555,7 +1556,7 @@ class MazeModeMixin:
             },
             {
                 "key":     "maze",
-                "label":   "MAZE MODE",
+                "label":   "MAZE",
                 "icon":    "⬡",
                 "desc":    "Navigate & survive",
                 "detail":  f"{MAZE_MAX_LEVELS} floors · Procedural arenas",

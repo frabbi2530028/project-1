@@ -198,10 +198,10 @@ MAZE_BASE_ROWS    = 17          # starting grid height — larger than screen
 MAZE_MAX_LEVELS   = 50          # final maze floor
 MAZE_KEYS_REQUIRED = 3          # keys needed to unlock the floor exit
 MAZE_KEY_RELOCATE_TIME = 110.0  # seconds before uncollected keys jump elsewhere
-MAZE_CORNER_WAVE_INTERVAL = 3.0 # seconds between corner enemy waves
+MAZE_CORNER_WAVE_INTERVAL = 10.0 # seconds between five-enemy maze waves
 MAZE_CORNER_WAVE_SIZE = 5       # enemies spawned per corner wave
-MAZE_POTION_SPAWN_INTERVAL = 16.0 # seconds between maze potion spawns
-MAZE_MAX_POTIONS = 4            # max health/speed potions waiting in the maze
+MAZE_POTION_SPAWN_INTERVAL = 10.0 # seconds between repeated health/speed potion spawns
+MAZE_MAX_POTIONS = 8            # max health/speed potions waiting in the maze
 
 # ── Maze enemy constants ──────────────────────────────────────────────────────
 MAZE_ENEMY_HEALTH         = 60     # HP per maze enemy

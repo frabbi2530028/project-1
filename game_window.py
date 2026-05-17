@@ -710,16 +710,53 @@ class GameWindow(MazeModeMixin, arcade.Window):
         ct = cb + ch
         pcx = w // 2
 
-        fill = theme_c["card_sel_fill"] if avl else theme_c["locked_fill"]
-        bord = theme_c["card_sel_border"] if avl else theme_c["locked_border"]
-        bthk = 3 if avl else 1
-        arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
-        arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, bord, bthk)
-
         if avl:
             pulse = 0.5 + 0.5 * math.sin(t * 4.5)
+            sweep = 0.5 + 0.5 * math.sin(t * 2.0)
+            ship_c = tuple(ship["color"][:3])
+            mode_c = (120, 255, 160) if is_maze_loadout else ship_c
+            glass_fill = (
+                max(4, int(mode_c[0] * 0.08)),
+                max(7, int(mode_c[1] * 0.08)),
+                max(14, int(mode_c[2] * 0.10)),
+                238,
+            )
+            wash = (
+                max(12, int(ship_c[0] * 0.18)),
+                max(16, int(ship_c[1] * 0.18)),
+                max(22, int(ship_c[2] * 0.18)),
+                82,
+            )
+            border = (
+                min(255, int((ship_c[0] + mode_c[0]) * 0.55)),
+                min(255, int((ship_c[1] + mode_c[1]) * 0.55)),
+                min(255, int((ship_c[2] + mode_c[2]) * 0.55)),
+                255,
+            )
+
+            arcade.draw_lrbt_rectangle_filled(cl + 8, cr + 8, cb - 8, ct - 8, (0, 0, 0, 86))
+            arcade.draw_lrbt_rectangle_filled(
+                cl - 7, cr + 7, cb - 7, ct + 7, (*mode_c, int(22 + 30 * pulse)))
+            arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, glass_fill)
+            arcade.draw_lrbt_rectangle_filled(cl + 2, cr - 2, cb + ch * 0.48, ct - 2, wash)
+            arcade.draw_lrbt_rectangle_filled(
+                cl + 2, cr - 2, ct - 9, ct - 3, (*border[:3], int(90 + 70 * sweep)))
+            arcade.draw_lrbt_rectangle_filled(
+                cl + 2, cr - 2, cb + 3, cb + 8, (*mode_c, int(44 + 46 * pulse)))
+
+            scan_gap = max(12, scaled(18))
+            scan_off = int((t * 24) % scan_gap)
+            for sy in range(int(cb + 14 + scan_off), int(ct - 14), scan_gap):
+                arcade.draw_line(cl + 18, sy, cr - 18, sy, (*mode_c, 24), 1)
+
+            arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, border, 2)
             arcade.draw_lrbt_rectangle_outline(
-                cl - 3, cr + 3, cb - 3, ct + 3, (*ship["color"], int(55 + 50 * pulse)), 2)
+                cl - 3, cr + 3, cb - 3, ct + 3, (*ship_c, int(58 + 52 * pulse)), 2)
+        else:
+            fill = theme_c["locked_fill"]
+            bord = theme_c["locked_border"]
+            arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
+            arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, bord, 1)
 
         content_pad = max(16, int(cw * 0.06))
         fname_sz = max(22, min(32, cw // 12))
@@ -751,8 +788,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     prev_tex = load_texture_clean(prev_ship["texture"], prev_ship["tex_scale"])
                     prev_x = pcx - anim_dir * slide * ease
                     prev_scale = 1.0 - 0.16 * ease
-                    arcade.draw_circle_filled(prev_x, pcy, min(48, preview_width * 0.17),
-                                              (*prev_ship["color"], int(34 * (1.0 - ease))))
                     _draw_texture_fitted(prev_tex, prev_x, pcy, preview_width * prev_scale,
                                          preview_height * prev_scale)
             elif anim_p >= 1.0:
@@ -762,8 +797,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
             draw_x = pcx + anim_dir * slide * (1.0 - ease) if anim_from is not None else pcx
             draw_y = pcy + bob
             draw_scale = 0.88 + 0.12 * ease
-            arcade.draw_circle_filled(draw_x, pcy, min(52, preview_width * 0.18),
-                                      (*ship["color"], 42 + int(18 * math.sin(t * 3))))
             _draw_texture_fitted(tex, draw_x, draw_y, preview_width * draw_scale,
                                  preview_height * draw_scale)
         else:
@@ -772,9 +805,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
                              anchor_x="center", anchor_y="center", bold=True,
                              font_name=FONT_UI_MENU)
 
-        nc = theme_c["card_sel_border"] if avl else theme_c["locked_text"]
-        tagline_c = (*theme_c["text"][:3], 220) if avl else theme_c["locked_text"]
-        stat_c = (*theme_c["text"][:3], 235) if avl else theme_c["locked_text"]
+        ship_accent = tuple(ship["color"][:3]) if avl else theme_c["locked_text"][:3]
+        mode_accent = (120, 255, 160) if is_maze_loadout else ship_accent
+        nc = (*ship_accent, 255) if avl else theme_c["locked_text"]
+        tagline_c = (224, 238, 255, 228) if avl else theme_c["locked_text"]
+        stat_c = (*mode_accent, 235) if avl else theme_c["locked_text"]
         self._txt_shadow(ship["name"], pcx, name_y, nc, fname_sz, FONT_UI_MENU,
                          anchor_x="center", bold=True, ox=1, oy=-1)
         self._txt_shadow(ship["tagline"] if avl else "COMING SOON", pcx, tag_y,
@@ -792,11 +827,18 @@ class GameWindow(MazeModeMixin, arcade.Window):
             sx = cl + stat_gap * (idx + 0.5)
             self._txt_shadow(lbl, sx, stats_y + 16, stat_c, fstat_sz, FONT_NUMERIC,
                              anchor_x="center", bold=True, ox=1, oy=-1)
+            pip_fill = (*ship_accent, 255) if avl else theme_c["stat_filled"]
+            pip_empty = (
+                max(16, int(ship_accent[0] * 0.16)),
+                max(18, int(ship_accent[1] * 0.16)),
+                max(24, int(ship_accent[2] * 0.16)),
+                210,
+            ) if avl else theme_c["stat_empty"]
             self._draw_stat_pips(sx, stats_y, val, 5,
-                                 theme_c["stat_filled"], theme_c["stat_empty"], max(72, int(stat_gap * 0.58)))
+                                 pip_fill, pip_empty, max(72, int(stat_gap * 0.58)))
 
         if avl:
-            self._txt_shadow("✔ SELECTED", pcx, badge_y, theme_c["selected_badge"],
+            self._txt_shadow("✔ SELECTED", pcx, badge_y, (*mode_accent, 255),
                              fstat_sz, FONT_UI_MENU, anchor_x="center", bold=True, ox=1, oy=-1)
 
         self._ship_cards[self.selected_ship] = (cl, cr, cb, ct)
@@ -808,9 +850,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
         right_x = min(pr - 34 - arrow_w, cr + scaled(30))
         for name, x, label in (("ship_prev", left_x, "<"), ("ship_next", right_x, ">")):
             hov = self._is_hovering(x, x + arrow_w, arrow_y, arrow_y + arrow_h)
+            arrow_idle = (
+                max(9, int(mode_accent[0] * 0.13)),
+                max(12, int(mode_accent[1] * 0.13)),
+                max(18, int(mode_accent[2] * 0.13)),
+                205,
+            )
             _draw_btn(x, arrow_w, arrow_y, arrow_h,
-                      theme_c["btn_hover"] if hov else (*theme_c["btn_fill"][:3], 185),
-                      theme_c["btn_border"], theme_c["btn_text"],
+                      (*mode_accent, 132) if hov else arrow_idle,
+                      (*mode_accent, 232), theme_c["btn_text"],
                       label, scaled(30))
             self._menu_btns[name] = (x, x + arrow_w, arrow_y, arrow_y + arrow_h)
 
@@ -876,9 +924,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
         bx = w//2-bw//2;  by = play_y - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
         play_label = "[ RESUME ]" if is_pause else ("[ CHOOSE PLAN ]" if is_maze_loadout else "[ PLAY GAME ]")
+        play_idle = (
+            max(10, int(mode_accent[0] * 0.18)),
+            max(14, int(mode_accent[1] * 0.18)),
+            max(20, int(mode_accent[2] * 0.18)),
+            224,
+        )
         _draw_btn(bx, bw, by, bh,
-                  theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
-                  theme_c["btn_border"], theme_c["btn_text"],
+                  (*mode_accent, 168) if hov_p else play_idle,
+                  (*mode_accent, 238), theme_c["btn_text"],
                   play_label, scaled(20))
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
 

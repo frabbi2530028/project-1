@@ -233,11 +233,31 @@ class MazeModeMixin:
             hp = maze.wall_hp(col, row, direction)
             ratio = max(0.0, min(1.0, hp / max(1, maze.breakable_wall_max_hp)))
             pulse = 0.65 + 0.35 * math.sin(self.bg_time * 4.0 + col * 0.7 + row * 0.4)
-            basalt = (58, 32, 30, 255)
-            ember = (255, int(86 + 80 * pulse), int(22 + 28 * ratio), 245)
-            lava_glow = (255, 72, 20, int(70 + 65 * pulse))
+            theme_rgb = tuple(
+                int(c) for c in (glow_color[:3] if len(glow_color) >= 3 else (255, 72, 20))
+            )
+            glow_strength = 0.62 + 0.22 * pulse + 0.16 * ratio
+            basalt = (
+                max(18, int(theme_rgb[0] * 0.18)),
+                max(18, int(theme_rgb[1] * 0.18)),
+                max(20, int(theme_rgb[2] * 0.18)),
+                255,
+            )
+            ember = (
+                min(255, int(theme_rgb[0] * glow_strength)),
+                min(255, int(theme_rgb[1] * glow_strength)),
+                min(255, int(theme_rgb[2] * glow_strength)),
+                245,
+            )
+            ember_dim = (
+                max(20, int(theme_rgb[0] * 0.52)),
+                max(20, int(theme_rgb[1] * 0.52)),
+                max(20, int(theme_rgb[2] * 0.52)),
+                235,
+            )
+            themed_glow = (*theme_rgb, int(70 + 65 * pulse))
             corner_r = min(thick * 0.28, 18)
-            self._draw_round_lrbt(left - 4, right + 4, bottom - 4, top + 4, lava_glow, corner_r + 4)
+            self._draw_round_lrbt(left - 4, right + 4, bottom - 4, top + 4, themed_glow, corner_r + 4)
             self._draw_round_lrbt(left, right, bottom, top, basalt, corner_r)
 
             rim = max(5, int(thick * 0.18))
@@ -246,7 +266,7 @@ class MazeModeMixin:
                 arcade.draw_lrbt_rectangle_filled(left + corner_r, right - corner_r,
                                                    top - rim, top, ember)
                 arcade.draw_lrbt_rectangle_filled(left + corner_r, right - corner_r,
-                                                   bottom, bottom + rim, (205, 42, 24, 235))
+                                                   bottom, bottom + rim, ember_dim)
                 wave_y = cy + math.sin(self.bg_time * 3.0 + col) * thick * 0.10
                 arcade.draw_lrbt_rectangle_filled(left + 14, right - 14,
                                                    wave_y - vein / 2, wave_y + vein / 2, ember)
@@ -257,7 +277,7 @@ class MazeModeMixin:
             else:
                 arcade.draw_lrbt_rectangle_filled(left, left + rim,
                                                    bottom + corner_r, top - corner_r,
-                                                   (205, 42, 24, 235))
+                                                   ember_dim)
                 arcade.draw_lrbt_rectangle_filled(right - rim, right,
                                                    bottom + corner_r, top - corner_r, ember)
                 wave_x = cx + math.sin(self.bg_time * 3.0 + row) * thick * 0.10
@@ -608,7 +628,7 @@ class MazeModeMixin:
             int(WALL_BASE_C[2] + 12 * p2),
             255,
         )
-        gw = (0, 0, 0, 85)
+        gw = (*mode_c, 85)
 
         # Outer border (always solid)
         bx = ox - wt2;  by = oy - wt2

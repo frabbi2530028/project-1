@@ -45,8 +45,12 @@ POWERUP_KEYS = {
     arcade.key.KEY_1: "speed",
     arcade.key.KEY_2: "shield",
     arcade.key.KEY_3: "triple",
-    arcade.key.KEY_4: "breach",    # Maze-mode wall breaker
     arcade.key.KEY_5: "elec360",   # Reaper special
+    arcade.key.NUM_1: "speed",
+    arcade.key.NUM_2: "shield",
+    arcade.key.NUM_3: "triple",
+    arcade.key.NUM_5: "elec360",
+    arcade.key.B: "breach",        # Maze-mode wall breaker
 }
 
 # ─────────────────────────────────────────────────────
@@ -200,8 +204,8 @@ MAZE_KEYS_REQUIRED = 3          # keys needed to unlock the floor exit
 MAZE_KEY_RELOCATE_TIME = 110.0  # seconds before uncollected keys jump elsewhere
 MAZE_CORNER_WAVE_INTERVAL = 10.0 # seconds between five-enemy maze waves
 MAZE_CORNER_WAVE_SIZE = 5       # enemies spawned per corner wave
-MAZE_POTION_SPAWN_INTERVAL = 10.0 # seconds between repeated health/speed potion spawns
-MAZE_MAX_POTIONS = 8            # max health/speed potions waiting in the maze
+MAZE_POTION_SPAWN_INTERVAL = 10.0 # seconds between repeated maze powerup spawns
+MAZE_MAX_POTIONS = 12           # max uncollected powerups waiting in the maze
 
 # ── Maze enemy constants ──────────────────────────────────────────────────────
 MAZE_ENEMY_HEALTH         = 60     # HP per maze enemy
@@ -214,10 +218,11 @@ MAZE_ENEMY_SPAWN_MIN_INTERVAL = 0.55  # fastest spawn pace near maze completion
 MAZE_ENEMIES_PER_FLOOR    = 100    # total enemies created per maze floor
 MAZE_ENEMY_BULLET_LIFE    = 4.0    # max seconds before auto-removal
 MAZE_ENEMY_SPLIT_TIME     = 1.8    # seconds before a surviving enemy splits
-MAZE_ENEMY_BASE_CAP       = 100    # starting max active enemies on a maze floor
+MAZE_ENEMY_BASE_CAP       = 200    # starting max active enemies on a maze floor
 MAZE_ENEMY_CAP_PER_FLOOR  = 0      # cap stays fixed unless MAZE_ENEMY_MAX_CAP changes
-MAZE_ENEMY_MAX_CAP        = 100    # hard cap for active maze enemies
-MAZE_BREACH_DROP_CHANCE   = 36     # % chance a maze enemy drops a breach cell
+MAZE_ENEMY_MAX_CAP        = 200    # hard cap for active maze enemies
+MAZE_POWERUP_DROP_CHANCE  = 45     # % chance a maze enemy drops a powerup
+MAZE_BREACH_DROP_CHANCE   = MAZE_POWERUP_DROP_CHANCE
 MAZE_BREACH_DURATION      = 5.0    # seconds breach rounds can damage fragile walls
 MAZE_BREACH_MAX_STORAGE   = 4      # player can bank up to 4 wall-breaking charges
 MAZE_BREAKABLE_WALL_HP    = 3      # breach hits needed to crack a fragile wall
@@ -804,6 +809,7 @@ def _draw_texture_fitted(texture: arcade.Texture, center_x: float, center_y: flo
 # ─────────────────────────────────────────────────────
 
 POWERUP_TYPES  = ["health", "shield", "speed", "triple", "beam360", "elec360", "breach"]
+MAZE_POWERUP_TYPES = list(POWERUP_TYPES)
 POWERUP_COLORS = {
     "health":   (0,   255, 90,  220),
     "shield":   (0,   190, 255, 220),
@@ -833,8 +839,8 @@ BREACH_ONLY_POWERUPS = {"breach"}
 #  POWERUP TEXTURES  (procedural, PIL-generated)
 # ─────────────────────────────────────────────────────
 
-def _make_powerup_texture(kind: str) -> arcade.Texture:
-    key = ("pu_tex_v2", kind)
+def _make_powerup_texture(kind: str, maze_style: bool = False) -> arcade.Texture:
+    key = ("pu_tex_v3", kind, maze_style)
     if key in _texture_cache:
         return _texture_cache[key]
 
@@ -845,6 +851,57 @@ def _make_powerup_texture(kind: str) -> arcade.Texture:
 
     col = POWERUP_COLORS.get(kind, (200, 200, 200))
     r, g, b = col[0], col[1], col[2]
+
+    if maze_style and kind not in ("maze_health", "maze_speed"):
+        # Maze pickups are crystal cores: brighter, rounder, and easier to read
+        # against the dense wall art than the square normal-mode panels.
+        for radius, alpha in ((19, 42), (16, 70), (13, 95)):
+            d.ellipse((cx - radius, cx - radius, cx + radius, cx + radius),
+                      fill=(r, g, b, alpha))
+        d.ellipse((4, 4, S - 5, S - 5), outline=(r, g, b, 165), width=2)
+        d.ellipse((8, 8, S - 9, S - 9), fill=(10, 14, 30, 230),
+                  outline=(min(255, r + 35), min(255, g + 35), min(255, b + 35), 240),
+                  width=2)
+        d.polygon([(cx, 7), (31, cx), (cx, 33), (9, cx)],
+                  fill=(r, g, b, 88),
+                  outline=(255, 255, 230, 145))
+        d.arc((5, 5, S - 6, S - 6), 205, 335,
+              fill=(255, 255, 255, 105), width=2)
+        d.arc((8, 8, S - 9, S - 9), 25, 135,
+              fill=(255, 255, 255, 70), width=1)
+
+        symbol = (245, 255, 235, 245)
+        if kind == "speed":
+            pts = [(cx + 4, 8), (cx - 4, 21), (cx + 2, 21),
+                   (cx - 4, 33), (cx + 8, 17), (cx + 2, 17)]
+            d.polygon(pts, fill=symbol)
+        elif kind == "shield":
+            d.polygon([(cx, 9), (cx + 11, 14), (cx + 9, 25),
+                       (cx, 33), (cx - 9, 25), (cx - 11, 14)],
+                      outline=symbol, fill=(r, g, b, 105))
+            d.line((cx, 14, cx, 27), fill=symbol, width=2)
+        elif kind == "triple":
+            for ox in (-8, 0, 8):
+                d.rounded_rectangle((cx + ox - 3, 10, cx + ox + 3, 30),
+                                    radius=3, fill=symbol)
+        elif kind in ("beam360", "elec360"):
+            for i in range(10):
+                a = math.radians(i * 36)
+                x1 = cx + math.cos(a) * 4;   y1 = cx + math.sin(a) * 4
+                x2 = cx + math.cos(a) * 14;  y2 = cx + math.sin(a) * 14
+                d.line((x1, y1, x2, y2), fill=symbol, width=2)
+            d.ellipse((cx - 4, cx - 4, cx + 4, cx + 4), fill=(r, g, b, 255))
+        elif kind == "breach":
+            d.line((cx - 10, cx, cx + 10, cx), fill=symbol, width=2)
+            d.line((cx - 2, 10, cx + 3, cx - 1, cx - 1, cx + 5, cx + 5, 30),
+                   fill=symbol, width=2)
+        elif kind == "health":
+            d.rectangle((cx - 2, 11, cx + 2, 29), fill=symbol)
+            d.rectangle((11, cx - 2, 29, cx + 2), fill=symbol)
+        d.ellipse((S - 13, 7, S - 8, 12), fill=(255, 255, 255, 150))
+        tex = arcade.Texture(image=img)
+        _texture_cache[key] = tex
+        return tex
 
     if kind in ("maze_health", "maze_speed"):
         # Maze potions use a bottle silhouette instead of the square pickup panel.
@@ -934,7 +991,9 @@ def _make_powerup_texture(kind: str) -> arcade.Texture:
 def _preload_powerup_textures():
     for k in POWERUP_TYPES:
         _make_powerup_texture(k)
-    _make_powerup_texture("health")
+        _make_powerup_texture(k, maze_style=True)
+    _make_powerup_texture("maze_health")
+    _make_powerup_texture("maze_speed")
 
 
 # ===== Merged from game_entities.py =====
@@ -946,12 +1005,13 @@ from PIL import Image, ImageDraw
 
 
 class Powerup(arcade.Sprite):
-    def __init__(self, x: float, y: float, kind: str):
+    def __init__(self, x: float, y: float, kind: str, maze_style: bool = False):
         super().__init__()
-        self.texture      = _make_powerup_texture(kind)
+        self.texture      = _make_powerup_texture(kind, maze_style=maze_style)
         self.center_x     = x
         self.center_y     = y
         self.kind         = kind
+        self.maze_style   = maze_style
         self.change_y     = -POWERUP_FALL_SPEED
         self.wobble_phase = random.uniform(0.0, math.tau)
         self.life         = POWERUP_SCREEN_LIFE   # fade + auto-remove timer

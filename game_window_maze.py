@@ -260,8 +260,8 @@ class MazeModeMixin:
         self.notif_timer = 0.8
         self._burst(enemy.center_x, enemy.center_y, 22,
                     color, 65, 240, 1.5, 3.2, .12, .32)
-        if random.randint(1, 100) <= MAZE_BREACH_DROP_CHANCE:
-            self._drop_maze_breach_powerup(enemy.center_x, enemy.center_y)
+        if random.randint(1, 100) <= MAZE_POWERUP_DROP_CHANCE:
+            self._drop_maze_powerup(enemy.center_x, enemy.center_y)
         enemy.remove_from_sprite_lists()
 
     @staticmethod
@@ -562,12 +562,12 @@ class MazeModeMixin:
 
         col, row = self._maze_random_pickup_cell()
         x, y = self._maze_key_world(col, row)
-        pu = Powerup(x, y, kind)
+        pu = Powerup(x, y, kind, maze_style=True)
         pu.change_y = 0
-        pu.life = 42.0
-        pu.scale = 1.25
+        pu.life = 60.0
+        pu.scale = 1.35
         self.powerups.append(pu)
-        glow = (30, 255, 105) if kind == "maze_health" else (255, 215, 35)
+        glow = POWERUP_COLORS.get(kind, (255, 255, 255))[:3]
         self._burst(x, y, 18, glow, 36, 140, 0.8, 2.2, .06, .18)
         return True
 
@@ -799,21 +799,19 @@ class MazeModeMixin:
                 arcade.draw_lrbt_rectangle_filled(
                     bx_, bx_ + bar_w * ratio_, by_, by_ + 5, (255, 55, 55, 230))
 
-        # ── Breach cells ─────────────────────────────
+        # ── Maze powerup glows ───────────────────────
         for pu in self.powerups:
-            if pu.kind not in ("maze_health", "maze_speed"):
-                continue
-            color = (30, 255, 105) if pu.kind == "maze_health" else (255, 215, 35)
+            color = POWERUP_COLORS.get(pu.kind, (255, 255, 255))[:3]
             pulse = 0.5 + 0.5 * math.sin(t * 5.5 + pu.wobble_phase)
             arcade.draw_circle_filled(
                 pu.center_x, pu.center_y,
-                28 + 7 * pulse,
-                (*color, int(58 + 55 * pulse)),
+                30 + 9 * pulse,
+                (*color, int(46 + 58 * pulse)),
             )
             arcade.draw_circle_outline(
                 pu.center_x, pu.center_y,
-                33 + 5 * pulse,
-                (*color, int(150 + 55 * pulse)),
+                36 + 6 * pulse,
+                (*color, int(135 + 70 * pulse)),
                 2,
             )
         self.powerups.draw()
@@ -868,6 +866,11 @@ class MazeModeMixin:
         p      = self.player
         FU     = FONT_UI_MENU
         FN     = FONT_NUMERIC
+
+        if not self.show_hud:
+            self._txt_shadow("[H] show HUD", 14, h - 18,
+                             (110, 135, 185, 110), 9, FU)
+            return
 
         # ── Health readout: classic stacked number + segmented bar ──
         hp_ratio = max(0.0, min(1.0, p.health / max(1, p.max_health)))
@@ -971,15 +974,17 @@ class MazeModeMixin:
         arcade.draw_lrbt_rectangle_outline(
             panel_x, panel_x + panel_w, panel_y - panel_h, panel_y,
             (*amber, 180 if breach_count else 85), 1)
-        label = f"[4] BREACH  {breach_count}/{MAZE_BREACH_MAX_STORAGE}"
+        label = f"[B] BREACH  {breach_count}/{MAZE_BREACH_MAX_STORAGE}"
         if active:
             label += f"  {p.breach_timer:.0f}s"
         self._txt_shadow(label, panel_x + 10, panel_y - 20,
                          (*amber, 230 if breach_count or active else 130),
                          10, FN, bold=True)
 
+        self._draw_powerup_panel(p, t, FU, FN)
+
         # ── Hint ────────────────────────────────────
-        arcade.draw_text("WASD Move · Hold LMB to Fire · [4] Breach Walls · Find the EXIT · ESC Pause · H Hide HUD",
+        arcade.draw_text("WASD Move · Hold LMB to Fire · 1-3 Power-ups · 5 Special · B Breach · Find the EXIT · ESC Pause · H Hide HUD",
                          w // 2, 12, (70, 100, 155, 130), 8,
                          anchor_x="center", font_name=FN)
 
@@ -1327,7 +1332,7 @@ class MazeModeMixin:
 
         self._update_particles(delta)
 
-        # ── Maze-only breach powerups ───────────────────────────────
+        # ── Maze powerups ───────────────────────────────────────────
         self.powerups.update(delta)
         for pu in list(self.powerups):
             if pu.life <= 0:
@@ -1344,7 +1349,7 @@ class MazeModeMixin:
         if self.mouse_held:
             is_beam_ship = (self.selected_ship in BEAM_SHIP_INDICES)
             is_electric_ship = (self.selected_ship in ELECTRIC_SHIP_INDICES)
-            if is_electric_ship and p.elec360_active:
+            if p.elec360_active:
                 fire_rate = ELECTRIC_360_FIRE_RATE
             else:
                 fire_rate = ELECTRIC_FIRE_RATE if is_electric_ship else NORMAL_FIRE_RATE
@@ -1354,17 +1359,19 @@ class MazeModeMixin:
                 # Convert screen-space mouse → world coords
                 mx_w = self.maze_cam_x + self.mouse_x
                 my_w = self.maze_cam_y + self.mouse_y
-                if is_beam_ship:
+                if is_beam_ship or p.beam360_active:
                     first_new = len(self.beams)
                     self._fire_beam(p.beam360_active, aim_x=mx_w, aim_y=my_w)
                     self._clip_new_maze_beams(first_new)
-                elif is_electric_ship:
+                elif is_electric_ship or p.elec360_active:
                     self._fire_electric(full_360=p.elec360_active, aim_x=mx_w, aim_y=my_w)
                 else:
-                    ang = math.atan2(my_w - p.center_y, mx_w - p.center_x)
-                    b = Bullet(p.center_x, p.center_y, ang)
-                    self.maze_bullets.append(b)
-                    self._spawn_muzzle(p.center_x, p.center_y, ang)
+                    base = math.atan2(my_w - p.center_y, mx_w - p.center_x)
+                    for off in ([-0.18, 0.0, 0.18] if p.triple_active else [0.0]):
+                        ang = base + off
+                        b = Bullet(p.center_x, p.center_y, ang)
+                        self.maze_bullets.append(b)
+                        self._spawn_muzzle(p.center_x, p.center_y, ang)
         else:
             self.fire_timer = 0.0
 
@@ -1619,13 +1626,17 @@ class MazeModeMixin:
 
         return 0
 
-    def _drop_maze_breach_powerup(self, x: float, y: float) -> None:
-        """Drop a stationary breach cell that can arm wall-breaking rounds."""
-        pu = Powerup(x, y, "breach")
+    def _drop_maze_powerup(self, x: float, y: float, kind: str | None = None) -> None:
+        """Drop a stationary maze-styled powerup from a defeated enemy."""
+        if kind is None:
+            kind = random.choice(MAZE_POWERUP_TYPES)
+        pu = Powerup(x, y, kind, maze_style=True)
         pu.change_y = 0
-        pu.life = 10.0
+        pu.life = 18.0
+        pu.scale = 1.35
         self.powerups.append(pu)
-        self._burst(x, y, 14, (255, 195, 65), 40, 150, 0.8, 2.0, .05, .16)
+        glow = POWERUP_COLORS.get(kind, (255, 255, 255))[:3]
+        self._burst(x, y, 14, glow, 40, 150, 0.8, 2.0, .05, .16)
 
     def _split_maze_enemy(self, enemy: MazeEnemy, max_enemies: int) -> bool:
         """Duplicate a surviving maze enemy into a nearby open cell."""

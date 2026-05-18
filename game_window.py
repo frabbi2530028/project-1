@@ -26,6 +26,8 @@ def _notif_color(kind: str) -> tuple:
     return {"speed":(255,220,120),"shield":(110,230,255),
             "triple":(255,180,120),
             "health":(130,255,130),
+            "beam360":(255,120,50),
+            "elec360":(160,110,255),
             "breach":(255,205,80)}.get(kind,(255,255,255))
 
 
@@ -122,7 +124,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                                         (255,255,110,255), 26, anchor_x="center",
                                         bold=True, font_name=FONT_UI)
         self.txt_hint    = arcade.Text(
-            "WASD · Mouse Aim · 1-3 Power-ups · 4 Maze Breach · 5 Reaper Special · H HUD · F11 Fullscreen · R Restart · ESC Menu",
+            "WASD · Mouse Aim · 1-3 Power-ups · B Maze Breach · 5 Reaper Special · H HUD · F11 Fullscreen · R Restart · ESC Menu",
             SCREEN_WIDTH//2, 11, (100, 125, 175, 140), 9,
             anchor_x="center", font_name=FONT_UI)
         self.txt_over    = arcade.Text("GAME OVER", SCREEN_WIDTH//2, SCREEN_HEIGHT//2+18,
@@ -1644,7 +1646,16 @@ class GameWindow(MazeModeMixin, arcade.Window):
              p.triple_active,  getattr(p, "triple_timer",   0), POWERUP_DURATION,
              (255, 140,  40)),
         ]
-        if self.selected_ship in BEAM_SHIP_INDICES:
+        if getattr(self, "game_state", None) == STATE_MAZE:
+            special_count = inv.get("beam360", 0) + inv.get("elec360", 0)
+            special_active = p.beam360_active or p.elec360_active
+            special_timer = max(getattr(p, "beam360_timer", 0), getattr(p, "elec360_timer", 0))
+            special_duration = ELECTRIC_360_DURATION if p.elec360_active else POWERUP_DURATION
+            slots.append(
+                ("5", "360", "SPECIAL", special_count,
+                 special_active, special_timer, special_duration,
+                 (210, 105, 255)))
+        elif self.selected_ship in BEAM_SHIP_INDICES:
             slots.append(
                 ("5", "360B", "360°BEAM", inv.get("beam360", 0),
                  p.beam360_active, getattr(p, "beam360_timer", 0), POWERUP_DURATION,
@@ -3186,7 +3197,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 self.game_state = STATE_MENU
 
         elif key == arcade.key.H:
-            if self.game_state in (STATE_PLAYING, STATE_PAUSED):
+            if self.game_state in (STATE_PLAYING, STATE_PAUSED, STATE_MAZE):
                 self.show_hud = not self.show_hud
 
         elif key == arcade.key.R and self.game_state == STATE_GAMEOVER:
@@ -3210,10 +3221,21 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 self._start_maze_with_preset()
 
         elif key in POWERUP_KEYS:
-            if self.game_state == STATE_PLAYING:
-                self._use_stored_powerup(POWERUP_KEYS[key])
-            elif self.game_state == STATE_MAZE and POWERUP_KEYS[key] == "breach":
-                self._use_stored_powerup("breach")
+            if self.game_state in (STATE_PLAYING, STATE_MAZE):
+                kind = POWERUP_KEYS[key]
+                if key in (arcade.key.KEY_5, arcade.key.NUM_5):
+                    inv = getattr(self.player, "inventory", {})
+                    if self.selected_ship in BEAM_SHIP_INDICES and (
+                            inv.get("beam360", 0) > 0 or getattr(self.player, "beam360_active", False)):
+                        kind = "beam360"
+                    elif self.selected_ship in ELECTRIC_SHIP_INDICES and (
+                            inv.get("elec360", 0) > 0 or getattr(self.player, "elec360_active", False)):
+                        kind = "elec360"
+                    elif inv.get("elec360", 0) > 0:
+                        kind = "elec360"
+                    elif inv.get("beam360", 0) > 0:
+                        kind = "beam360"
+                self._use_stored_powerup(kind)
 
     def on_key_release(self, key, modifiers):
         if key in {arcade.key.W, arcade.key.A, arcade.key.S, arcade.key.D,

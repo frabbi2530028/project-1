@@ -214,9 +214,9 @@ MAZE_ENEMY_SPAWN_MIN_INTERVAL = 0.55  # fastest spawn pace near maze completion
 MAZE_ENEMIES_PER_FLOOR    = 100    # total enemies created per maze floor
 MAZE_ENEMY_BULLET_LIFE    = 4.0    # max seconds before auto-removal
 MAZE_ENEMY_SPLIT_TIME     = 1.8    # seconds before a surviving enemy splits
-MAZE_ENEMY_BASE_CAP       = 15     # starting max enemies on a maze floor
-MAZE_ENEMY_CAP_PER_FLOOR  = 4      # extra enemy capacity per floor
-MAZE_ENEMY_MAX_CAP        = 45     # hard cap to keep performance under control
+MAZE_ENEMY_BASE_CAP       = 100    # starting max active enemies on a maze floor
+MAZE_ENEMY_CAP_PER_FLOOR  = 0      # cap stays fixed unless MAZE_ENEMY_MAX_CAP changes
+MAZE_ENEMY_MAX_CAP        = 100    # hard cap for active maze enemies
 MAZE_BREACH_DROP_CHANCE   = 36     # % chance a maze enemy drops a breach cell
 MAZE_BREACH_DURATION      = 5.0    # seconds breach rounds can damage fragile walls
 MAZE_BREACH_MAX_STORAGE   = 4      # player can bank up to 4 wall-breaking charges
@@ -1532,6 +1532,25 @@ class MazeEnemy(arcade.Sprite):
         self.path_timer  = random.uniform(0.0, 0.5)   # stagger first recalc
         self.shoot_timer = random.uniform(1.8, 3.5)
         self.split_timer = MAZE_ENEMY_SPLIT_TIME
+
+    def maze_update_flow(self, delta: float, flow_next: dict,
+                         cs: int, ox: float, oy: float) -> None:
+        """Move using a shared maze flow map instead of per-enemy BFS."""
+        if (self.maze_col, self.maze_row) not in flow_next:
+            return
+
+        nc, nr = flow_next[(self.maze_col, self.maze_row)]
+        tx = ox + (nc + 0.5) * cs
+        ty = oy + (nr + 0.5) * cs
+        dx = tx - self.center_x
+        dy = ty - self.center_y
+        dist = math.hypot(dx, dy)
+        if dist < 3:
+            self.maze_col, self.maze_row = nc, nr
+        elif dist > 0:
+            self.center_x += (dx / dist) * self.speed * delta
+            self.center_y += (dy / dist) * self.speed * delta
+        self.angle = math.degrees(math.atan2(dy, dx)) - 90
 
     def maze_update(self, delta: float, player_col: int, player_row: int,
                     maze: MazeGrid, cs: int, ox: float, oy: float) -> None:

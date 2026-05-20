@@ -197,8 +197,8 @@ STATE_MODE_SELECT  = "mode_select"
 
 MAZE_CELL_SIZE    = 240         # pixels per cell
 MAZE_WALL_THICK   = 60          # wall line thickness
-MAZE_BASE_COLS    = 33          # starting grid width  — much larger than screen
-MAZE_BASE_ROWS    = 25          # starting grid height — much larger than screen
+MAZE_BASE_COLS    = 29          # starting grid width  — larger than screen
+MAZE_BASE_ROWS    = 21          # starting grid height — larger than screen
 MAZE_MAX_LEVELS   = 50          # final maze floor
 MAZE_KEYS_REQUIRED = 3          # keys needed to unlock the floor exit
 MAZE_ENEMIES_PER_KEY = 30       # initial maze enemies clustered around each key
@@ -227,6 +227,10 @@ MAZE_BREACH_DURATION      = 5.0    # seconds breach rounds can damage fragile wa
 MAZE_BREACH_MAX_STORAGE   = 4      # player can bank up to 4 wall-breaking charges
 MAZE_BREAKABLE_WALL_HP    = 4      # breach hits needed to crack a fragile wall
 MAZE_BREAKABLE_WALL_CHANCE = 0.18  # only some closed internal walls can be destroyed
+MAZE_BOSS_TEXTURE         = "image/UvlV4Mu.png"
+MAZE_BOSS_TEXTURE_SCALE   = 1.05
+MAZE_BOSS_HEALTH          = 900
+MAZE_BOSS_SHOT_DAMAGE     = 20     # same damage as player bullets
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
 STATE_MAZE_LOADOUT = "maze_loadout"
@@ -243,7 +247,7 @@ MAZE_PRESETS = [
         "name":       "CLASSIC",
         "icon":       "⬡",
         "desc":       "Balanced corridors, steady challenge",
-        "detail":     "33×25 start · grows each floor",
+        "detail":     "29×21 start · grows each floor",
         "color":      (90, 198, 255),
         "cols_bonus": 0,
         "rows_bonus": 0,
@@ -253,7 +257,7 @@ MAZE_PRESETS = [
         "name":       "LABYRINTH",
         "icon":       "◎",
         "desc":       "Vast twisting corridors to explore",
-        "detail":     "37×27 start · massive scale-up",
+        "detail":     "33×23 start · massive scale-up",
         "color":      (120, 255, 160),
         "cols_bonus": 4,
         "rows_bonus": 2,
@@ -263,7 +267,7 @@ MAZE_PRESETS = [
         "name":       "SPRINT",
         "icon":       "◈",
         "desc":       "Compact arenas — reach exit fast",
-        "detail":     "29×23 start · quick floors",
+        "detail":     "25×19 start · quick floors",
         "color":      (255, 220, 40),
         "cols_bonus": -4,
         "rows_bonus": -2,
@@ -273,7 +277,7 @@ MAZE_PRESETS = [
         "name":       "GAUNTLET",
         "icon":       "✦",
         "desc":       "Tall narrow maze — easy to get lost",
-        "detail":     "31×31 start · vertical nightmare",
+        "detail":     "27×27 start · vertical nightmare",
         "color":      (255, 90, 90),
         "cols_bonus": -2,
         "rows_bonus": 6,
@@ -1635,6 +1639,24 @@ class MazeEnemy(arcade.Sprite):
             self.center_x += (dx / dist) * self.speed * delta
             self.center_y += (dy / dist) * self.speed * delta
         self.angle = math.degrees(math.atan2(dy, dx)) - 90
+
+
+class MazeBoss(arcade.Sprite):
+    """Large maze boss that hunts the player after all keys are collected."""
+
+    def __init__(self, col: int, row: int, cell_size: int, ox: float, oy: float,
+                 health: int = MAZE_BOSS_HEALTH):
+        super().__init__()
+        self.texture     = load_texture_clean(MAZE_BOSS_TEXTURE, MAZE_BOSS_TEXTURE_SCALE)
+        self.center_x    = ox + (col + 0.5) * cell_size
+        self.center_y    = oy + (row + 0.5) * cell_size
+        self.maze_col    = col
+        self.maze_row    = row
+        self.health      = health
+        self.max_health  = health
+        self.speed       = PLAYER_SPEED
+        self.shoot_timer = 0.45
+        self.angle       = 0.0
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

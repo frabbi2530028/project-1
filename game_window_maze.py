@@ -23,8 +23,8 @@ class MazeModeMixin:
         preset = getattr(self, "maze_preset", None) or MAZE_PRESETS[0]
 
         # Maze dimensions grow each floor — NOT capped by the screen size
-        cols = MAZE_BASE_COLS + preset["cols_bonus"] + lvl * 4
-        rows = MAZE_BASE_ROWS + preset["rows_bonus"] + lvl * 3
+        cols = MAZE_BASE_COLS + preset["cols_bonus"] + lvl * 3
+        rows = MAZE_BASE_ROWS + preset["rows_bonus"] + lvl * 2
         cols = max(9, cols)
         rows = max(7, rows)
         # Keep odd dimensions (nicer-looking mazes)
@@ -105,6 +105,8 @@ class MazeModeMixin:
         self.maze_enemy_bullets = arcade.SpriteList()   # enemy bullets  (wall-blocked)
         self.beams              = []                    # Interceptor beams in maze mode
         self.elec_bolts         = arcade.SpriteList()   # Reaper bolts in maze mode
+        self.maze_boss          = None
+        self.maze_boss_spawned  = False
 
         # ── Initialise camera centred on player spawn ──
         total_w = cols * cs
@@ -298,11 +300,11 @@ class MazeModeMixin:
         if maze.is_breakable_wall(col, row, direction):
             hp = maze.wall_hp(col, row, direction)
             ratio = max(0.0, min(1.0, hp / max(1, maze.breakable_wall_max_hp)))
-            pulse = 0.65 + 0.35 * math.sin(self.bg_time * 4.0 + col * 0.7 + row * 0.4)
+            pulse = 0.65 + 0.35 * math.sin(self.bg_time * 5.2 + col * 0.7 + row * 0.4)
             theme_rgb = tuple(
                 int(c) for c in (glow_color[:3] if len(glow_color) >= 3 else (255, 72, 20))
             )
-            glow_strength = 0.62 + 0.22 * pulse + 0.16 * ratio
+            glow_strength = 0.92 + 0.36 * pulse + 0.24 * ratio
             basalt = (
                 max(18, int(theme_rgb[0] * 0.18)),
                 max(18, int(theme_rgb[1] * 0.18)),
@@ -321,13 +323,15 @@ class MazeModeMixin:
                 max(20, int(theme_rgb[2] * 0.52)),
                 235,
             )
-            themed_glow = (*theme_rgb, int(70 + 65 * pulse))
+            outer_glow = (*theme_rgb, int(76 + 72 * pulse))
+            themed_glow = (*theme_rgb, int(125 + 95 * pulse))
             corner_r = min(thick * 0.28, 18)
-            self._draw_round_lrbt(left - 4, right + 4, bottom - 4, top + 4, themed_glow, corner_r + 4)
+            self._draw_round_lrbt(left - 12, right + 12, bottom - 12, top + 12, outer_glow, corner_r + 8)
+            self._draw_round_lrbt(left - 6, right + 6, bottom - 6, top + 6, themed_glow, corner_r + 5)
             self._draw_round_lrbt(left, right, bottom, top, basalt, corner_r)
 
-            rim = max(5, int(thick * 0.18))
-            vein = max(4, int(thick * 0.11))
+            rim = max(7, int(thick * 0.24))
+            vein = max(6, int(thick * 0.15))
             if horizontal:
                 arcade.draw_lrbt_rectangle_filled(left + corner_r, right - corner_r,
                                                    top - rim, top, ember)
@@ -605,7 +609,155 @@ class MazeModeMixin:
             self.notif_color = (255, 230, 95)
             self.notif_timer = 1.4
             self._burst(kx, ky, 34, (255, 220, 90), 70, 260, 1.7, 3.5, .10, .28)
+            if self.maze_keys_collected >= MAZE_KEYS_REQUIRED:
+                self._spawn_maze_boss()
             break
+
+    def _maze_boss_spawn_cell(self) -> tuple[int, int]:
+        pc, pr = self._maze_player_cell()
+        exit_cell = (self.maze_exit_col, self.maze_exit_row)
+        if exit_cell != (pc, pr):
+            return exit_cell
+
+        farthest = (0, random.random(), exit_cell[0], exit_cell[1])
+        for row in range(self.maze_grid.rows):
+            for col in range(self.maze_grid.cols):
+                dist = abs(col - pc) + abs(row - pr)
+                farthest = max(farthest, (dist, random.random(), col, row))
+        return farthest[2], farthest[3]
+
+    def _spawn_maze_boss(self) -> bool:
+        if getattr(self, "maze_boss_spawned", False) or getattr(self, "maze_boss", None):
+            return False
+
+        col, row = self._maze_boss_spawn_cell()
+        hp = int(MAZE_BOSS_HEALTH * (1.0 + 0.22 * self.maze_level))
+        self.maze_boss = MazeBoss(col, row, self.maze_cell_size, *self.maze_origin, health=hp)
+        self.maze_boss_spawned = True
+        self.boss_on_screen = True
+        dx = self.player.center_x - self.maze_boss.center_x
+        dy = self.player.center_y - self.maze_boss.center_y
+        self.maze_boss.angle = self._maze_player_angle_from_motion(dx, dy)
+        self._burst(self.maze_boss.center_x, self.maze_boss.center_y, 48,
+                    (255, 210, 90), 90, 320, 2.0, 4.6, .12, .34)
+        self.notif_text = "MAZE BOSS AWAKENED!"
+        self.notif_color = (255, 210, 90)
+        self.notif_timer = 2.0
+        return True
+
+    def _maze_boss_next_step(self, boss: MazeBoss, pc: int, pr: int) -> tuple[int, int, int] | None:
+        start = (boss.maze_col, boss.maze_row)
+        target = (pc, pr)
+        if start == target:
+            return None
+
+        from collections import deque
+        maze = self.maze_grid
+        prev = {start: None}
+        q = deque([start])
+        while q:
+            col, row = q.popleft()
+            if (col, row) == target:
+                break
+            for direction in (MazeGrid.N, MazeGrid.E, MazeGrid.S, MazeGrid.W):
+                nc = col + MazeGrid.DX[direction]
+                nr = row + MazeGrid.DY[direction]
+                if not (0 <= nc < maze.cols and 0 <= nr < maze.rows):
+                    continue
+                if not (maze.is_open(col, row, direction)
+                        or maze.is_breakable_wall(col, row, direction)):
+                    continue
+                if (nc, nr) in prev:
+                    continue
+                prev[(nc, nr)] = ((col, row), direction)
+                q.append((nc, nr))
+
+        if target not in prev:
+            return None
+
+        cur = target
+        while prev[cur] is not None and prev[cur][0] != start:
+            cur = prev[cur][0]
+        if prev[cur] is None:
+            return None
+        return cur[0], cur[1], prev[cur][1]
+
+    def _break_wall_for_maze_boss(self, boss: MazeBoss, direction: int) -> bool:
+        maze = self.maze_grid
+        if maze.is_open(boss.maze_col, boss.maze_row, direction):
+            return True
+        if not maze.is_breakable_wall(boss.maze_col, boss.maze_row, direction):
+            return False
+
+        damaged, broken, _hp_left = maze.damage_wall(
+            boss.maze_col, boss.maze_row, direction, MAZE_BREAKABLE_WALL_HP)
+        if damaged:
+            self._maze_enemy_flow_target = None
+            hx = boss.center_x + MazeGrid.DX[direction] * self.maze_cell_size * 0.48
+            hy = boss.center_y + MazeGrid.DY[direction] * self.maze_cell_size * 0.48
+            self._burst(hx, hy, 28, (255, 190, 80), 80, 260, 1.4, 3.0, .10, .24)
+        return broken
+
+    def _update_maze_boss(self, delta: float, p: Player, cs: int, ox: float, oy: float) -> None:
+        boss = getattr(self, "maze_boss", None)
+        if boss is None:
+            self.boss_on_screen = False
+            return
+
+        boss.speed = p.get_speed() * SHIPS[self.selected_ship]["spd_mult"]
+        pc, pr = self._maze_player_cell()
+        step = self._maze_boss_next_step(boss, pc, pr)
+        if step is not None:
+            nc, nr, direction = step
+            if self._break_wall_for_maze_boss(boss, direction):
+                tx = ox + (nc + 0.5) * cs
+                ty = oy + (nr + 0.5) * cs
+                dx = tx - boss.center_x
+                dy = ty - boss.center_y
+                dist = math.hypot(dx, dy)
+                if dist <= max(4.0, boss.speed * delta):
+                    boss.center_x = tx
+                    boss.center_y = ty
+                    boss.maze_col = nc
+                    boss.maze_row = nr
+                elif dist > 0:
+                    boss.center_x += (dx / dist) * boss.speed * delta
+                    boss.center_y += (dy / dist) * boss.speed * delta
+                boss.angle = self._maze_player_angle_from_motion(dx, dy)
+
+        boss.shoot_timer -= delta
+        while boss.shoot_timer <= 0:
+            boss.shoot_timer += NORMAL_FIRE_RATE
+            ang = math.atan2(p.center_y - boss.center_y, p.center_x - boss.center_x)
+            bullet = Bullet(boss.center_x, boss.center_y, ang)
+            bullet.scale = 1.0
+            bullet.damage = MAZE_BOSS_SHOT_DAMAGE
+            self.maze_enemy_bullets.append(bullet)
+
+        self.boss_on_screen = True
+
+    def _damage_maze_boss(self, amount: float, color: tuple) -> bool:
+        boss = getattr(self, "maze_boss", None)
+        if boss is None:
+            return False
+        boss.health -= amount
+        self._burst(boss.center_x, boss.center_y, 10, color, 55, 190, 1.2, 2.8, .06, .18)
+        if boss.health <= 0:
+            self._kill_maze_boss()
+        return True
+
+    def _kill_maze_boss(self) -> None:
+        boss = getattr(self, "maze_boss", None)
+        if boss is None:
+            return
+        self.score += 450 + self.maze_level * 30
+        self._burst(boss.center_x, boss.center_y, 90,
+                    (255, 120, 70), 90, 380, 2.4, 5.0, .18, .55)
+        self.maze_boss = None
+        self.boss_on_screen = False
+        self.notif_text = "MAZE BOSS DESTROYED!"
+        self.notif_color = (255, 160, 95)
+        self.notif_timer = 2.0
 
     def _maze_pickup_reserved_cells(self) -> set[tuple[int, int]]:
         reserved = self._maze_key_reserved_cells()
@@ -888,6 +1040,27 @@ class MazeModeMixin:
                     bx_, bx_ + bar_w, by_, by_ + 5, (60, 0, 0, 200))
                 arcade.draw_lrbt_rectangle_filled(
                     bx_, bx_ + bar_w * ratio_, by_, by_ + 5, (255, 55, 55, 230))
+
+        boss = getattr(self, "maze_boss", None)
+        if boss is not None:
+            pulse = 0.5 + 0.5 * math.sin(t * 4.0)
+            boss_r = max(boss.width, boss.height) * (0.46 + 0.08 * pulse)
+            arcade.draw_circle_filled(
+                boss.center_x, boss.center_y, boss_r, (255, 190, 80, 48))
+            arcade.draw_circle_outline(
+                boss.center_x, boss.center_y, boss_r + 9, (255, 210, 105, 145), 3)
+            arcade.draw_sprite(boss)
+            bar_w = max(cs * 0.9, boss.width * 0.95)
+            bx_ = boss.center_x - bar_w / 2
+            by_ = boss.center_y + boss.height * 0.54 + 12
+            ratio_ = max(0.0, boss.health / boss.max_health)
+            arcade.draw_lrbt_rectangle_filled(
+                bx_, bx_ + bar_w, by_, by_ + 8, (65, 26, 8, 225))
+            arcade.draw_lrbt_rectangle_filled(
+                bx_, bx_ + bar_w * ratio_, by_, by_ + 8, (255, 176, 55, 240))
+            self._txt_shadow("MAZE BOSS", boss.center_x, by_ + 12,
+                             (255, 220, 125, 230), 10, FONT_UI_MENU,
+                             anchor_x="center", bold=True)
 
         # ── Maze powerup glows ───────────────────────
         for pu in self.powerups:
@@ -1186,6 +1359,16 @@ class MazeModeMixin:
             arcade.draw_circle_filled(ex3, ey3, dot_r, (255, 70, 70, 235))
             arcade.draw_circle_outline(ex3, ey3, max(2.5, dot_r * 1.55), (255, 150, 120, 135), 1)
 
+        boss = getattr(self, "maze_boss", None)
+        if boss is not None:
+            b_col = (boss.center_x - ox) / cs
+            b_row = (boss.center_y - oy) / cs
+            if col_min <= b_col < col_max and row_min <= b_row < row_max:
+                bx = mx + (b_col - col_min) * mm_cs
+                by = my + (b_row - row_min) * mm_cs
+                arcade.draw_circle_filled(bx, by, max(3, mm_cs * 0.42), (255, 190, 70, 245))
+                arcade.draw_circle_outline(bx, by, max(5, mm_cs * 0.72), (255, 235, 130, 180), 2)
+
         self._txt_shadow(f"ENEMY {enemy_count}", mx + mw + pad, my - 14,
                          (255, 135, 115, 210), 8, FONT_NUMERIC,
                          anchor_x="right", anchor_y="top", bold=True)
@@ -1268,6 +1451,13 @@ class MazeModeMixin:
             dot_r = max(3, mm_cs * 0.22)
             arcade.draw_circle_filled(ex3, ey3, dot_r, (255, 72, 72, 235))
             arcade.draw_circle_outline(ex3, ey3, max(5, dot_r * 1.65), (255, 145, 115, 145), 1)
+
+        boss = getattr(self, "maze_boss", None)
+        if boss is not None:
+            bx = mx + ((boss.center_x - ox) / cs) * mm_cs
+            by = my + ((boss.center_y - oy) / cs) * mm_cs
+            arcade.draw_circle_filled(bx, by, max(5, mm_cs * 0.42), (255, 190, 70, 245))
+            arcade.draw_circle_outline(bx, by, max(8, mm_cs * 0.75), (255, 235, 130, 180), 2)
 
         progress = int(max(getattr(self, "maze_progress_best", 0.0), self._maze_completion_ratio()) * 100)
         self._txt_shadow("MAZE MAP", w // 2, my + mh + 52, (190, 255, 220, 245),
@@ -1554,6 +1744,8 @@ class MazeModeMixin:
                 eb.life = MAZE_ENEMY_BULLET_LIFE
                 self.maze_enemy_bullets.append(eb)
 
+        self._update_maze_boss(delta, p, cs, ox, oy)
+
         # ── Beam/electric → enemy collision ──────────────────────────
         for beam in list(self.beams):
             for enemy in list(self.maze_enemies):
@@ -1561,21 +1753,30 @@ class MazeModeMixin:
                 if beam.intersects_circle(enemy.center_x, enemy.center_y, hit_r):
                     self._split_maze_enemy(enemy, max_enemies)
                     self._maze_kill_enemy(enemy, (255, 130, 70))
+            boss = getattr(self, "maze_boss", None)
+            if boss is not None:
+                hit_r = max(boss.width, boss.height) * 0.45
+                if beam.intersects_circle(boss.center_x, boss.center_y, hit_r):
+                    self._damage_maze_boss(BEAM_DAMAGE_PER_SEC * delta, (255, 130, 70))
 
         for bolt in list(self.elec_bolts):
             hits = arcade.check_for_collision_with_list(bolt, self.maze_enemies)
-            if not hits:
+            if hits:
+                enemy = hits[0]
+                self._split_maze_enemy(enemy, max_enemies)
+                enemy.health -= bolt.damage
+                self._burst(bolt.center_x, bolt.center_y, 10,
+                            (140, 100, 255), 55, 200, 1.2, 2.6, .06, .18)
+                self._burst(bolt.center_x, bolt.center_y, 4,
+                            (220, 200, 255), 80, 260, 0.8, 1.8, .04, .10)
+                bolt.remove_from_sprite_lists()
+                if enemy.health <= 0:
+                    self._maze_kill_enemy(enemy, (130, 90, 255))
                 continue
-            enemy = hits[0]
-            self._split_maze_enemy(enemy, max_enemies)
-            enemy.health -= bolt.damage
-            self._burst(bolt.center_x, bolt.center_y, 10,
-                        (140, 100, 255), 55, 200, 1.2, 2.6, .06, .18)
-            self._burst(bolt.center_x, bolt.center_y, 4,
-                        (220, 200, 255), 80, 260, 0.8, 1.8, .04, .10)
-            bolt.remove_from_sprite_lists()
-            if enemy.health <= 0:
-                self._maze_kill_enemy(enemy, (130, 90, 255))
+            boss = getattr(self, "maze_boss", None)
+            if boss is not None and arcade.check_for_collision(bolt, boss):
+                self._damage_maze_boss(bolt.boss_damage, (150, 110, 255))
+                bolt.remove_from_sprite_lists()
 
         # ── Bullet → enemy collision ─────────────────────────────────
         for b in list(self.maze_bullets):
@@ -1589,6 +1790,11 @@ class MazeModeMixin:
                             (255, 220, 100), 55, 180, 1.0, 2.2, .07, .18)
                 if enemy.health <= 0:
                     self._maze_kill_enemy(enemy, (255, 130, 70))
+                continue
+            boss = getattr(self, "maze_boss", None)
+            if boss is not None and arcade.check_for_collision(b, boss):
+                b.remove_from_sprite_lists()
+                self._damage_maze_boss(20, (255, 220, 100))
 
         # ── Enemy bullet → player collision ─────────────────────────
         for b in list(self.maze_enemy_bullets):
@@ -1598,7 +1804,7 @@ class MazeModeMixin:
                     self._burst(b.center_x, b.center_y, 7,
                                 (90, 220, 255), 50, 160, 0.9, 2.0, .06, .14)
                 else:
-                    p.health -= MAZE_ENEMY_BULLET_DAMAGE
+                    p.health -= getattr(b, "damage", MAZE_ENEMY_BULLET_DAMAGE)
                     self.damage_flash = max(self.damage_flash, 0.75)
                     self._burst(b.center_x, b.center_y, 12,
                                 (255, 75, 75), 60, 200, 1.0, 2.2, .08, .20)

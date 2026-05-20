@@ -106,6 +106,7 @@ class MazeModeMixin:
         self.beams              = []                    # Interceptor beams in maze mode
         self.elec_bolts         = arcade.SpriteList()   # Reaper bolts in maze mode
         self.maze_boss          = None
+        self.maze_bosses        = []
         self.maze_boss_spawned  = False
 
         # ── Initialise camera centred on player spawn ──
@@ -626,13 +627,26 @@ class MazeModeMixin:
                 farthest = max(farthest, (dist, random.random(), col, row))
         return farthest[2], farthest[3]
 
+    def _active_maze_bosses(self) -> list[MazeBoss]:
+        bosses = getattr(self, "maze_bosses", None)
+        if bosses is None:
+            boss = getattr(self, "maze_boss", None)
+            bosses = [boss] if boss is not None else []
+            self.maze_bosses = bosses
+        else:
+            bosses[:] = [boss for boss in bosses if boss is not None]
+
+        self.maze_boss = bosses[0] if bosses else None
+        return bosses
+
     def _spawn_maze_boss(self) -> bool:
-        if getattr(self, "maze_boss_spawned", False) or getattr(self, "maze_boss", None):
+        if getattr(self, "maze_boss_spawned", False) or self._active_maze_bosses():
             return False
 
         col, row = self._maze_boss_spawn_cell()
         hp = int(MAZE_BOSS_HEALTH * (1.0 + 0.22 * self.maze_level))
         self.maze_boss = MazeBoss(col, row, self.maze_cell_size, *self.maze_origin, health=hp)
+        self.maze_bosses = [self.maze_boss]
         self.maze_boss_spawned = True
         self.boss_on_screen = True
         dx = self.player.center_x - self.maze_boss.center_x
@@ -644,6 +658,22 @@ class MazeModeMixin:
         self.notif_color = (255, 210, 90)
         self.notif_timer = 2.0
         return True
+
+    def _maze_boss_split_cells(self, boss: MazeBoss) -> list[tuple[int, int]]:
+        maze = self.maze_grid
+        cells = []
+        for direction in (MazeGrid.N, MazeGrid.E, MazeGrid.S, MazeGrid.W):
+            if not maze.is_open(boss.maze_col, boss.maze_row, direction):
+                continue
+            col = boss.maze_col + MazeGrid.DX[direction]
+            row = boss.maze_row + MazeGrid.DY[direction]
+            if 0 <= col < maze.cols and 0 <= row < maze.rows:
+                cells.append((col, row))
+        random.shuffle(cells)
+        cells.insert(0, (boss.maze_col, boss.maze_row))
+        while len(cells) < 2:
+            cells.append((boss.maze_col, boss.maze_row))
+        return cells[:2]
 
     def _maze_boss_next_step(self, boss: MazeBoss, pc: int, pr: int) -> tuple[int, int, int] | None:
         start = (boss.maze_col, boss.maze_row)
@@ -699,65 +729,92 @@ class MazeModeMixin:
         return broken
 
     def _update_maze_boss(self, delta: float, p: Player, cs: int, ox: float, oy: float) -> None:
-        boss = getattr(self, "maze_boss", None)
-        if boss is None:
+        bosses = self._active_maze_bosses()
+        if not bosses:
             self.boss_on_screen = False
             return
 
-        boss.speed = p.get_speed() * SHIPS[self.selected_ship]["spd_mult"]
         pc, pr = self._maze_player_cell()
-        step = self._maze_boss_next_step(boss, pc, pr)
-        if step is not None:
-            nc, nr, direction = step
-            if self._break_wall_for_maze_boss(boss, direction):
-                tx = ox + (nc + 0.5) * cs
-                ty = oy + (nr + 0.5) * cs
-                dx = tx - boss.center_x
-                dy = ty - boss.center_y
-                dist = math.hypot(dx, dy)
-                if dist <= max(4.0, boss.speed * delta):
-                    boss.center_x = tx
-                    boss.center_y = ty
-                    boss.maze_col = nc
-                    boss.maze_row = nr
-                elif dist > 0:
-                    boss.center_x += (dx / dist) * boss.speed * delta
-                    boss.center_y += (dy / dist) * boss.speed * delta
-                boss.angle = self._maze_player_angle_from_motion(dx, dy)
+        boss_speed = p.get_speed() * SHIPS[self.selected_ship]["spd_mult"]
+        for boss in list(bosses):
+            boss.speed = boss_speed
+            step = self._maze_boss_next_step(boss, pc, pr)
+            if step is not None:
+                nc, nr, direction = step
+                if self._break_wall_for_maze_boss(boss, direction):
+                    tx = ox + (nc + 0.5) * cs
+                    ty = oy + (nr + 0.5) * cs
+                    dx = tx - boss.center_x
+                    dy = ty - boss.center_y
+                    dist = math.hypot(dx, dy)
+                    if dist <= max(4.0, boss.speed * delta):
+                        boss.center_x = tx
+                        boss.center_y = ty
+                        boss.maze_col = nc
+                        boss.maze_row = nr
+                    elif dist > 0:
+                        boss.center_x += (dx / dist) * boss.speed * delta
+                        boss.center_y += (dy / dist) * boss.speed * delta
+                    boss.angle = self._maze_player_angle_from_motion(dx, dy)
 
-        boss.shoot_timer -= delta
-        while boss.shoot_timer <= 0:
-            boss.shoot_timer += NORMAL_FIRE_RATE
-            ang = math.atan2(p.center_y - boss.center_y, p.center_x - boss.center_x)
-            bullet = Bullet(boss.center_x, boss.center_y, ang)
-            bullet.scale = 1.0
-            bullet.damage = MAZE_BOSS_SHOT_DAMAGE
-            self.maze_enemy_bullets.append(bullet)
+            boss.shoot_timer -= delta
+            while boss.shoot_timer <= 0:
+                boss.shoot_timer += NORMAL_FIRE_RATE
+                ang = math.atan2(p.center_y - boss.center_y, p.center_x - boss.center_x)
+                bullet = Bullet(boss.center_x, boss.center_y, ang)
+                bullet.scale = 1.0
+                bullet.damage = MAZE_BOSS_SHOT_DAMAGE
+                self.maze_enemy_bullets.append(bullet)
 
         self.boss_on_screen = True
 
-    def _damage_maze_boss(self, amount: float, color: tuple) -> bool:
-        boss = getattr(self, "maze_boss", None)
-        if boss is None:
+    def _damage_maze_boss(self, boss: MazeBoss, amount: float, color: tuple) -> bool:
+        if boss not in self._active_maze_bosses():
             return False
         boss.health -= amount
         self._burst(boss.center_x, boss.center_y, 10, color, 55, 190, 1.2, 2.8, .06, .18)
         if boss.health <= 0:
-            self._kill_maze_boss()
+            self._kill_maze_boss(boss)
         return True
 
-    def _kill_maze_boss(self) -> None:
-        boss = getattr(self, "maze_boss", None)
-        if boss is None:
+    def _kill_maze_boss(self, boss: MazeBoss) -> None:
+        bosses = self._active_maze_bosses()
+        if boss not in bosses:
             return
         self.score += 450 + self.maze_level * 30
-        self._burst(boss.center_x, boss.center_y, 90,
+        self._burst(boss.center_x, boss.center_y, 110,
                     (255, 120, 70), 90, 380, 2.4, 5.0, .18, .55)
-        self.maze_boss = None
-        self.boss_on_screen = False
-        self.notif_text = "MAZE BOSS DESTROYED!"
-        self.notif_color = (255, 160, 95)
-        self.notif_timer = 2.0
+        bosses.remove(boss)
+
+        if boss.split_depth < MAZE_BOSS_MAX_SPLITS:
+            child_hp = max(1, int(boss.max_health * 0.5))
+            child_depth = boss.split_depth + 1
+            split_cells = self._maze_boss_split_cells(boss)
+            offsets = (-0.18, 0.18)
+            for i, (col, row) in enumerate(split_cells):
+                child = MazeBoss(
+                    col, row, self.maze_cell_size, *self.maze_origin,
+                    health=child_hp, split_depth=child_depth,
+                )
+                child.center_x += offsets[i] * self.maze_cell_size
+                child.center_y += offsets[1 - i] * self.maze_cell_size
+                child.shoot_timer = random.uniform(0.08, NORMAL_FIRE_RATE)
+                dx = self.player.center_x - child.center_x
+                dy = self.player.center_y - child.center_y
+                child.angle = self._maze_player_angle_from_motion(dx, dy)
+                bosses.append(child)
+            self._burst(boss.center_x, boss.center_y, 64,
+                        (255, 210, 90), 120, 430, 2.0, 4.6, .12, .34)
+            self.notif_text = f"MAZE BOSS SPLIT!  {len(bosses)} BODIES"
+            self.notif_color = (255, 210, 90)
+            self.notif_timer = 1.5
+        elif not bosses:
+            self.notif_text = "MAZE BOSS DESTROYED!"
+            self.notif_color = (255, 160, 95)
+            self.notif_timer = 2.0
+
+        self.maze_boss = bosses[0] if bosses else None
+        self.boss_on_screen = bool(bosses)
 
     def _maze_pickup_reserved_cells(self) -> set[tuple[int, int]]:
         reserved = self._maze_key_reserved_cells()
@@ -1041,8 +1098,7 @@ class MazeModeMixin:
                 arcade.draw_lrbt_rectangle_filled(
                     bx_, bx_ + bar_w * ratio_, by_, by_ + 5, (255, 55, 55, 230))
 
-        boss = getattr(self, "maze_boss", None)
-        if boss is not None:
+        for boss in self._active_maze_bosses():
             pulse = 0.5 + 0.5 * math.sin(t * 4.0)
             boss_r = max(boss.width, boss.height) * (0.46 + 0.08 * pulse)
             arcade.draw_circle_filled(
@@ -1058,8 +1114,12 @@ class MazeModeMixin:
                 bx_, bx_ + bar_w, by_, by_ + 8, (65, 26, 8, 225))
             arcade.draw_lrbt_rectangle_filled(
                 bx_, bx_ + bar_w * ratio_, by_, by_ + 8, (255, 176, 55, 240))
-            self._txt_shadow("MAZE BOSS", boss.center_x, by_ + 12,
+            boss_name = "MAZE BOSS" if boss.split_depth == 0 else f"SPLIT {boss.split_depth}"
+            self._txt_shadow(boss_name, boss.center_x, by_ + 12,
                              (255, 220, 125, 230), 10, FONT_UI_MENU,
+                             anchor_x="center", bold=True)
+            self._txt_shadow(f"{max(0, int(boss.health)):,} HP", boss.center_x, by_ - 10,
+                             (255, 228, 160, 220), 8, FONT_NUMERIC,
                              anchor_x="center", bold=True)
 
         # ── Maze powerup glows ───────────────────────
@@ -1359,8 +1419,7 @@ class MazeModeMixin:
             arcade.draw_circle_filled(ex3, ey3, dot_r, (255, 70, 70, 235))
             arcade.draw_circle_outline(ex3, ey3, max(2.5, dot_r * 1.55), (255, 150, 120, 135), 1)
 
-        boss = getattr(self, "maze_boss", None)
-        if boss is not None:
+        for boss in self._active_maze_bosses():
             b_col = (boss.center_x - ox) / cs
             b_row = (boss.center_y - oy) / cs
             if col_min <= b_col < col_max and row_min <= b_row < row_max:
@@ -1452,8 +1511,7 @@ class MazeModeMixin:
             arcade.draw_circle_filled(ex3, ey3, dot_r, (255, 72, 72, 235))
             arcade.draw_circle_outline(ex3, ey3, max(5, dot_r * 1.65), (255, 145, 115, 145), 1)
 
-        boss = getattr(self, "maze_boss", None)
-        if boss is not None:
+        for boss in self._active_maze_bosses():
             bx = mx + ((boss.center_x - ox) / cs) * mm_cs
             by = my + ((boss.center_y - oy) / cs) * mm_cs
             arcade.draw_circle_filled(bx, by, max(5, mm_cs * 0.42), (255, 190, 70, 245))
@@ -1753,11 +1811,10 @@ class MazeModeMixin:
                 if beam.intersects_circle(enemy.center_x, enemy.center_y, hit_r):
                     self._split_maze_enemy(enemy, max_enemies)
                     self._maze_kill_enemy(enemy, (255, 130, 70))
-            boss = getattr(self, "maze_boss", None)
-            if boss is not None:
+            for boss in list(self._active_maze_bosses()):
                 hit_r = max(boss.width, boss.height) * 0.45
                 if beam.intersects_circle(boss.center_x, boss.center_y, hit_r):
-                    self._damage_maze_boss(BEAM_DAMAGE_PER_SEC * delta, (255, 130, 70))
+                    self._damage_maze_boss(boss, BEAM_DAMAGE_PER_SEC * delta, (255, 130, 70))
 
         for bolt in list(self.elec_bolts):
             hits = arcade.check_for_collision_with_list(bolt, self.maze_enemies)
@@ -1773,10 +1830,11 @@ class MazeModeMixin:
                 if enemy.health <= 0:
                     self._maze_kill_enemy(enemy, (130, 90, 255))
                 continue
-            boss = getattr(self, "maze_boss", None)
-            if boss is not None and arcade.check_for_collision(bolt, boss):
-                self._damage_maze_boss(bolt.boss_damage, (150, 110, 255))
-                bolt.remove_from_sprite_lists()
+            for boss in list(self._active_maze_bosses()):
+                if arcade.check_for_collision(bolt, boss):
+                    self._damage_maze_boss(boss, bolt.boss_damage, (150, 110, 255))
+                    bolt.remove_from_sprite_lists()
+                    break
 
         # ── Bullet → enemy collision ─────────────────────────────────
         for b in list(self.maze_bullets):
@@ -1791,10 +1849,11 @@ class MazeModeMixin:
                 if enemy.health <= 0:
                     self._maze_kill_enemy(enemy, (255, 130, 70))
                 continue
-            boss = getattr(self, "maze_boss", None)
-            if boss is not None and arcade.check_for_collision(b, boss):
-                b.remove_from_sprite_lists()
-                self._damage_maze_boss(20, (255, 220, 100))
+            for boss in list(self._active_maze_bosses()):
+                if arcade.check_for_collision(b, boss):
+                    b.remove_from_sprite_lists()
+                    self._damage_maze_boss(boss, 20, (255, 220, 100))
+                    break
 
         # ── Enemy bullet → player collision ─────────────────────────
         for b in list(self.maze_enemy_bullets):

@@ -229,7 +229,9 @@ MAZE_BREAKABLE_WALL_HP    = 4      # breach hits needed to crack a fragile wall
 MAZE_BREAKABLE_WALL_CHANCE = 0.18  # only some closed internal walls can be destroyed
 MAZE_BOSS_TEXTURE         = "image/UvlV4Mu.png"
 MAZE_BOSS_TEXTURE_SCALE   = 1.05
-MAZE_BOSS_HEALTH          = 900
+MAZE_BOSS_HEALTH          = 10_000_000
+MAZE_BOSS_MAX_SPLITS      = 4
+MAZE_BOSS_SPLIT_SIZE_MULT = 0.72
 MAZE_BOSS_SHOT_DAMAGE     = 20     # same damage as player bullets
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
@@ -1645,9 +1647,14 @@ class MazeBoss(arcade.Sprite):
     """Large maze boss that hunts the player after all keys are collected."""
 
     def __init__(self, col: int, row: int, cell_size: int, ox: float, oy: float,
-                 health: int = MAZE_BOSS_HEALTH):
+                 health: int = MAZE_BOSS_HEALTH, split_depth: int = 0):
         super().__init__()
-        self.texture     = load_texture_clean(MAZE_BOSS_TEXTURE, MAZE_BOSS_TEXTURE_SCALE)
+        self.split_depth = split_depth
+        size_mult        = MAZE_BOSS_SPLIT_SIZE_MULT ** split_depth
+        self.texture     = load_texture_clean(
+            MAZE_BOSS_TEXTURE,
+            MAZE_BOSS_TEXTURE_SCALE * size_mult,
+        )
         self.center_x    = ox + (col + 0.5) * cell_size
         self.center_y    = oy + (row + 0.5) * cell_size
         self.maze_col    = col

@@ -2766,6 +2766,16 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
     def _collect_powerup(self, kind: str):
         p = self.player
+        if kind == "beam360" and self.selected_ship not in BEAM_SHIP_INDICES:
+            self.notif_text = "360° BEAM NOT SUPPORTED!"
+            self.notif_color = (220, 100, 100)
+            self.notif_timer = 0.9
+            return
+        if kind == "elec360" and self.selected_ship not in ELECTRIC_SHIP_INDICES:
+            self.notif_text = "360° ELECTRIC NOT SUPPORTED!"
+            self.notif_color = (220, 100, 100)
+            self.notif_timer = 0.9
+            return
         if kind == "health":
             p.health = min(p.max_health, p.health+30)
             self.notif_text  = "+30 HEALTH!"
@@ -3223,17 +3233,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
             if self.game_state in (STATE_PLAYING, STATE_MAZE):
                 kind = POWERUP_KEYS[key]
                 if key in (arcade.key.KEY_5, arcade.key.NUM_5):
-                    inv = getattr(self.player, "inventory", {})
-                    if self.selected_ship in BEAM_SHIP_INDICES and (
-                            inv.get("beam360", 0) > 0 or getattr(self.player, "beam360_active", False)):
+                    if self.selected_ship in BEAM_SHIP_INDICES:
                         kind = "beam360"
-                    elif self.selected_ship in ELECTRIC_SHIP_INDICES and (
-                            inv.get("elec360", 0) > 0 or getattr(self.player, "elec360_active", False)):
+                    elif self.selected_ship in ELECTRIC_SHIP_INDICES:
                         kind = "elec360"
-                    elif inv.get("elec360", 0) > 0:
-                        kind = "elec360"
-                    elif inv.get("beam360", 0) > 0:
-                        kind = "beam360"
+                    else:
+                        self.notif_text = "NO SPECIAL WEAPON ON THIS SHIP!"
+                        self.notif_color = (220, 100, 100)
+                        self.notif_timer = 0.9
+                        return
                 self._use_stored_powerup(kind)
 
     def on_key_release(self, key, modifiers):

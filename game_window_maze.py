@@ -467,16 +467,35 @@ class MazeModeMixin:
         maze = self.maze_grid
         start = (0, maze.rows - 1)
         exit_cell = (self.maze_exit_col, self.maze_exit_row)
-        for _ in range(500):
+        player_cell = self._maze_player_cell() if self.player is not None else start
+        min_player_dist = max(10, min(24, (maze.cols + maze.rows) // 4))
+        min_exit_dist = 6
+
+        for _ in range(900):
             col = random.randint(0, maze.cols - 1)
             row = random.randint(0, maze.rows - 1)
             if (col, row) in reserved:
                 continue
-            if abs(col - start[0]) + abs(row - start[1]) < 5:
+            if abs(col - player_cell[0]) + abs(row - player_cell[1]) < min_player_dist:
                 continue
-            if abs(col - exit_cell[0]) + abs(row - exit_cell[1]) < 4:
+            if abs(col - exit_cell[0]) + abs(row - exit_cell[1]) < min_exit_dist:
                 continue
             return col, row
+
+        candidates = []
+        for row in range(maze.rows):
+            for col in range(maze.cols):
+                if (col, row) in reserved:
+                    continue
+                exit_dist = abs(col - exit_cell[0]) + abs(row - exit_cell[1])
+                if exit_dist < min_exit_dist:
+                    continue
+                player_dist = abs(col - player_cell[0]) + abs(row - player_cell[1])
+                candidates.append((player_dist, random.random(), col, row))
+
+        if candidates:
+            candidates.sort(reverse=True)
+            return candidates[0][2], candidates[0][3]
 
         for row in range(maze.rows):
             for col in range(maze.cols):
@@ -1689,10 +1708,23 @@ class MazeModeMixin:
 
         return 0
 
+    def _maze_powerup_drop_pool(self) -> list[str]:
+        """Maze drops plus only the selected ship's compatible special."""
+        pool = [
+            kind for kind in MAZE_POWERUP_TYPES
+            if kind not in BEAM_ONLY_POWERUPS
+            and kind not in ELECTRIC_ONLY_POWERUPS
+        ]
+        if self.selected_ship in BEAM_SHIP_INDICES:
+            pool += ["beam360"] * 2
+        if self.selected_ship in ELECTRIC_SHIP_INDICES:
+            pool += ["elec360"] * 2
+        return pool
+
     def _drop_maze_powerup(self, x: float, y: float, kind: str | None = None) -> None:
         """Drop a stationary maze-styled powerup from a defeated enemy."""
         if kind is None:
-            kind = random.choice(MAZE_POWERUP_TYPES)
+            kind = random.choice(self._maze_powerup_drop_pool())
         pu = Powerup(x, y, kind, maze_style=True)
         pu.change_y = 0
         pu.life = 18.0

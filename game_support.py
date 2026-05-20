@@ -197,23 +197,23 @@ STATE_MODE_SELECT  = "mode_select"
 
 MAZE_CELL_SIZE    = 240         # pixels per cell
 MAZE_WALL_THICK   = 60          # wall line thickness
-MAZE_BASE_COLS    = 23          # starting grid width  — larger than screen
-MAZE_BASE_ROWS    = 17          # starting grid height — larger than screen
+MAZE_BASE_COLS    = 33          # starting grid width  — much larger than screen
+MAZE_BASE_ROWS    = 25          # starting grid height — much larger than screen
 MAZE_MAX_LEVELS   = 50          # final maze floor
 MAZE_KEYS_REQUIRED = 3          # keys needed to unlock the floor exit
 MAZE_ENEMIES_PER_KEY = 30       # initial maze enemies clustered around each key
-MAZE_KEY_RELOCATE_TIME = 110.0  # seconds before uncollected keys jump elsewhere
+MAZE_KEY_RELOCATE_TIME = 85.0   # seconds before uncollected keys jump elsewhere
 MAZE_CORNER_WAVE_INTERVAL = 10.0 # seconds between five-enemy maze waves
 MAZE_CORNER_WAVE_SIZE = 5       # enemies spawned per corner wave
 MAZE_POTION_SPAWN_INTERVAL = 10.0 # seconds between repeated maze powerup spawns
 MAZE_MAX_POTIONS = 12           # max uncollected powerups waiting in the maze
 
 # ── Maze enemy constants ──────────────────────────────────────────────────────
-MAZE_ENEMY_HEALTH         = 60     # HP per maze enemy
-MAZE_ENEMY_SPEED          = 72     # px/s movement speed
-MAZE_ENEMY_BULLET_DAMAGE  = 5      # much less than normal (10)
-MAZE_ENEMY_BULLET_SPEED   = 270    # px/s  (slower than normal 430)
-MAZE_ENEMY_FIRE_RATE      = 2.6    # seconds between shots
+MAZE_ENEMY_HEALTH         = 90     # HP per maze enemy
+MAZE_ENEMY_SPEED          = 88     # px/s movement speed
+MAZE_ENEMY_BULLET_DAMAGE  = 8      # maze enemy bullet damage
+MAZE_ENEMY_BULLET_SPEED   = 330    # px/s
+MAZE_ENEMY_FIRE_RATE      = 2.0    # seconds between shots
 MAZE_ENEMY_SPAWN_INTERVAL = 2.8    # seconds between spawns
 MAZE_ENEMY_SPAWN_MIN_INTERVAL = 0.55  # fastest spawn pace near maze completion
 MAZE_ENEMIES_PER_FLOOR    = MAZE_KEYS_REQUIRED * MAZE_ENEMIES_PER_KEY  # initial enemies per floor
@@ -225,8 +225,8 @@ MAZE_POWERUP_DROP_CHANCE  = 45     # % chance a maze enemy drops a powerup
 MAZE_BREACH_DROP_CHANCE   = MAZE_POWERUP_DROP_CHANCE
 MAZE_BREACH_DURATION      = 5.0    # seconds breach rounds can damage fragile walls
 MAZE_BREACH_MAX_STORAGE   = 4      # player can bank up to 4 wall-breaking charges
-MAZE_BREAKABLE_WALL_HP    = 3      # breach hits needed to crack a fragile wall
-MAZE_BREAKABLE_WALL_CHANCE = 0.24  # only some closed internal walls can be destroyed
+MAZE_BREAKABLE_WALL_HP    = 4      # breach hits needed to crack a fragile wall
+MAZE_BREAKABLE_WALL_CHANCE = 0.18  # only some closed internal walls can be destroyed
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
 STATE_MAZE_LOADOUT = "maze_loadout"
@@ -243,7 +243,7 @@ MAZE_PRESETS = [
         "name":       "CLASSIC",
         "icon":       "⬡",
         "desc":       "Balanced corridors, steady challenge",
-        "detail":     "13×9 start · grows each floor",
+        "detail":     "33×25 start · grows each floor",
         "color":      (90, 198, 255),
         "cols_bonus": 0,
         "rows_bonus": 0,
@@ -253,7 +253,7 @@ MAZE_PRESETS = [
         "name":       "LABYRINTH",
         "icon":       "◎",
         "desc":       "Vast twisting corridors to explore",
-        "detail":     "17×11 start · massive scale-up",
+        "detail":     "37×27 start · massive scale-up",
         "color":      (120, 255, 160),
         "cols_bonus": 4,
         "rows_bonus": 2,
@@ -263,7 +263,7 @@ MAZE_PRESETS = [
         "name":       "SPRINT",
         "icon":       "◈",
         "desc":       "Compact arenas — reach exit fast",
-        "detail":     "9×7 start · quick floors",
+        "detail":     "29×23 start · quick floors",
         "color":      (255, 220, 40),
         "cols_bonus": -4,
         "rows_bonus": -2,
@@ -273,7 +273,7 @@ MAZE_PRESETS = [
         "name":       "GAUNTLET",
         "icon":       "✦",
         "desc":       "Tall narrow maze — easy to get lost",
-        "detail":     "11×15 start · vertical nightmare",
+        "detail":     "31×31 start · vertical nightmare",
         "color":      (255, 90, 90),
         "cols_bonus": -2,
         "rows_bonus": 6,

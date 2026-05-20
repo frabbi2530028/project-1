@@ -23,8 +23,8 @@ class MazeModeMixin:
         preset = getattr(self, "maze_preset", None) or MAZE_PRESETS[0]
 
         # Maze dimensions grow each floor — NOT capped by the screen size
-        cols = MAZE_BASE_COLS + preset["cols_bonus"] + lvl * 3
-        rows = MAZE_BASE_ROWS + preset["rows_bonus"] + lvl * 2
+        cols = MAZE_BASE_COLS + preset["cols_bonus"] + lvl * 4
+        rows = MAZE_BASE_ROWS + preset["rows_bonus"] + lvl * 3
         cols = max(9, cols)
         rows = max(7, rows)
         # Keep odd dimensions (nicer-looking mazes)
@@ -659,13 +659,29 @@ class MazeModeMixin:
         fast = MAZE_ENEMY_SPAWN_MIN_INTERVAL
         return slow + (fast - slow) * pressure
 
+    def _maze_local_map_bounds(self, cols_visible: int, rows_visible: int) -> tuple[int, int, int, int]:
+        """Return a player-centered map window as col_min, col_max, row_min, row_max."""
+        maze = self.maze_grid
+        pc, pr = self._maze_player_cell()
+        view_cols = min(maze.cols, cols_visible)
+        view_rows = min(maze.rows, rows_visible)
+
+        col_min = pc - view_cols // 2
+        row_min = pr - view_rows // 2
+        col_min = max(0, min(maze.cols - view_cols, col_min))
+        row_min = max(0, min(maze.rows - view_rows, row_min))
+        return col_min, col_min + view_cols, row_min, row_min + view_rows
+
     def _maze_minimap_layout(self) -> tuple[int, int, int, int, int, int]:
         maze = self.maze_grid
-        mm_cs = max(4, min(9, 90 // max(maze.cols, maze.rows)))
+        col_min, col_max, row_min, row_max = self._maze_local_map_bounds(11, 9)
+        view_cols = col_max - col_min
+        view_rows = row_max - row_min
+        mm_cs = max(5, min(9, 90 // max(view_cols, view_rows)))
         mx = 16
-        my = self.height - 185 - maze.rows * mm_cs
-        mw = maze.cols * mm_cs
-        mh = maze.rows * mm_cs
+        my = self.height - 185 - view_rows * mm_cs
+        mw = view_cols * mm_cs
+        mh = view_rows * mm_cs
         return mx, my, mw, mh, mm_cs, 8
 
     def _maze_minimap_hit(self, x: float, y: float) -> bool:
@@ -1039,7 +1055,7 @@ class MazeModeMixin:
         self._draw_powerup_panel(p, t, FU, FN)
 
         # ── Hint ────────────────────────────────────
-        arcade.draw_text("WASD Move · Hold LMB to Fire · 1-3 Power-ups · 5 Special · B Breach · Find the EXIT · ESC Pause · H Hide HUD",
+        arcade.draw_text("WASD Move · Hold LMB to Fire · M Map · 1-3 Power-ups · 5 Special · B Breach · Find the EXIT · ESC Pause · H Hide HUD",
                          w // 2, 12, (70, 100, 155, 130), 8,
                          anchor_x="center", font_name=FN)
 
@@ -1050,7 +1066,6 @@ class MazeModeMixin:
                              (*self.notif_color[:3], a), 26, FU,
                              anchor_x="center", bold=True)
 
-        # ── Minimap ─────────────────────────────────
         self._draw_maze_minimap()
         if getattr(self, "maze_map_open", False):
             self._draw_maze_map_overlay()
@@ -1061,6 +1076,9 @@ class MazeModeMixin:
         cs = self.maze_cell_size
         ox, oy = self.maze_origin
         mx, my, mw, mh, mm_cs, pad = self._maze_minimap_layout()
+        col_min, col_max, row_min, row_max = self._maze_local_map_bounds(11, 9)
+        view_cols = col_max - col_min
+        view_rows = row_max - row_min
         mini_bg = (
             max(4, int(mode_c[0] * 0.10)),
             max(6, int(mode_c[1] * 0.10)),
@@ -1077,36 +1095,36 @@ class MazeModeMixin:
         MWTT = max(1, mm_cs // 5)
         wc2  = (58, 64, 72, 220)
 
-        detailed_minimap = maze.cols * maze.rows <= 1600
+        detailed_minimap = view_cols * view_rows <= 1600
         if detailed_minimap:
             # Floors
-            for row in range(maze.rows):
-                for col in range(maze.cols):
-                    fx = mx + col * mm_cs;  fy = my + row * mm_cs
+            for row in range(row_min, row_max):
+                for col in range(col_min, col_max):
+                    fx = mx + (col - col_min) * mm_cs;  fy = my + (row - row_min) * mm_cs
                     arcade.draw_lrbt_rectangle_filled(fx, fx + mm_cs, fy, fy + mm_cs, (*mini_bg, 80))
 
             # Walls
-            for row in range(maze.rows):
-                for col in range(maze.cols):
-                    fx = mx + col * mm_cs;  fy = my + row * mm_cs
-                    if row < maze.rows - 1 and not maze.is_open(col, row, MazeGrid.N):
+            for row in range(row_min, row_max):
+                for col in range(col_min, col_max):
+                    fx = mx + (col - col_min) * mm_cs;  fy = my + (row - row_min) * mm_cs
+                    if row < row_max - 1 and not maze.is_open(col, row, MazeGrid.N):
                         wall_c = (255, 118, 108, 220) if maze.is_breakable_wall(col, row, MazeGrid.N) else wc2
                         arcade.draw_lrbt_rectangle_filled(
                             fx, fx + mm_cs,
                             fy + mm_cs - MWTT, fy + mm_cs + MWTT, wall_c)
-                    if col < maze.cols - 1 and not maze.is_open(col, row, MazeGrid.E):
+                    if col < col_max - 1 and not maze.is_open(col, row, MazeGrid.E):
                         wall_c = (255, 118, 108, 220) if maze.is_breakable_wall(col, row, MazeGrid.E) else wc2
                         arcade.draw_lrbt_rectangle_filled(
                             fx + mm_cs - MWTT, fx + mm_cs + MWTT,
                             fy, fy + mm_cs, wall_c)
         else:
             arcade.draw_lrbt_rectangle_filled(mx, mx + mw, my, my + mh, (*mini_bg, 82))
-            step = max(8, max(maze.cols, maze.rows) // 18)
+            step = max(3, max(view_cols, view_rows) // 5)
             grid_c = (*mode_c, 38)
-            for row in range(0, maze.rows + 1, step):
+            for row in range(0, view_rows + 1, step):
                 yy = my + row * mm_cs
                 arcade.draw_line(mx, yy, mx + mw, yy, grid_c, 1)
-            for col in range(0, maze.cols + 1, step):
+            for col in range(0, view_cols + 1, step):
                 xx = mx + col * mm_cs
                 arcade.draw_line(xx, my, xx, my + mh, grid_c, 1)
 
@@ -1114,30 +1132,37 @@ class MazeModeMixin:
         arcade.draw_lrbt_rectangle_outline(mx, mx + mw, my, my + mh, wc2, MWTT)
 
         # Exit marker
-        ex2 = mx + (self.maze_exit_col + 0.5) * mm_cs
-        ey2 = my + (self.maze_exit_row + 0.5) * mm_cs
-        exit_mini_c = (0, 255, 155, 210) if self.maze_keys_collected >= MAZE_KEYS_REQUIRED else (255, 165, 60, 210)
-        arcade.draw_circle_filled(ex2, ey2, mm_cs * 0.45, exit_mini_c)
+        if col_min <= self.maze_exit_col < col_max and row_min <= self.maze_exit_row < row_max:
+            ex2 = mx + (self.maze_exit_col - col_min + 0.5) * mm_cs
+            ey2 = my + (self.maze_exit_row - row_min + 0.5) * mm_cs
+            exit_mini_c = (0, 255, 155, 210) if self.maze_keys_collected >= MAZE_KEYS_REQUIRED else (255, 165, 60, 210)
+            arcade.draw_circle_filled(ex2, ey2, mm_cs * 0.45, exit_mini_c)
 
         # Key markers
         for key in getattr(self, "maze_keys", []):
             if key.get("collected", False):
                 continue
-            kx = mx + (key["col"] + 0.5) * mm_cs
-            ky = my + (key["row"] + 0.5) * mm_cs
+            if not (col_min <= key["col"] < col_max and row_min <= key["row"] < row_max):
+                continue
+            kx = mx + (key["col"] - col_min + 0.5) * mm_cs
+            ky = my + (key["row"] - row_min + 0.5) * mm_cs
             arcade.draw_circle_filled(kx, ky, max(2, mm_cs * 0.36), (255, 220, 70, 235))
             arcade.draw_circle_outline(kx, ky, max(3, mm_cs * 0.55), (255, 245, 160, 160), 1)
 
         # Player marker
         pc2, pr2 = self._maze_player_cell()
-        px3 = mx + (pc2 + 0.5) * mm_cs
-        py3 = my + (pr2 + 0.5) * mm_cs
+        px3 = mx + (pc2 - col_min + 0.5) * mm_cs
+        py3 = my + (pr2 - row_min + 0.5) * mm_cs
         arcade.draw_circle_filled(px3, py3, mm_cs * 0.46, (90, 200, 255, 245))
 
         enemy_count = len(self.maze_enemies)
         for enemy in self.maze_enemies:
-            ex3 = mx + ((enemy.center_x - ox) / cs) * mm_cs
-            ey3 = my + ((enemy.center_y - oy) / cs) * mm_cs
+            e_col = (enemy.center_x - ox) / cs
+            e_row = (enemy.center_y - oy) / cs
+            if not (col_min <= e_col < col_max and row_min <= e_row < row_max):
+                continue
+            ex3 = mx + (e_col - col_min) * mm_cs
+            ey3 = my + (e_row - row_min) * mm_cs
             dot_r = max(1.5, mm_cs * 0.26)
             arcade.draw_circle_filled(ex3, ey3, dot_r, (255, 70, 70, 235))
             arcade.draw_circle_outline(ex3, ey3, max(2.5, dot_r * 1.55), (255, 150, 120, 135), 1)
@@ -1231,7 +1256,7 @@ class MazeModeMixin:
         self._txt_shadow(f"FLOOR {self.maze_level + 1}   {progress:02d}% COMPLETE   ENEMIES {enemy_count}",
                          w // 2, my + mh + 28, (150, 210, 230, 220),
                          11, FN, anchor_x="center", bold=True)
-        self._txt_shadow("CLICK ANYWHERE OR PRESS ESC TO CLOSE",
+        self._txt_shadow("PRESS M OR ESC TO CLOSE",
                          w // 2, max(20, my - 42), (135, 170, 210, 185),
                          10, FN, anchor_x="center", bold=True)
 

@@ -201,6 +201,7 @@ MAZE_BASE_COLS    = 23          # starting grid width  — larger than screen
 MAZE_BASE_ROWS    = 17          # starting grid height — larger than screen
 MAZE_MAX_LEVELS   = 50          # final maze floor
 MAZE_KEYS_REQUIRED = 3          # keys needed to unlock the floor exit
+MAZE_ENEMIES_PER_KEY = 30       # initial maze enemies clustered around each key
 MAZE_KEY_RELOCATE_TIME = 110.0  # seconds before uncollected keys jump elsewhere
 MAZE_CORNER_WAVE_INTERVAL = 10.0 # seconds between five-enemy maze waves
 MAZE_CORNER_WAVE_SIZE = 5       # enemies spawned per corner wave
@@ -215,9 +216,8 @@ MAZE_ENEMY_BULLET_SPEED   = 270    # px/s  (slower than normal 430)
 MAZE_ENEMY_FIRE_RATE      = 2.6    # seconds between shots
 MAZE_ENEMY_SPAWN_INTERVAL = 2.8    # seconds between spawns
 MAZE_ENEMY_SPAWN_MIN_INTERVAL = 0.55  # fastest spawn pace near maze completion
-MAZE_ENEMIES_PER_FLOOR    = 100    # total enemies created per maze floor
+MAZE_ENEMIES_PER_FLOOR    = MAZE_KEYS_REQUIRED * MAZE_ENEMIES_PER_KEY  # initial enemies per floor
 MAZE_ENEMY_BULLET_LIFE    = 4.0    # max seconds before auto-removal
-MAZE_ENEMY_SPLIT_TIME     = 1.8    # seconds before a surviving enemy splits
 MAZE_ENEMY_BASE_CAP       = 200    # starting max active enemies on a maze floor
 MAZE_ENEMY_CAP_PER_FLOOR  = 0      # cap stays fixed unless MAZE_ENEMY_MAX_CAP changes
 MAZE_ENEMY_MAX_CAP        = 200    # hard cap for active maze enemies
@@ -1591,7 +1591,6 @@ class MazeEnemy(arcade.Sprite):
         self.path: list  = []
         self.path_timer  = random.uniform(0.0, 0.5)   # stagger first recalc
         self.shoot_timer = random.uniform(1.8, 3.5)
-        self.split_timer = MAZE_ENEMY_SPLIT_TIME
 
     def maze_update_flow(self, delta: float, flow_next: dict,
                          cs: int, ox: float, oy: float) -> None:

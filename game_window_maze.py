@@ -105,7 +105,6 @@ class MazeModeMixin:
         self.maze_enemy_bullets = arcade.SpriteList()   # enemy bullets  (wall-blocked)
         self.beams              = []                    # Interceptor beams in maze mode
         self.elec_bolts         = arcade.SpriteList()   # Reaper bolts in maze mode
-        self.maze_spawn_timer   = 1.2                   # first enemy arrives quickly
 
         # ── Initialise camera centred on player spawn ──
         total_w = cols * cs
@@ -132,6 +131,7 @@ class MazeModeMixin:
         self.maze_exit_reached  = False
         self.boss_on_screen     = False
         self._place_maze_keys()
+        self._spawn_maze_key_enemies()
         self._spawn_maze_potion("maze_health")
         self._spawn_maze_potion("maze_speed")
 
@@ -498,6 +498,61 @@ class MazeModeMixin:
                 "collected": False,
                 "phase": random.uniform(0.0, math.tau),
             })
+
+    def _spawn_maze_key_enemies(self) -> int:
+        """Seed each key with a nearby cluster of maze enemies."""
+        maze = self.maze_grid
+        if maze is None:
+            return 0
+
+        max_enemies = min(
+            MAZE_ENEMY_MAX_CAP,
+            MAZE_ENEMY_BASE_CAP + self.maze_level * MAZE_ENEMY_CAP_PER_FLOOR,
+        )
+        reserved = {
+            (0, maze.rows - 1),
+            (self.maze_exit_col, self.maze_exit_row),
+            self._maze_player_cell(),
+        }
+        for key in getattr(self, "maze_keys", []):
+            if not key.get("collected", False):
+                reserved.add((key["col"], key["row"]))
+        for enemy in getattr(self, "maze_enemies", []):
+            reserved.add((enemy.maze_col, enemy.maze_row))
+
+        spawned_total = 0
+        for key in getattr(self, "maze_keys", []):
+            if key.get("collected", False):
+                continue
+
+            key_col = key["col"]
+            key_row = key["row"]
+            candidates = []
+            for row in range(maze.rows):
+                for col in range(maze.cols):
+                    cell = (col, row)
+                    if cell in reserved:
+                        continue
+                    dist = abs(col - key_col) + abs(row - key_row)
+                    if dist == 0:
+                        continue
+                    candidates.append((dist, random.random(), col, row))
+
+            candidates.sort()
+            spawned_for_key = 0
+            for _dist, _roll, col, row in candidates:
+                if (spawned_for_key >= MAZE_ENEMIES_PER_KEY
+                        or len(self.maze_enemies) >= max_enemies):
+                    break
+                cell = (col, row)
+                if cell in reserved:
+                    continue
+                if self._spawn_maze_enemy_at(col, row):
+                    reserved.add(cell)
+                    spawned_for_key += 1
+                    spawned_total += 1
+
+        return spawned_total
 
     def _relocate_maze_keys(self) -> None:
         """Move any uncollected keys to fresh cells."""
@@ -1460,6 +1515,7 @@ class MazeModeMixin:
             for enemy in list(self.maze_enemies):
                 hit_r = max(enemy.width, enemy.height) * 0.45
                 if beam.intersects_circle(enemy.center_x, enemy.center_y, hit_r):
+                    self._split_maze_enemy(enemy, max_enemies)
                     self._maze_kill_enemy(enemy, (255, 130, 70))
 
         for bolt in list(self.elec_bolts):
@@ -1467,6 +1523,7 @@ class MazeModeMixin:
             if not hits:
                 continue
             enemy = hits[0]
+            self._split_maze_enemy(enemy, max_enemies)
             enemy.health -= bolt.damage
             self._burst(bolt.center_x, bolt.center_y, 10,
                         (140, 100, 255), 55, 200, 1.2, 2.6, .06, .18)
@@ -1482,18 +1539,12 @@ class MazeModeMixin:
             if hits:
                 b.remove_from_sprite_lists()
                 enemy = hits[0]
+                self._split_maze_enemy(enemy, max_enemies)
                 enemy.health -= 20
                 self._burst(b.center_x, b.center_y, 8,
                             (255, 220, 100), 55, 180, 1.0, 2.2, .07, .18)
                 if enemy.health <= 0:
                     self._maze_kill_enemy(enemy, (255, 130, 70))
-
-        # ── Enemy splitting ─────────────────────────────────────────
-        for enemy in list(self.maze_enemies):
-            enemy.split_timer -= delta
-            if enemy.split_timer <= 0:
-                enemy.split_timer += MAZE_ENEMY_SPLIT_TIME
-                self._split_maze_enemy(enemy, max_enemies)
 
         # ── Enemy bullet → player collision ─────────────────────────
         for b in list(self.maze_enemy_bullets):
@@ -1510,19 +1561,6 @@ class MazeModeMixin:
                     if p.health <= 0:
                         self._maze_gameover()
                         return
-
-        # ── Enemy spawn timer ────────────────────────────────────────
-        self.maze_spawn_timer -= delta
-        if (self.maze_spawn_timer <= 0
-                and len(self.maze_enemies) < max_enemies):
-            self.maze_spawn_timer = self._maze_enemy_spawn_interval()
-            self._spawn_maze_enemy()
-
-        # ── Five-enemy ambush wave every 10 seconds ─────────────────
-        self.maze_corner_wave_timer -= delta
-        if self.maze_corner_wave_timer <= 0:
-            self.maze_corner_wave_timer += MAZE_CORNER_WAVE_INTERVAL
-            self._spawn_maze_corner_wave(max_enemies)
 
         # ── Smooth camera follow (Among Us style) ───────
         total_w = maze.cols * cs
@@ -1677,10 +1715,10 @@ class MazeModeMixin:
         split_health = max(1, enemy.health // 2)
         if enemy.health - split_health < 1:
             return False
+        child_health = split_health + 50
         enemy.health -= split_health
-        child.health = split_health
-        enemy.split_timer = MAZE_ENEMY_SPLIT_TIME
-        child.split_timer = MAZE_ENEMY_SPLIT_TIME
+        child.health = child_health
+        child.max_health = max(child.max_health, child_health)
         self.maze_enemies.append(child)
         self.maze_enemies_created += 1
         self.notif_text = "ENEMY SPLIT!"

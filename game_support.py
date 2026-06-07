@@ -1200,6 +1200,11 @@ class Player(arcade.Sprite):
         engine = getattr(self, "_engine_bonus", 1.0)
         return PLAYER_SPEED * engine * (1.65 if self.speed_active else 1.0)
 
+    @staticmethod
+    def angle_from_motion(vx: float, vy: float) -> float:
+        raw = math.degrees(math.atan2(vx, vy))
+        return (raw + 180.0) % 360.0 - 180.0
+
     def update_powerups(self, delta):
         for attr in ("shield", "speed", "triple", "beam360", "elec360", "breach"):
             if getattr(self, f"{attr}_active"):
@@ -1211,7 +1216,10 @@ class Player(arcade.Sprite):
     def update(self, delta_time=1/60, *args, **kwargs):
         self.center_x += self.change_x * delta_time
         self.center_y += self.change_y * delta_time
-        self.angle = max(-20, min(20, -self.change_x * 0.06))
+        if math.hypot(self.change_x, self.change_y) > 4.0:
+            target = self.angle_from_motion(self.change_x, self.change_y)
+            diff = (target - self.angle + 180.0) % 360.0 - 180.0
+            self.angle += diff * min(1.0, 18.0 * delta_time)
 
 
 # ─────────────────────────────────────────────────────

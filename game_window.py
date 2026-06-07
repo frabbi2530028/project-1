@@ -75,6 +75,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.selected_maze_preset: str = "classic"
         self._maze_preset_btns: dict   = {}
         self.maze_preset: dict | None  = None   # active preset params
+        self.maze_saved_level: int = 0           # zero-based floor checkpoint
         self.menu_theme         = "dark"
         self.space_theme        = CLASSIC_SPACE_THEMES[0]["key"]
         self.selected_ship      = 0
@@ -3080,6 +3081,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 "upgrades":         self.upgrades,
                 "best_scores":      {str(k): v for k, v in self.best_scores.items()},
                 "completed_levels": list(self.completed_levels),
+                "maze_saved_level": max(
+                    0,
+                    min(MAZE_MAX_LEVELS - 1, int(getattr(self, "maze_saved_level", 0))),
+                ),
+                "maze_preset":      getattr(self, "selected_maze_preset", "classic"),
             }
             SAVE_FILE.write_text(__import__("json").dumps(data))
         except OSError:
@@ -3091,6 +3097,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.upgrades = {item["id"]: 0 for item in SHOP_ITEMS}
         self.best_scores = {}
         self.completed_levels = set()
+        self.maze_saved_level = 0
+        self.maze_level = 0
+        self.selected_maze_preset = "classic"
         self.selected_level = 0
         self.selected_ship = 0
         self.selected_mode = None
@@ -3117,6 +3126,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self.best_scores      = {int(k): v for k, v in
                                      data.get("best_scores", {}).items()}
             self.completed_levels = set(data.get("completed_levels", []))
+            saved_maze = int(data.get("maze_saved_level", 0))
+            self.maze_saved_level = max(0, min(MAZE_MAX_LEVELS - 1, saved_maze))
+            saved_preset = data.get("maze_preset", self.selected_maze_preset)
+            if any(p["key"] == saved_preset for p in MAZE_PRESETS):
+                self.selected_maze_preset = saved_preset
         except (OSError, ValueError, KeyError):
             pass
 

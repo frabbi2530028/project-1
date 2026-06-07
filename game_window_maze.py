@@ -35,6 +35,18 @@ class MazeModeMixin:
     def _maze_floor_index(self) -> int:
         return max(0, self._maze_display_floor() - 1)
 
+    def _save_maze_resume_floor(self, level: int | None = None) -> None:
+        if level is None:
+            level = getattr(self, "maze_level", 0)
+        self.maze_saved_level = max(0, min(MAZE_MAX_LEVELS - 1, int(level)))
+        if hasattr(self, "_save_progress"):
+            self._save_progress()
+
+    def _clear_maze_resume_floor(self) -> None:
+        self.maze_saved_level = 0
+        if hasattr(self, "_save_progress"):
+            self._save_progress()
+
     def _maze_floor_progress(self) -> float:
         if MAZE_MAX_LEVELS <= 1:
             return 1.0
@@ -942,6 +954,7 @@ class MazeModeMixin:
         elif not bosses:
             self.maze_run_complete = True
             self.score += 5000
+            self._clear_maze_resume_floor()
             self.notif_text = (
                 "FINAL BOSS DEFEATED!"
                 if self._maze_is_final_floor()
@@ -1815,7 +1828,8 @@ class MazeModeMixin:
                     self.maze_exit_reached = True
                     bonus = max(0, 2000 - int(self.time_alive * 5))
                     self.score += bonus
-                    self.maze_level += 1
+                    self.maze_level = min(MAZE_MAX_LEVELS - 1, self.maze_level + 1)
+                    self._save_maze_resume_floor()
                     self.setup_maze(keep_player=True)
                     self.notif_text  = (
                         f"FLOOR {self._maze_display_floor()} SPEED + STORAGE UP!  "
@@ -2698,12 +2712,16 @@ class MazeModeMixin:
                          anchor_x="center", font_name=FN)
 
     def _start_maze_with_preset(self):
-        """Reset all maze run state and start a fresh maze with the chosen preset."""
+        """Reset maze run state and start from the saved floor checkpoint."""
         self.maze_preset = next(
             (p for p in MAZE_PRESETS if p["key"] == self.selected_maze_preset),
             MAZE_PRESETS[0]
         )
-        self.maze_level = 0
+        self.maze_level = max(
+            0,
+            min(MAZE_MAX_LEVELS - 1, int(getattr(self, "maze_saved_level", 0))),
+        )
+        self._save_maze_resume_floor(self.maze_level)
         self.maze_run_complete = False
         self.score      = 0
         self.time_alive = 0.0

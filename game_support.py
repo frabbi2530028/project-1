@@ -1612,6 +1612,10 @@ class MazeEnemy(arcade.Sprite):
         self.path_timer  = random.uniform(0.0, 0.5)   # stagger first recalc
         self.shoot_timer = random.uniform(1.8, 3.5)
 
+    @staticmethod
+    def _angle_from_motion(dx: float, dy: float) -> float:
+        return (math.degrees(math.atan2(dx, dy)) + 180.0) % 360.0 - 180.0
+
     def maze_update_flow(self, delta: float, flow_next: dict,
                          cs: int, ox: float, oy: float) -> None:
         """Move using a shared maze flow map instead of per-enemy BFS."""
@@ -1629,7 +1633,8 @@ class MazeEnemy(arcade.Sprite):
         elif dist > 0:
             self.center_x += (dx / dist) * self.speed * delta
             self.center_y += (dy / dist) * self.speed * delta
-        self.angle = math.degrees(math.atan2(dy, dx)) - 90
+        if dist > 0:
+            self.angle = self._angle_from_motion(dx, dy)
 
     def maze_update(self, delta: float, player_col: int, player_row: int,
                     maze: MazeGrid, cs: int, ox: float, oy: float) -> None:
@@ -1654,7 +1659,8 @@ class MazeEnemy(arcade.Sprite):
         elif dist > 0:
             self.center_x += (dx / dist) * self.speed * delta
             self.center_y += (dy / dist) * self.speed * delta
-        self.angle = math.degrees(math.atan2(dy, dx)) - 90
+        if dist > 0:
+            self.angle = self._angle_from_motion(dx, dy)
 
 
 class MazeBoss(arcade.Sprite):

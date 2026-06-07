@@ -76,6 +76,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._maze_preset_btns: dict   = {}
         self.maze_preset: dict | None  = None   # active preset params
         self.menu_theme         = "dark"
+        self.space_theme        = CLASSIC_SPACE_THEMES[0]["key"]
         self.selected_ship      = 0
         self._ship_carousel_from: int | None = None
         self._ship_carousel_dir = 0
@@ -342,6 +343,126 @@ class GameWindow(MazeModeMixin, arcade.Window):
             s["y"] -= s["speed"]*flow*delta
             if s["y"] < -6:
                 s["y"] = h+random.uniform(4,60);  s["x"] = random.uniform(0,w)
+
+    def _active_space_theme(self) -> dict:
+        for theme in CLASSIC_SPACE_THEMES:
+            if theme["key"] == getattr(self, "space_theme", ""):
+                return theme
+        return CLASSIC_SPACE_THEMES[0]
+
+    def _cycle_space_theme(self, direction: int) -> None:
+        keys = [theme["key"] for theme in CLASSIC_SPACE_THEMES]
+        try:
+            idx = keys.index(getattr(self, "space_theme", keys[0]))
+        except ValueError:
+            idx = 0
+        self.space_theme = keys[(idx + direction) % len(keys)]
+
+    @staticmethod
+    def _mix_rgb(a: tuple, b: tuple, amount: float) -> tuple[int, int, int]:
+        amount = max(0.0, min(1.0, amount))
+        return tuple(int(a[i] + (b[i] - a[i]) * amount) for i in range(3))
+
+    def _draw_space_theme_background(self, dim_alpha: int = 0) -> None:
+        w, h = self.width, self.height
+        t = self.bg_time
+        theme = self._active_space_theme()
+        bg = theme["bg"]
+        planet = theme["planet"]
+        glow = theme["glow"]
+        nebula1 = theme["nebula1"]
+        nebula2 = theme["nebula2"]
+
+        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (*bg, 255))
+
+        for i in range(8):
+            band_b = h * i / 8
+            band_t = h * (i + 1) / 8
+            mix = i / 7
+            band = self._mix_rgb(bg, nebula1 if i % 2 == 0 else nebula2, 0.10 + 0.08 * mix)
+            arcade.draw_lrbt_rectangle_filled(0, w, band_b, band_t, (*band, 28))
+
+        pulse = 0.5 + 0.5 * math.sin(t * 0.55)
+        arcade.draw_circle_filled(w * 0.18, h * 0.82, 210 + 26 * pulse, (*nebula1, 42))
+        arcade.draw_circle_filled(w * 0.84, h * 0.22, 245 + 34 * (1.0 - pulse), (*nebula2, 38))
+        arcade.draw_circle_filled(w * 0.52, h * 1.04, 255, (*glow, 20))
+
+        orbit_a = int(34 + 18 * pulse)
+        for i, scale in enumerate((0.86, 1.12, 1.38)):
+            oy = h * (0.44 + 0.025 * math.sin(t * 0.42 + i))
+            arcade.draw_ellipse_outline(
+                w * 0.50, oy, w * scale, h * (0.26 + i * 0.055),
+                (*theme["star"], orbit_a // (i + 1)), 1)
+
+        off = (t * 16) % 32
+        for yi in range(-34, h + 34, 32):
+            arcade.draw_line(0, yi + off, w, yi + off - 20, (*nebula1, 24), 1)
+
+        sc = theme["star"]
+        for s in self.stars:
+            tw = 0.55 + 0.45 * math.sin(t * s["twinkle"] + s["phase"])
+            al = max(22, min(255, int(s["alpha"] * tw)))
+            star_size = s["size"] * (1.0 + 0.12 * math.sin(t * 1.2 + s["phase"]))
+            arcade.draw_circle_filled(s["x"], s["y"], star_size, (*sc, al))
+
+        px = w * theme["x"] + math.sin(t * 0.18) * 10
+        py = h * theme["y"] + math.cos(t * 0.16) * 8
+        r = theme["r"] * max(0.74, min(1.22, min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT)))
+
+        if theme.get("rings"):
+            for k, alpha in ((2.35, 82), (1.95, 118), (1.54, 92)):
+                arcade.draw_ellipse_outline(px, py, r * k, r * (0.58 + 0.05 * k),
+                                            (*glow, alpha), max(1, int(r * 0.025)))
+
+        for i, alpha in enumerate((45, 34, 24)):
+            arcade.draw_circle_filled(px, py, r + 44 + i * 34, (*glow, alpha))
+        arcade.draw_circle_filled(px, py, r, (*planet, 235))
+        arcade.draw_circle_filled(px - r * 0.28, py + r * 0.22, r * 0.46,
+                                  (*self._mix_rgb(planet, (255, 255, 255), 0.32), 74))
+        arcade.draw_circle_filled(px + r * 0.35, py - r * 0.18, r * 0.42,
+                                  (*self._mix_rgb(planet, bg, 0.38), 90))
+        for i in range(-2, 3):
+            yy = py + i * r * 0.18 + math.sin(t * 0.5 + i) * 2
+            half = max(8, math.sqrt(max(0.0, r * r - (yy - py) * (yy - py))))
+            band = self._mix_rgb(planet, glow if i % 2 == 0 else bg, 0.24)
+            arcade.draw_line(px - half * 0.84, yy, px + half * 0.84, yy,
+                             (*band, 74), max(1, int(r * 0.035)))
+        arcade.draw_circle_outline(px, py, r, (*glow, 175), 2)
+
+        if dim_alpha > 0:
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 4, 14, dim_alpha))
+
+    def _draw_space_theme_selector(self, x: float, y: float, width: float,
+                                   height: float, font_ui, font_num) -> None:
+        theme = self._active_space_theme()
+        accent = theme["glow"]
+        left_w = height
+        right_w = height
+        mid_l = x + left_w + 6
+        mid_r = x + width - right_w - 6
+        top = y + height
+
+        for name, l, r, label in (
+                ("__theme_prev__", x, x + left_w, "<"),
+                ("__theme_next__", x + width - right_w, x + width, ">")):
+            hov = self._is_hovering(l, r, y, top)
+            fill = (*accent, 220) if hov else (*accent, 76)
+            text_c = (8, 12, 22, 255) if hov else (*theme["star"], 230)
+            arcade.draw_lrbt_rectangle_filled(l, r, y, top, fill)
+            arcade.draw_lrbt_rectangle_outline(l, r, y, top, (*accent, 210), 1)
+            arcade.draw_text(label, (l + r) / 2, y + height / 2,
+                             text_c, 13, anchor_x="center", anchor_y="center",
+                             bold=True, font_name=font_ui)
+            self._mode_btns[name] = (l, r, y, top)
+
+        arcade.draw_lrbt_rectangle_filled(mid_l, mid_r, y, top, (5, 10, 28, 178))
+        arcade.draw_lrbt_rectangle_outline(mid_l, mid_r, y, top, (*accent, 145), 1)
+        arcade.draw_text("BACKDROP", (mid_l + mid_r) / 2, top - 8,
+                         (*theme["star"], 145), 7, anchor_x="center",
+                         anchor_y="center", bold=True, font_name=font_num)
+        arcade.draw_text(theme["label"], (mid_l + mid_r) / 2, y + 12,
+                         (*theme["star"], 240), 12, anchor_x="center",
+                         anchor_y="center", bold=True, font_name=font_ui)
 
     def _update_particles(self, delta):
         alive = []
@@ -1552,24 +1673,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
     # ══════════════════════════════════════════════════
 
     def _draw_bg_space(self):
-        w, h  = self.width, self.height
-        tc    = THEMES[self.menu_theme]   # active theme colors
-        pulse = (math.sin(self.bg_time*0.7)+1)*0.5
-
-        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["world_bg"])
-        arcade.draw_circle_filled(w*0.19, h*0.83, 250+20*pulse,       tc["nebula1"])
-        arcade.draw_circle_filled(w*0.84, h*0.28, 280+30*(1.0-pulse), tc["nebula2"])
-        arcade.draw_circle_filled(w*0.53, h*1.07, 280,                tc["nebula3"])
-
-        off = (self.bg_time*14) % 28
-        for grid_y in range(-30, h+30, 28):
-            arcade.draw_line(0, grid_y+off, w, grid_y+off-18, tc["grid_line"], 1)
-
-        sc = tc["star_color"]
-        for s in self.stars:
-            tw = 0.55 + 0.45*math.sin(self.bg_time*s["twinkle"]+s["phase"])
-            al = max(20, min(255, int(s["alpha"]*tw)))
-            arcade.draw_circle_filled(s["x"], s["y"], s["size"], (*sc[:3], al))
+        self._draw_space_theme_background()
 
     def _draw_entity_glows(self):
         tc = THEMES[self.menu_theme]
@@ -3003,6 +3107,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     if name == "__reset_save__":
                         self.reset_confirm_open = True
                         self.reset_confirm_started = self.bg_time
+                    elif name == "__theme_prev__":
+                        self._cycle_space_theme(-1)
+                    elif name == "__theme_next__":
+                        self._cycle_space_theme(1)
                     elif name == "__enter__":
                         if self.selected_mode == "normal":
                             self.game_state = STATE_MENU

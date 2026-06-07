@@ -2201,18 +2201,7 @@ class MazeModeMixin:
         FN   = ("Courier New", "Menlo", "Monaco", "monospace")
 
         # ── Animated background ─────────────────────────────────────────
-        arcade.draw_lrbt_rectangle_filled(0, w, 0, h, tc["bg"])
-        p = (math.sin(t * 0.55) + 1) * 0.5
-        arcade.draw_circle_filled(w * 0.12, h * 0.85, 240 + 20 * p,       (38, 75, 185, 45))
-        arcade.draw_circle_filled(w * 0.88, h * 0.18, 270 + 28 * (1 - p), (130, 40, 165, 38))
-        arcade.draw_circle_filled(w * 0.50, h * 1.08, 290,                  (28, 150, 200, 22))
-        off = (t * 14) % 28
-        for yi in range(-30, h + 30, 28):
-            arcade.draw_line(0, yi + off, w, yi + off - 18, (28, 44, 76, 24), 1)
-        for s in self.stars:
-            tw2 = 0.55 + 0.45 * math.sin(t * s["twinkle"] + s["phase"])
-            al  = max(20, min(255, int(s["alpha"] * tw2)))
-            arcade.draw_circle_filled(s["x"], s["y"], s["size"], (200, 222, 255, al))
+        self._draw_space_theme_background(dim_alpha=54)
 
         # ── Title ───────────────────────────────────────────────────────
         title_pulse = 0.5 + 0.5 * math.sin(t * 2.2)
@@ -2289,6 +2278,7 @@ class MazeModeMixin:
         self._mode_btns["__reset_save__"] = (
             reset_x, reset_x + reset_w, reset_y, reset_y + reset_h
         )
+        self._draw_space_theme_selector(22, 22, min(282, max(230, w * 0.30)), 32, FU, FN)
 
         mode_feedback = getattr(self, "mode_feedback", "")
         if mode_feedback:

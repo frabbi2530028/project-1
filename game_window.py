@@ -944,23 +944,28 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, bord, 1)
 
         content_pad = max(16, int(cw * 0.06))
-        fname_sz = max(18, min(25, cw // 15))
-        ftag_sz = max(13, min(16, cw // 24))
+        fname_sz = max(15, min(21, cw // 22))
+        ftag_sz = max(12, min(15, cw // 27))
         fstat_sz = max(12, min(15, cw // 26))
 
-        badge_y = cb + 18
-        stats_y = cb + 54
-        tag_y = cb + 96
-        name_y = cb + 126
-        preview_bottom = name_y + fname_sz + 10
-        preview_top = ct - content_pad
-        preview_height = max(54, preview_top - preview_bottom)
+        badge_y = cb + max(12, int(ch * 0.07))
+        stats_y = cb + max(42, int(ch * 0.21))
+        tag_y = cb + max(72, int(ch * 0.35))
+        name_y = cb + max(98, int(ch * 0.48))
+        preview_bottom = name_y + fname_sz + max(10, int(ch * 0.045))
+        preview_top = ct - max(10, content_pad // 2)
+        preview_height = max(44, preview_top - preview_bottom)
         preview_width = max(140, cw - content_pad * 2)
-        preview_draw_w = preview_width * 1.46
-        preview_draw_h = max(44, preview_height - 6)
-        pcy = (preview_bottom + preview_top) * 0.5
+        preview_draw_w = preview_width * 1.85
+        preview_draw_h = min(ch * 0.58, max(70, preview_height * 1.24))
+        pcy = (preview_bottom + preview_top) * 0.5 + max(2, int(ch * 0.015))
 
         if avl and ship["texture"]:
+            preview_accent = tuple(ship["color"][:3])
+            glow_r = min(cw * 0.18, preview_draw_h * 0.58)
+            arcade.draw_circle_filled(pcx, pcy, glow_r, (*preview_accent, 28))
+            arcade.draw_circle_outline(pcx, pcy, glow_r * 1.16, (*preview_accent, 56), 1)
+
             anim_from = getattr(self, "_ship_carousel_from", None)
             anim_dir = getattr(self, "_ship_carousel_dir", 0)
             anim_age = max(0.0, t - getattr(self, "_ship_carousel_started", 0.0))
@@ -983,7 +988,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             tex = load_texture_clean(ship["texture"], ship["tex_scale"])
             draw_x = pcx + anim_dir * slide * (1.0 - ease) if anim_from is not None else pcx
             draw_y = pcy + bob
-            draw_scale = 0.88 + 0.12 * ease
+            draw_scale = 1.08 + 0.16 * ease
             _draw_texture_fitted(tex, draw_x, draw_y, preview_draw_w * draw_scale,
                                  preview_draw_h * draw_scale)
         else:
@@ -1032,7 +1037,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         arrow_w = scaled(58)
         arrow_h = scaled(82)
-        arrow_y = cb + ch // 2 - arrow_h // 2
+        arrow_y = int(pcy - arrow_h // 2)
         left_x = max(pl + 34, cl - arrow_w - scaled(30))
         right_x = min(pr - 34 - arrow_w, cr + scaled(30))
         for name, x, label in (("ship_prev", left_x, "<"), ("ship_next", right_x, ">")):

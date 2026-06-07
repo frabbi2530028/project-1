@@ -2530,8 +2530,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
         dp = self._dpreset
 
         def _face_player(sprite, a_rad, smooth=18.0):
-            """Smoothly rotate sprite to face direction a_rad (angle to player)."""
-            target = math.degrees(a_rad) - 90   # -90: nose-up sprites face the player
+            """Smoothly rotate nose-up sprite art so the cone side faces the player."""
+            target = (90.0 - math.degrees(a_rad) + 180.0) % 360.0 - 180.0
             # Shortest-path angle difference  (-180 to +180)
             diff = (target - sprite.angle + 180) % 360 - 180
             sprite.angle += diff * min(1.0, smooth * delta)

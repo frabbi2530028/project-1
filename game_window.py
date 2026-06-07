@@ -392,13 +392,26 @@ class GameWindow(MazeModeMixin, arcade.Window):
         glow = theme["glow"]
         star = theme["star"]
         scale = max(0.74, min(1.26, min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT)))
-        px = w * theme["x"] + math.sin(t * 0.18) * 12
-        py = h * theme["y"] + math.cos(t * 0.15) * 9
+        base_x = w * theme["x"]
+        base_y = h * theme["y"]
+        phase_seed = (sum(ord(ch) for ch in theme["key"]) % 17) * 0.37
+        orbit_phase = t * 0.105 + phase_seed
+        orbit_rx = min(28.0, max(10.0, w * 0.018))
+        orbit_ry = min(20.0, max(8.0, h * 0.018))
+        px = base_x + math.cos(orbit_phase) * orbit_rx
+        py = base_y + math.sin(orbit_phase) * orbit_ry
         r = theme["r"] * scale
+        spin = t * (0.32 if theme["key"] == "sun" else 0.24) + phase_seed
+
+        arcade.draw_ellipse_outline(base_x, base_y, orbit_rx * 2.35, orbit_ry * 2.35,
+                                    (*glow, 22), 1)
+        trail_x = base_x + math.cos(orbit_phase - 0.45) * orbit_rx
+        trail_y = base_y + math.sin(orbit_phase - 0.45) * orbit_ry
+        arcade.draw_circle_filled(trail_x, trail_y, max(2.0, r * 0.018), (*star, 42))
 
         if theme["key"] == "sun":
             for i in range(24):
-                a = i * math.tau / 24 + t * 0.12
+                a = i * math.tau / 24 + spin * 0.42
                 inner = r * (1.02 + 0.04 * math.sin(t * 1.3 + i))
                 outer = r * (1.45 + 0.18 * math.sin(t * 0.9 + i * 1.8))
                 arcade.draw_line(px + math.cos(a) * inner, py + math.sin(a) * inner,
@@ -410,38 +423,57 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 arcade.draw_ellipse_outline(px, py, r * k, r * (0.54 + k * 0.045),
                                             (*glow, alpha), max(1, int(r * width)))
 
+        moon_phase = spin * 1.35
+        moon_x = px + math.cos(moon_phase) * r * 1.15
+        moon_y = py + math.sin(moon_phase) * r * 0.38
+        moon_size = max(2.0, r * 0.025)
+        if math.sin(moon_phase) > 0:
+            arcade.draw_circle_filled(moon_x, moon_y, moon_size, (*star, 44))
+
         for i, alpha in enumerate((42, 32, 22, 14)):
             arcade.draw_circle_filled(px, py, r + 40 + i * 30, (*glow, alpha))
         arcade.draw_circle_filled(px, py, r, (*planet, 245))
 
         light = self._mix_rgb(planet, (255, 255, 255), 0.38)
         shade = self._mix_rgb(planet, bg, 0.48)
-        arcade.draw_circle_filled(px - r * 0.30, py + r * 0.24, r * 0.52, (*light, 86))
-        arcade.draw_circle_filled(px + r * 0.42, py - r * 0.23, r * 0.58, (*shade, 110))
+        light_dx = -0.30 + 0.05 * math.sin(spin)
+        light_dy = 0.24 + 0.03 * math.cos(spin * 0.8)
+        shade_dx = 0.42 + 0.06 * math.sin(spin + 1.7)
+        shade_dy = -0.23 + 0.03 * math.cos(spin * 0.7)
+        arcade.draw_circle_filled(px + r * light_dx, py + r * light_dy, r * 0.52, (*light, 86))
+        arcade.draw_circle_filled(px + r * shade_dx, py + r * shade_dy, r * 0.58, (*shade, 110))
 
         for i in range(-4, 5):
             yy = py + i * r * 0.125 + math.sin(t * 0.36 + i) * r * 0.018
             half = max(6, math.sqrt(max(0.0, r * r - (yy - py) * (yy - py))))
             band_mix = 0.18 + 0.10 * ((i + 4) % 3)
             band = self._mix_rgb(planet, glow if i % 2 == 0 else shade, band_mix)
-            arcade.draw_line(px - half * 0.88, yy, px + half * 0.88, yy,
+            band_shift = math.sin(spin + i * 0.75) * r * 0.055
+            band_tilt = math.cos(spin * 0.7 + i) * r * 0.012
+            arcade.draw_line(px - half * 0.88 + band_shift, yy - band_tilt,
+                             px + half * 0.88 + band_shift, yy + band_tilt,
                              (*band, 58), max(1, int(r * 0.026)))
 
         if theme["key"] in ("mars", "venus"):
             for i in range(5):
-                a = t * 0.08 + i * 1.7
+                a = spin + i * 1.7
                 spot_dist = r * (0.18 + 0.08 * i)
                 sx = px + math.cos(a) * spot_dist
-                sy = py + math.sin(a * 1.3) * r * 0.45
+                sy = py + math.sin(a * 1.15) * r * 0.42
                 arcade.draw_circle_filled(sx, sy, r * 0.055, (*shade, 68))
 
         if theme.get("rings"):
+            ring_spin = (math.degrees(spin) * 0.36) % 360.0
             arcade.draw_arc_outline(px, py, r * 2.26, r * 0.68,
-                                    (*star, 120), 200, 340, max(1, int(r * 0.025)))
+                                    (*star, 120), 200 + ring_spin, 340 + ring_spin,
+                                    max(1, int(r * 0.025)))
             arcade.draw_arc_outline(px, py, r * 2.02, r * 0.62,
-                                    (*glow, 110), 20, 162, max(1, int(r * 0.022)))
+                                    (*glow, 110), 20 + ring_spin, 162 + ring_spin,
+                                    max(1, int(r * 0.022)))
 
         arcade.draw_circle_outline(px, py, r, (*glow, 190), 2)
+        if math.sin(moon_phase) <= 0:
+            arcade.draw_circle_filled(moon_x, moon_y, moon_size, (*star, 78))
 
     def _draw_space_theme_background(self, dim_alpha: int = 0) -> None:
         w, h = self.width, self.height

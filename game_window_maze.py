@@ -15,16 +15,33 @@ class MazeModeMixin:
     #  MAZE MODE — SETUP
     # ══════════════════════════════════════════════════
 
+    def _maze_display_floor(self) -> int:
+        return max(1, min(MAZE_MAX_LEVELS, getattr(self, "maze_level", 0) + 1))
+
+    def _maze_legacy_floor(self) -> int:
+        floor_idx = self._maze_display_floor() - 1
+        floor_idx = max(0, min(len(MAZE_LEGACY_FLOORS) - 1, floor_idx))
+        return MAZE_LEGACY_FLOORS[floor_idx]
+
+    def _maze_legacy_level_index(self) -> int:
+        return max(0, self._maze_legacy_floor() - 1)
+
+    def _maze_enemy_cap(self) -> int:
+        return min(
+            MAZE_ENEMY_MAX_CAP,
+            MAZE_ENEMY_BASE_CAP + self._maze_legacy_level_index() * MAZE_ENEMY_CAP_PER_FLOOR,
+        )
+
     def setup_maze(self, keep_player: bool = False):
         """Generate a new maze level.  Call with keep_player=True to retain HP between floors."""
         w, h  = self.width, self.height
-        lvl   = self.maze_level
+        legacy_lvl = self._maze_legacy_level_index()
         cs    = MAZE_CELL_SIZE
         preset = getattr(self, "maze_preset", None) or MAZE_PRESETS[0]
 
-        # Maze dimensions grow each floor — NOT capped by the screen size
-        cols = MAZE_BASE_COLS + preset["cols_bonus"] + lvl * 3
-        rows = MAZE_BASE_ROWS + preset["rows_bonus"] + lvl * 2
+        # Visible floors 1-10 reuse the original 50-floor difficulty curve.
+        cols = MAZE_BASE_COLS + preset["cols_bonus"] + legacy_lvl * 3
+        rows = MAZE_BASE_ROWS + preset["rows_bonus"] + legacy_lvl * 2
         cols = max(9, cols)
         rows = max(7, rows)
         # Keep odd dimensions (nicer-looking mazes)
@@ -125,7 +142,7 @@ class MazeModeMixin:
         # ── Runtime reset ───────────────────────────
         self.score              = getattr(self, "score", 0)
         self.fire_timer         = 0.0
-        self.notif_text         = f"MAZE  LEVEL  {lvl + 1}"
+        self.notif_text         = f"MAZE  FLOOR  {self._maze_display_floor()}"
         self.notif_color        = (120, 255, 160)
         self.notif_timer        = 2.0
         self.damage_flash       = 0.0
@@ -267,6 +284,16 @@ class MazeModeMixin:
             self._drop_maze_powerup(enemy.center_x, enemy.center_y)
         enemy.remove_from_sprite_lists()
 
+    def _damage_maze_enemy(self, enemy: MazeEnemy, amount: float, color: tuple,
+                           max_enemies: int) -> bool:
+        if enemy not in self.maze_enemies:
+            return False
+        enemy.health -= amount
+        if enemy.health <= 0:
+            if not self._split_maze_enemy(enemy, max_enemies):
+                self._maze_kill_enemy(enemy, color)
+        return True
+
     @staticmethod
     def _draw_round_lrbt(left: float, right: float, bottom: float, top: float,
                          color: tuple, radius: float | None = None) -> None:
@@ -287,6 +314,11 @@ class MazeModeMixin:
         arcade.draw_circle_filled(right - r, bottom + r, r, color)
         arcade.draw_circle_filled(left + r, top - r, r, color)
         arcade.draw_circle_filled(right - r, top - r, r, color)
+
+    @staticmethod
+    def _maze_map_breakable_color(theme_color: tuple, alpha: int = 220) -> tuple:
+        rgb = tuple(int(c) for c in theme_color[:3])
+        return tuple(min(255, int(c + (255 - c) * 0.32)) for c in rgb) + (alpha,)
 
     def _draw_maze_wall_segment(self, left: float, right: float, bottom: float, top: float,
                                 col: int, row: int, direction: int,
@@ -529,10 +561,7 @@ class MazeModeMixin:
         if maze is None:
             return 0
 
-        max_enemies = min(
-            MAZE_ENEMY_MAX_CAP,
-            MAZE_ENEMY_BASE_CAP + self.maze_level * MAZE_ENEMY_CAP_PER_FLOOR,
-        )
+        max_enemies = self._maze_enemy_cap()
         reserved = {
             (0, maze.rows - 1),
             (self.maze_exit_col, self.maze_exit_row),
@@ -644,7 +673,7 @@ class MazeModeMixin:
             return False
 
         col, row = self._maze_boss_spawn_cell()
-        hp = int(MAZE_BOSS_HEALTH * (1.0 + 0.22 * self.maze_level))
+        hp = int(MAZE_BOSS_HEALTH * (1.0 + 0.22 * self._maze_legacy_level_index()))
         self.maze_boss = MazeBoss(col, row, self.maze_cell_size, *self.maze_origin, health=hp)
         self.maze_bosses = [self.maze_boss]
         self.maze_boss_spawned = True
@@ -781,7 +810,7 @@ class MazeModeMixin:
         bosses = self._active_maze_bosses()
         if boss not in bosses:
             return
-        self.score += 450 + self.maze_level * 30
+        self.score += 450 + self._maze_legacy_level_index() * 30
         self._burst(boss.center_x, boss.center_y, 110,
                     (255, 120, 70), 90, 380, 2.4, 5.0, .18, .55)
         bosses.remove(boss)
@@ -1241,7 +1270,7 @@ class MazeModeMixin:
                          (210, 235, 255, 240), 18, FU, anchor_x="right", bold=True)
 
         # ── Maze floor badge ────────────────────────
-        lbl = f"FLOOR  {self.maze_level + 1}/{MAZE_MAX_LEVELS}"
+        lbl = f"FLOOR  {self._maze_display_floor()}/{MAZE_MAX_LEVELS}"
         self._txt_shadow(lbl, w // 2, h - 28, (100, 255, 160, 230),
                          14, FU, anchor_x="center", bold=True)
 
@@ -1269,10 +1298,7 @@ class MazeModeMixin:
         # ── Timer ───────────────────────────────────
         self._txt_shadow(f"{self.time_alive:06.1f}s", w - 16, h - 52,
                          (165, 200, 255, 210), 11, FN, anchor_x="right", bold=True)
-        enemy_cap = min(
-            MAZE_ENEMY_BASE_CAP + self.maze_level * MAZE_ENEMY_CAP_PER_FLOOR,
-            MAZE_ENEMY_MAX_CAP,
-        )
+        enemy_cap = self._maze_enemy_cap()
         self._txt_shadow(f"ENEMIES  {len(self.maze_enemies)}/{enemy_cap}",
                          w - 16, h - 72, (255, 145, 120, 190),
                          10, FN, anchor_x="right", bold=True)
@@ -1346,6 +1372,7 @@ class MazeModeMixin:
 
         MWTT = max(1, mm_cs // 5)
         wc2  = (58, 64, 72, 220)
+        break_c = self._maze_map_breakable_color(mode_c, 220)
 
         detailed_minimap = view_cols * view_rows <= 1600
         if detailed_minimap:
@@ -1360,12 +1387,12 @@ class MazeModeMixin:
                 for col in range(col_min, col_max):
                     fx = mx + (col - col_min) * mm_cs;  fy = my + (row - row_min) * mm_cs
                     if row < row_max - 1 and not maze.is_open(col, row, MazeGrid.N):
-                        wall_c = (255, 118, 108, 220) if maze.is_breakable_wall(col, row, MazeGrid.N) else wc2
+                        wall_c = break_c if maze.is_breakable_wall(col, row, MazeGrid.N) else wc2
                         arcade.draw_lrbt_rectangle_filled(
                             fx, fx + mm_cs,
                             fy + mm_cs - MWTT, fy + mm_cs + MWTT, wall_c)
                     if col < col_max - 1 and not maze.is_open(col, row, MazeGrid.E):
-                        wall_c = (255, 118, 108, 220) if maze.is_breakable_wall(col, row, MazeGrid.E) else wc2
+                        wall_c = break_c if maze.is_breakable_wall(col, row, MazeGrid.E) else wc2
                         arcade.draw_lrbt_rectangle_filled(
                             fx + mm_cs - MWTT, fx + mm_cs + MWTT,
                             fy, fy + mm_cs, wall_c)
@@ -1457,7 +1484,7 @@ class MazeModeMixin:
             max(15, int(mode_c[2] * 0.14)),
         )
         wall_c = (82, 90, 110, 215)
-        break_c = (255, 105, 85, 218)
+        break_c = self._maze_map_breakable_color(mode_c, 218)
 
         arcade.draw_lrbt_rectangle_filled(mx - 18, mx + mw + 18, my - 18, my + mh + 18, (*bg_c, 104))
         arcade.draw_lrbt_rectangle_outline(mx - 18, mx + mw + 18, my - 18, my + mh + 18, (*mode_c, 210), 3)
@@ -1520,7 +1547,7 @@ class MazeModeMixin:
         progress = int(max(getattr(self, "maze_progress_best", 0.0), self._maze_completion_ratio()) * 100)
         self._txt_shadow("MAZE MAP", w // 2, my + mh + 52, (190, 255, 220, 245),
                          22, FU, anchor_x="center", bold=True)
-        self._txt_shadow(f"FLOOR {self.maze_level + 1}   {progress:02d}% COMPLETE   ENEMIES {enemy_count}",
+        self._txt_shadow(f"FLOOR {self._maze_display_floor()}   {progress:02d}% COMPLETE   ENEMIES {enemy_count}",
                          w // 2, my + mh + 28, (150, 210, 230, 220),
                          11, FN, anchor_x="center", bold=True)
         self._txt_shadow("PRESS M OR ESC TO CLOSE",
@@ -1555,7 +1582,7 @@ class MazeModeMixin:
         self._txt_shadow(title, mid, cy2 + ch2 - 58, title_color,
                          50, FU, anchor_x="center", bold=True)
         arcade.draw_line(cx2 + 24, cy2 + ch2 - 78, cx2 + cw2 - 24, cy2 + ch2 - 78, (*accent[:3], 130), 1)
-        self._txt_shadow(f"FLOOR  {min(self.maze_level + 1, MAZE_MAX_LEVELS)}/{MAZE_MAX_LEVELS}",
+        self._txt_shadow(f"FLOOR  {self._maze_display_floor()}/{MAZE_MAX_LEVELS}",
                          mid, cy2 + ch2 - 112, (120, 155, 215, 210), 12, FU, anchor_x="center")
         self._txt_shadow(f"SCORE  {self.score:,}", mid, cy2 + ch2 - 148,
                          (210, 235, 255, 245), 30, FN, anchor_x="center", bold=True)
@@ -1672,7 +1699,7 @@ class MazeModeMixin:
                     self.set_mouse_visible(True)
                     return
                 self.maze_level += 1
-                self.notif_text  = f"EXIT FOUND!  +{bonus} TIME BONUS  →  FLOOR {self.maze_level + 1}"
+                self.notif_text  = f"EXIT FOUND!  +{bonus} TIME BONUS  →  FLOOR {self._maze_display_floor()}"
                 self.notif_color = (120, 255, 160)
                 self.notif_timer = 1.8
                 self.setup_maze(keep_player=True)
@@ -1773,10 +1800,7 @@ class MazeModeMixin:
                             (255, 140, 80), 35, 110, 0.7, 1.6, .04, .12)
                 b.remove_from_sprite_lists()
 
-        max_enemies = min(
-            MAZE_ENEMY_MAX_CAP,
-            MAZE_ENEMY_BASE_CAP + self.maze_level * MAZE_ENEMY_CAP_PER_FLOOR,
-        )
+        max_enemies = self._maze_enemy_cap()
 
         # ── Enemy AI (move + shoot) ───────────────────────────────────
         pc, pr = self._maze_player_cell()
@@ -1809,8 +1833,7 @@ class MazeModeMixin:
             for enemy in list(self.maze_enemies):
                 hit_r = max(enemy.width, enemy.height) * 0.45
                 if beam.intersects_circle(enemy.center_x, enemy.center_y, hit_r):
-                    self._split_maze_enemy(enemy, max_enemies)
-                    self._maze_kill_enemy(enemy, (255, 130, 70))
+                    self._damage_maze_enemy(enemy, enemy.health, (255, 130, 70), max_enemies)
             for boss in list(self._active_maze_bosses()):
                 hit_r = max(boss.width, boss.height) * 0.45
                 if beam.intersects_circle(boss.center_x, boss.center_y, hit_r):
@@ -1820,15 +1843,12 @@ class MazeModeMixin:
             hits = arcade.check_for_collision_with_list(bolt, self.maze_enemies)
             if hits:
                 enemy = hits[0]
-                self._split_maze_enemy(enemy, max_enemies)
-                enemy.health -= bolt.damage
                 self._burst(bolt.center_x, bolt.center_y, 10,
                             (140, 100, 255), 55, 200, 1.2, 2.6, .06, .18)
                 self._burst(bolt.center_x, bolt.center_y, 4,
                             (220, 200, 255), 80, 260, 0.8, 1.8, .04, .10)
                 bolt.remove_from_sprite_lists()
-                if enemy.health <= 0:
-                    self._maze_kill_enemy(enemy, (130, 90, 255))
+                self._damage_maze_enemy(enemy, bolt.damage, (130, 90, 255), max_enemies)
                 continue
             for boss in list(self._active_maze_bosses()):
                 if arcade.check_for_collision(bolt, boss):
@@ -1842,12 +1862,9 @@ class MazeModeMixin:
             if hits:
                 b.remove_from_sprite_lists()
                 enemy = hits[0]
-                self._split_maze_enemy(enemy, max_enemies)
-                enemy.health -= 20
                 self._burst(b.center_x, b.center_y, 8,
                             (255, 220, 100), 55, 180, 1.0, 2.2, .07, .18)
-                if enemy.health <= 0:
-                    self._maze_kill_enemy(enemy, (255, 130, 70))
+                self._damage_maze_enemy(enemy, 20, (255, 130, 70), max_enemies)
                 continue
             for boss in list(self._active_maze_bosses()):
                 if arcade.check_for_collision(b, boss):
@@ -1999,9 +2016,9 @@ class MazeModeMixin:
         self._burst(x, y, 14, glow, 40, 150, 0.8, 2.0, .05, .16)
 
     def _split_maze_enemy(self, enemy: MazeEnemy, max_enemies: int) -> bool:
-        """Duplicate a surviving maze enemy into a nearby open cell."""
-        if (len(self.maze_enemies) >= max_enemies
-                or enemy.health <= 1):
+        """Replace a defeated normal enemy with its next split form."""
+        split_depth = getattr(enemy, "split_depth", 0)
+        if split_depth >= MAZE_ENEMY_MAX_SPLITS:
             return False
 
         maze = self.maze_grid
@@ -2029,21 +2046,19 @@ class MazeModeMixin:
                 continue
             options.append((col, row))
 
-        if not options:
-            return False
-
-        col, row = random.choice(options)
-        child = MazeEnemy(col, row, cs, ox, oy)
-        split_health = max(1, enemy.health // 2)
-        if enemy.health - split_health < 1:
-            return False
-        child_health = split_health + 50
-        enemy.health -= split_health
-        child.health = child_health
-        child.max_health = max(child.max_health, child_health)
+        col, row = random.choice(options) if options else (enemy.maze_col, enemy.maze_row)
+        child_depth = split_depth + 1
+        child_health = max(1, int(enemy.max_health * MAZE_ENEMY_SPLIT_HEALTH_MULT))
+        child = MazeEnemy(
+            col, row, cs, ox, oy,
+            health=child_health,
+            split_depth=child_depth,
+        )
+        child.shoot_timer = random.uniform(0.8, 2.4)
+        enemy.remove_from_sprite_lists()
         self.maze_enemies.append(child)
         self.maze_enemies_created += 1
-        self.notif_text = "ENEMY SPLIT!"
+        self.notif_text = f"ENEMY SPLIT {child_depth}/{MAZE_ENEMY_MAX_SPLITS}!"
         self.notif_color = (255, 170, 110)
         self.notif_timer = max(self.notif_timer, 0.45)
         self._burst(enemy.center_x, enemy.center_y, 10,

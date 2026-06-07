@@ -60,7 +60,7 @@ POWERUP_KEYS = {
 COIN_VALUE_ENEMY    = 5
 COIN_VALUE_SHOOTING = 8
 COIN_VALUE_BOSS     = 35
-COIN_MAGNET_RANGE   = 130   # px — auto-collect radius when Coin Magnet is purchased
+COIN_MAGNET_RANGE   = 130   # px — auto-collect radius when Coiadd n Magnet is purchased
 SAVE_FILE = Path(__file__).resolve().parent / "neon_drift_save.json"
 
 # ─────────────────────────────────────────────────────
@@ -199,7 +199,8 @@ MAZE_CELL_SIZE    = 240         # pixels per cell
 MAZE_WALL_THICK   = 60          # wall line thickness
 MAZE_BASE_COLS    = 29          # starting grid width  — larger than screen
 MAZE_BASE_ROWS    = 21          # starting grid height — larger than screen
-MAZE_MAX_LEVELS   = 50          # final maze floor
+MAZE_MAX_LEVELS   = 10          # visible maze floors
+MAZE_LEGACY_FLOORS = (1, 5, 10, 15, 20, 25, 30, 35, 40, 50)
 MAZE_KEYS_REQUIRED = 3          # keys needed to unlock the floor exit
 MAZE_ENEMIES_PER_KEY = 30       # initial maze enemies clustered around each key
 MAZE_KEY_RELOCATE_TIME = 85.0   # seconds before uncollected keys jump elsewhere
@@ -210,6 +211,9 @@ MAZE_MAX_POTIONS = 12           # max uncollected powerups waiting in the maze
 
 # ── Maze enemy constants ──────────────────────────────────────────────────────
 MAZE_ENEMY_HEALTH         = 90     # HP per maze enemy
+MAZE_ENEMY_MAX_SPLITS     = 3      # normal enemies die after their 3rd split form
+MAZE_ENEMY_SPLIT_SIZE_MULT = 0.82  # each split form is smaller
+MAZE_ENEMY_SPLIT_HEALTH_MULT = 0.75 # each split form has less HP
 MAZE_ENEMY_SPEED          = 88     # px/s movement speed
 MAZE_ENEMY_BULLET_DAMAGE  = 8      # maze enemy bullet damage
 MAZE_ENEMY_BULLET_SPEED   = 330    # px/s
@@ -1584,16 +1588,20 @@ class MazeGrid:
 class MazeEnemy(arcade.Sprite):
     """Enemy that navigates the maze via BFS toward the player."""
 
-    def __init__(self, col: int, row: int, cell_size: int, ox: float, oy: float):
+    def __init__(self, col: int, row: int, cell_size: int, ox: float, oy: float,
+                 health: int | None = None, split_depth: int = 0):
         super().__init__()
-        self.texture     = load_texture_clean("image/enemy.png", 0.12)
+        self.split_depth = max(0, min(split_depth, MAZE_ENEMY_MAX_SPLITS))
+        size_mult        = MAZE_ENEMY_SPLIT_SIZE_MULT ** self.split_depth
+        self.texture     = load_texture_clean("image/enemy.png", 0.12 * size_mult)
         self.center_x    = ox + (col + 0.5) * cell_size
         self.center_y    = oy + (row + 0.5) * cell_size
         self.maze_col    = col
         self.maze_row    = row
-        self.health      = MAZE_ENEMY_HEALTH
-        self.max_health  = MAZE_ENEMY_HEALTH
-        self.speed       = MAZE_ENEMY_SPEED + random.uniform(-10, 10)
+        base_health      = MAZE_ENEMY_HEALTH if health is None else max(1, int(health))
+        self.health      = base_health
+        self.max_health  = base_health
+        self.speed       = (MAZE_ENEMY_SPEED + random.uniform(-10, 10)) * (1.0 + 0.06 * self.split_depth)
         self.path: list  = []
         self.path_timer  = random.uniform(0.0, 0.5)   # stagger first recalc
         self.shoot_timer = random.uniform(1.8, 3.5)

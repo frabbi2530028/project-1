@@ -363,71 +363,153 @@ class GameWindow(MazeModeMixin, arcade.Window):
         amount = max(0.0, min(1.0, amount))
         return tuple(int(a[i] + (b[i] - a[i]) * amount) for i in range(3))
 
+    def _draw_space_vignette(self, color: tuple = (1, 3, 12)) -> None:
+        w, h = self.width, self.height
+        steps = 5
+        for i in range(steps):
+            pad = i * 14
+            alpha = int(5 + i * 5)
+            arcade.draw_lrbt_rectangle_filled(0, w, h - 10 - pad, h, (*color, alpha))
+            arcade.draw_lrbt_rectangle_filled(0, w, 0, 10 + pad, (*color, alpha))
+            arcade.draw_lrbt_rectangle_filled(0, 10 + pad, 0, h, (*color, alpha))
+            arcade.draw_lrbt_rectangle_filled(w - 10 - pad, w, 0, h, (*color, alpha))
+
+    def _draw_nebula_ribbon(self, color: tuple, y_base: float, drift: float,
+                            radius: float, alpha: int) -> None:
+        w, h = self.width, self.height
+        t = self.bg_time
+        for i in range(14):
+            x = w * (-0.12 + i * 0.095) + math.sin(t * 0.16 + i) * 18
+            y = h * y_base + math.sin(t * 0.22 + i * 0.68) * drift
+            r = radius * (0.72 + 0.30 * math.sin(t * 0.31 + i * 1.7))
+            arcade.draw_circle_filled(x, y, r, (*color, max(8, alpha - i % 4 * 4)))
+
+    def _draw_themed_planet(self, theme: dict) -> None:
+        w, h = self.width, self.height
+        t = self.bg_time
+        bg = theme["bg"]
+        planet = theme["planet"]
+        glow = theme["glow"]
+        star = theme["star"]
+        scale = max(0.74, min(1.26, min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT)))
+        px = w * theme["x"] + math.sin(t * 0.18) * 12
+        py = h * theme["y"] + math.cos(t * 0.15) * 9
+        r = theme["r"] * scale
+
+        if theme["key"] == "sun":
+            for i in range(24):
+                a = i * math.tau / 24 + t * 0.12
+                inner = r * (1.02 + 0.04 * math.sin(t * 1.3 + i))
+                outer = r * (1.45 + 0.18 * math.sin(t * 0.9 + i * 1.8))
+                arcade.draw_line(px + math.cos(a) * inner, py + math.sin(a) * inner,
+                                 px + math.cos(a) * outer, py + math.sin(a) * outer,
+                                 (*glow, 35), max(1, int(r * 0.035)))
+
+        if theme.get("rings"):
+            for k, alpha, width in ((2.55, 42, 0.022), (2.18, 82, 0.030), (1.78, 120, 0.036)):
+                arcade.draw_ellipse_outline(px, py, r * k, r * (0.54 + k * 0.045),
+                                            (*glow, alpha), max(1, int(r * width)))
+
+        for i, alpha in enumerate((42, 32, 22, 14)):
+            arcade.draw_circle_filled(px, py, r + 40 + i * 30, (*glow, alpha))
+        arcade.draw_circle_filled(px, py, r, (*planet, 245))
+
+        light = self._mix_rgb(planet, (255, 255, 255), 0.38)
+        shade = self._mix_rgb(planet, bg, 0.48)
+        arcade.draw_circle_filled(px - r * 0.30, py + r * 0.24, r * 0.52, (*light, 86))
+        arcade.draw_circle_filled(px + r * 0.42, py - r * 0.23, r * 0.58, (*shade, 110))
+
+        for i in range(-4, 5):
+            yy = py + i * r * 0.125 + math.sin(t * 0.36 + i) * r * 0.018
+            half = max(6, math.sqrt(max(0.0, r * r - (yy - py) * (yy - py))))
+            band_mix = 0.18 + 0.10 * ((i + 4) % 3)
+            band = self._mix_rgb(planet, glow if i % 2 == 0 else shade, band_mix)
+            arcade.draw_line(px - half * 0.88, yy, px + half * 0.88, yy,
+                             (*band, 58), max(1, int(r * 0.026)))
+
+        if theme["key"] in ("mars", "venus"):
+            for i in range(5):
+                a = t * 0.08 + i * 1.7
+                spot_dist = r * (0.18 + 0.08 * i)
+                sx = px + math.cos(a) * spot_dist
+                sy = py + math.sin(a * 1.3) * r * 0.45
+                arcade.draw_circle_filled(sx, sy, r * 0.055, (*shade, 68))
+
+        if theme.get("rings"):
+            arcade.draw_arc_outline(px, py, r * 2.26, r * 0.68,
+                                    (*star, 120), 200, 340, max(1, int(r * 0.025)))
+            arcade.draw_arc_outline(px, py, r * 2.02, r * 0.62,
+                                    (*glow, 110), 20, 162, max(1, int(r * 0.022)))
+
+        arcade.draw_circle_outline(px, py, r, (*glow, 190), 2)
+
     def _draw_space_theme_background(self, dim_alpha: int = 0) -> None:
         w, h = self.width, self.height
         t = self.bg_time
         theme = self._active_space_theme()
         bg = theme["bg"]
-        planet = theme["planet"]
         glow = theme["glow"]
         nebula1 = theme["nebula1"]
         nebula2 = theme["nebula2"]
 
         arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (*bg, 255))
 
-        for i in range(8):
-            band_b = h * i / 8
-            band_t = h * (i + 1) / 8
-            mix = i / 7
-            band = self._mix_rgb(bg, nebula1 if i % 2 == 0 else nebula2, 0.10 + 0.08 * mix)
-            arcade.draw_lrbt_rectangle_filled(0, w, band_b, band_t, (*band, 28))
+        for i in range(18):
+            band_b = h * i / 18
+            band_t = h * (i + 1) / 18
+            mid = abs(i - 8.5) / 8.5
+            accent = nebula1 if i < 9 else nebula2
+            band = self._mix_rgb(bg, accent, 0.09 + 0.18 * (1.0 - mid))
+            arcade.draw_lrbt_rectangle_filled(0, w, band_b, band_t, (*band, 62))
 
         pulse = 0.5 + 0.5 * math.sin(t * 0.55)
-        arcade.draw_circle_filled(w * 0.18, h * 0.82, 210 + 26 * pulse, (*nebula1, 42))
-        arcade.draw_circle_filled(w * 0.84, h * 0.22, 245 + 34 * (1.0 - pulse), (*nebula2, 38))
-        arcade.draw_circle_filled(w * 0.52, h * 1.04, 255, (*glow, 20))
+        self._draw_nebula_ribbon(nebula1, 0.72, h * 0.10, 105 + 24 * pulse, 28)
+        self._draw_nebula_ribbon(nebula2, 0.34, h * 0.08, 118 + 28 * (1.0 - pulse), 24)
+        self._draw_nebula_ribbon(glow, 0.08, h * 0.06, 88 + 18 * pulse, 18)
+        self._draw_nebula_ribbon(theme["star"], 0.93, h * 0.05, 72 + 16 * (1.0 - pulse), 13)
+        arcade.draw_circle_filled(w * 0.18, h * 0.82, 220 + 32 * pulse, (*nebula1, 48))
+        arcade.draw_circle_filled(w * 0.84, h * 0.22, 260 + 40 * (1.0 - pulse), (*nebula2, 42))
+        arcade.draw_circle_filled(w * 0.52, h * 1.04, 285, (*glow, 24))
+        arcade.draw_circle_filled(-w * 0.04, h * 0.54, h * 0.46, (*nebula1, 24))
+        arcade.draw_circle_filled(w * 1.03, h * 0.58, h * 0.50, (*nebula2, 24))
+        arcade.draw_circle_filled(w * 0.48, -h * 0.03, w * 0.46, (*glow, 14))
+        arcade.draw_circle_filled(w * 0.42, h * 1.03, w * 0.40, (*theme["star"], 10))
 
         orbit_a = int(34 + 18 * pulse)
-        for i, scale in enumerate((0.86, 1.12, 1.38)):
+        for i, scale in enumerate((0.72, 0.96, 1.22, 1.50, 1.84)):
             oy = h * (0.44 + 0.025 * math.sin(t * 0.42 + i))
             arcade.draw_ellipse_outline(
-                w * 0.50, oy, w * scale, h * (0.26 + i * 0.055),
+                w * 0.50, oy, w * scale, h * (0.20 + i * 0.048),
                 (*theme["star"], orbit_a // (i + 1)), 1)
 
         off = (t * 16) % 32
-        for yi in range(-34, h + 34, 32):
-            arcade.draw_line(0, yi + off, w, yi + off - 20, (*nebula1, 24), 1)
+        for yi in range(-h // 3, h + h // 3, 32):
+            arcade.draw_line(-80, yi + off, w + 80, yi + off - 20, (*nebula1, 22), 1)
+        off2 = (t * 9) % 54
+        for yi in range(-h // 2, h + h // 2, 54):
+            arcade.draw_line(-100, yi - off2, w + 120, yi - off2 + 34, (*nebula2, 15), 1)
+
+        for i in range(9):
+            sx = (i * 131 + t * (26 + i * 3)) % (w + 180) - 90
+            sy = h * (0.16 + ((i * 37) % 72) / 100)
+            length = 30 + (i % 4) * 18
+            arcade.draw_line(sx, sy, sx - length, sy + length * 0.22,
+                             (*theme["star"], 38 + (i % 3) * 15), 1)
 
         sc = theme["star"]
         for s in self.stars:
             tw = 0.55 + 0.45 * math.sin(t * s["twinkle"] + s["phase"])
             al = max(22, min(255, int(s["alpha"] * tw)))
-            star_size = s["size"] * (1.0 + 0.12 * math.sin(t * 1.2 + s["phase"]))
+            star_size = s["size"] * (1.0 + 0.18 * math.sin(t * 1.2 + s["phase"]))
             arcade.draw_circle_filled(s["x"], s["y"], star_size, (*sc, al))
+            if al > 170 and s["size"] > 1.9:
+                arcade.draw_line(s["x"] - star_size * 2.0, s["y"],
+                                 s["x"] + star_size * 2.0, s["y"], (*sc, al // 3), 1)
+                arcade.draw_line(s["x"], s["y"] - star_size * 2.0,
+                                 s["x"], s["y"] + star_size * 2.0, (*sc, al // 3), 1)
 
-        px = w * theme["x"] + math.sin(t * 0.18) * 10
-        py = h * theme["y"] + math.cos(t * 0.16) * 8
-        r = theme["r"] * max(0.74, min(1.22, min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT)))
-
-        if theme.get("rings"):
-            for k, alpha in ((2.35, 82), (1.95, 118), (1.54, 92)):
-                arcade.draw_ellipse_outline(px, py, r * k, r * (0.58 + 0.05 * k),
-                                            (*glow, alpha), max(1, int(r * 0.025)))
-
-        for i, alpha in enumerate((45, 34, 24)):
-            arcade.draw_circle_filled(px, py, r + 44 + i * 34, (*glow, alpha))
-        arcade.draw_circle_filled(px, py, r, (*planet, 235))
-        arcade.draw_circle_filled(px - r * 0.28, py + r * 0.22, r * 0.46,
-                                  (*self._mix_rgb(planet, (255, 255, 255), 0.32), 74))
-        arcade.draw_circle_filled(px + r * 0.35, py - r * 0.18, r * 0.42,
-                                  (*self._mix_rgb(planet, bg, 0.38), 90))
-        for i in range(-2, 3):
-            yy = py + i * r * 0.18 + math.sin(t * 0.5 + i) * 2
-            half = max(8, math.sqrt(max(0.0, r * r - (yy - py) * (yy - py))))
-            band = self._mix_rgb(planet, glow if i % 2 == 0 else bg, 0.24)
-            arcade.draw_line(px - half * 0.84, yy, px + half * 0.84, yy,
-                             (*band, 74), max(1, int(r * 0.035)))
-        arcade.draw_circle_outline(px, py, r, (*glow, 175), 2)
+        self._draw_themed_planet(theme)
+        self._draw_space_vignette()
 
         if dim_alpha > 0:
             arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 4, 14, dim_alpha))

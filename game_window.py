@@ -1802,6 +1802,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 tb = e.top+8;  bb = tb-5
                 arcade.draw_lrbt_rectangle_filled(l,r,bb,tb,(35,25,25,220))
                 arcade.draw_lrbt_rectangle_filled(l,l+(r-l)*ratio,bb,tb,(255,100,90,235))
+                if isinstance(e, BossEnemy):
+                    self._txt_shadow(getattr(e, "boss_name", "BOSS"), e.center_x, tb + 7,
+                                     (255, 180, 110, 235), 8, self._FONT_NUM,
+                                     anchor_x="center", bold=True)
 
     # ──────────────────────────────────────────────────
     #  HUD  (H hides the ENTIRE panel)
@@ -2031,6 +2035,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
             else:
                 arcade.draw_lrbt_rectangle_filled(lx, rx, y, y + height, (35, 45, 70, 100))
 
+    def _current_classic_boss_name(self) -> str:
+        for boss in getattr(self, "bosses", []) or []:
+            return getattr(boss, "boss_name", "BOSS")
+        if 0 <= getattr(self, "selected_level", 0) < len(LEVELS):
+            return LEVELS[self.selected_level].get("boss_name", "BOSS")
+        return "BOSS"
+
     def _draw_hud(self):
         w, h = self.width, self.height
         p    = self.player
@@ -2096,7 +2107,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                                                (*lc[:3], 210))
         # label
         if self.level_boss_spawned:
-            prog_label = f"LVL {lvl['number']}  ⚠ BOSS"
+            prog_label = f"LVL {lvl['number']}  {self._current_classic_boss_name()}"
         else:
             remaining = self.level_enemies_remaining + self.level_shooting_remaining
             prog_label = f"LVL {lvl['number']}  {sent_e}/{total_e}"
@@ -2200,7 +2211,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
             pulse = int(170 + 85*math.sin(t*5.5))
             # glowing background strip
             arcade.draw_lrbt_rectangle_filled(0, w, 26, 46, (180,20,20,int(60*math.sin(t*5.5)+65)))
-            self._txt_shadow("!! BOSS FIGHT  ·  ENEMY SPAWN LOCKED !!",
+            boss_name = self._current_classic_boss_name()
+            self._txt_shadow(f"!! {boss_name}  ·  ENEMY SPAWN LOCKED !!",
                              w//2, 30, (255,85,85,pulse), 12, font_ui,
                              anchor_x="center", bold=True)
 

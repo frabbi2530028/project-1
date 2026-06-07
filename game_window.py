@@ -739,28 +739,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             if is_pause:
                 arcade.draw_lrbt_rectangle_filled(0, w, 0, h, (2, 5, 16, 170))
             else:
-                arcade.draw_lrbt_rectangle_filled(0, w, 0, h, theme_c["bg"])
-                if self.menu_theme == "dark":
-                    p = (math.sin(t*0.65)+1)*0.5
-                    arcade.draw_circle_filled(w*0.13,h*0.88,228+18*p,     (38,80,185,42))
-                    arcade.draw_circle_filled(w*0.87,h*0.20,265+28*(1-p), (145,40,165,36))
-                    arcade.draw_circle_filled(w*0.52,h*1.06,268,           (28,155,195,20))
-                    off = (t*14)%28
-                    for yi in range(-30, h+30, 28):
-                        arcade.draw_line(0,yi+off,w,yi+off-18,(28,44,76,24),1)
-                    for s in self.stars:
-                        tw = 0.55+0.45*math.sin(t*s["twinkle"]+s["phase"])
-                        al = max(20,min(255,int(s["alpha"]*tw)))
-                        arcade.draw_circle_filled(s["x"],s["y"],s["size"],(200,222,255,al))
-                else:
-                    for i in range(7):
-                        ang = t*0.28+i*math.tau/7
-                        rx = w*0.5+math.cos(ang)*w*0.40
-                        ry = h*0.5+math.sin(ang*0.62)*h*0.36
-                        arcade.draw_circle_filled(rx,ry,88+22*math.sin(t*0.9+i),(255,255,255,24))
-                    off = (t*12)%26
-                    for yi in range(-30,h+30,26):
-                        arcade.draw_line(0,yi+off,w,yi+off-14,(155,182,228,20),1)
+                self._draw_space_theme_background(dim_alpha=58)
 
         # ── Panel ────────────────────────────────────
         base_pw = min(int(w * (0.88 if is_pause else 0.92)), 820 if is_pause else 980)

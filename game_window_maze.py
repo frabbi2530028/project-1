@@ -29,8 +29,76 @@ class MazeModeMixin:
     def _maze_enemy_cap(self) -> int:
         return min(
             MAZE_ENEMY_MAX_CAP,
-            MAZE_ENEMY_BASE_CAP + self._maze_legacy_level_index() * MAZE_ENEMY_CAP_PER_FLOOR,
+            MAZE_ENEMY_BASE_CAP + self._maze_floor_index() * MAZE_ENEMY_CAP_PER_FLOOR,
         )
+
+    def _maze_floor_index(self) -> int:
+        return max(0, self._maze_display_floor() - 1)
+
+    def _maze_floor_progress(self) -> float:
+        if MAZE_MAX_LEVELS <= 1:
+            return 1.0
+        return self._maze_floor_index() / (MAZE_MAX_LEVELS - 1)
+
+    def _maze_initial_enemy_target(self) -> int:
+        return MAZE_ENEMIES_PER_FLOOR + self._maze_floor_index() * MAZE_ENEMY_COUNT_PER_FLOOR
+
+    def _maze_is_final_floor(self) -> bool:
+        return self._maze_display_floor() >= MAZE_MAX_LEVELS
+
+    def _maze_player_speed_multiplier(self) -> float:
+        progress = self._maze_floor_progress()
+        return (
+            MAZE_PLAYER_START_SPEED_MULT
+            + (MAZE_PLAYER_FINAL_SPEED_MULT - MAZE_PLAYER_START_SPEED_MULT) * progress
+        )
+
+    def _maze_player_base_move_speed(self) -> float:
+        player = getattr(self, "player", None)
+        engine = getattr(player, "_engine_bonus", 1.0)
+        return (
+            PLAYER_SPEED
+            * engine
+            * SHIPS[self.selected_ship]["spd_mult"]
+            * self._maze_player_speed_multiplier()
+        )
+
+    def _maze_player_move_speed(self) -> float:
+        player = getattr(self, "player", None)
+        speed = self._maze_player_base_move_speed()
+        if getattr(player, "speed_active", False):
+            speed *= 1.65
+        return speed
+
+    def _apply_maze_player_floor_stats(self, refill: bool = False) -> None:
+        player = getattr(self, "player", None)
+        if player is None:
+            return
+
+        base_health = getattr(self, "maze_player_base_health", None)
+        if base_health is None:
+            base_health = player.max_health
+            self.maze_player_base_health = base_health
+
+        progress = self._maze_floor_progress()
+        target_health = int(round(
+            base_health + (MAZE_PLAYER_FINAL_HEALTH - base_health) * progress
+        ))
+        target_health = max(1, target_health)
+        old_max = max(1, getattr(player, "max_health", target_health))
+        player.max_health = target_health
+        if refill:
+            player.health = target_health
+        else:
+            gained = max(0, target_health - old_max)
+            player.health = min(target_health, max(1, player.health + gained))
+
+        if player.texture is not None:
+            boss_texture = load_texture_clean(MAZE_BOSS_TEXTURE, MAZE_BOSS_TEXTURE_SCALE)
+            boss_size = max(boss_texture.width, boss_texture.height)
+            player_size = max(1, max(player.texture.width, player.texture.height))
+            final_scale = max(1.0, boss_size / player_size)
+            player.scale = 1.0 + (final_scale - 1.0) * progress
 
     def setup_maze(self, keep_player: bool = False):
         """Generate a new maze level.  Call with keep_player=True to retain HP between floors."""
@@ -79,6 +147,8 @@ class MazeModeMixin:
         self._maze_enemy_flow_timer = 0.0
         self.maze_map_open = False
         self.maze_enemies_created = 0
+        if not keep_player:
+            self.maze_powerup_dry_kills = 0
         self.maze_keys_collected = 0
         self.maze_key_relocate_timer = MAZE_KEY_RELOCATE_TIME
         self.maze_corner_wave_timer = MAZE_CORNER_WAVE_INTERVAL
@@ -91,10 +161,16 @@ class MazeModeMixin:
             self.player = Player()
             armor_tier   = self.upgrades.get("armor", 0)
             base_hp      = int(PLAYER_HEALTH * ship["hp_mult"]) + armor_tier * 25
+            self.maze_player_base_health = base_hp
             self.player.max_health = base_hp
             self.player.health     = base_hp
+        elif not hasattr(self, "maze_player_base_health"):
+            self.maze_player_base_health = self.player.max_health
+        engine_tier = self.upgrades.get("engine", 0)
+        self.player._engine_bonus = 1.0 + engine_tier * 0.12
         tex = load_texture_clean(ship["texture"], ship["tex_scale"])
         self.player.texture  = tex
+        self._apply_maze_player_floor_stats(refill=not keep_player)
         # Spawn at top-left cell
         player_start_x = ox + 0.5 * cs
         player_start_y = oy + (rows - 0.5) * cs
@@ -280,9 +356,23 @@ class MazeModeMixin:
         self.notif_timer = 0.8
         self._burst(enemy.center_x, enemy.center_y, 22,
                     color, 65, 240, 1.5, 3.2, .12, .32)
-        if random.randint(1, 100) <= MAZE_POWERUP_DROP_CHANCE:
-            self._drop_maze_powerup(enemy.center_x, enemy.center_y)
+        self._maybe_drop_maze_powerup(enemy.center_x, enemy.center_y)
         enemy.remove_from_sprite_lists()
+
+    def _maze_powerup_drop_chance(self) -> int:
+        lucky_bonus = self.upgrades.get("lucky", 0) * 15
+        return min(95, MAZE_POWERUP_DROP_CHANCE + lucky_bonus)
+
+    def _maybe_drop_maze_powerup(self, x: float, y: float) -> bool:
+        dry_kills = getattr(self, "maze_powerup_dry_kills", 0)
+        guaranteed = dry_kills >= MAZE_POWERUP_PITY_KILLS
+        if guaranteed or random.randint(1, 100) <= self._maze_powerup_drop_chance():
+            self._drop_maze_powerup(x, y)
+            self.maze_powerup_dry_kills = 0
+            return True
+
+        self.maze_powerup_dry_kills = dry_kills + 1
+        return False
 
     def _damage_maze_enemy(self, enemy: MazeEnemy, amount: float, color: tuple,
                            max_enemies: int) -> bool:
@@ -573,13 +663,21 @@ class MazeModeMixin:
         for enemy in getattr(self, "maze_enemies", []):
             reserved.add((enemy.maze_col, enemy.maze_row))
 
-        spawned_total = 0
-        for key in getattr(self, "maze_keys", []):
-            if key.get("collected", False):
-                continue
+        active_keys = [
+            key for key in getattr(self, "maze_keys", [])
+            if not key.get("collected", False)
+        ]
+        if not active_keys:
+            return 0
 
+        target_total = min(max_enemies, self._maze_initial_enemy_target())
+        base_per_key, extra_per_key = divmod(target_total, len(active_keys))
+
+        spawned_total = 0
+        for key_index, key in enumerate(active_keys):
             key_col = key["col"]
             key_row = key["row"]
+            target_for_key = base_per_key + (1 if key_index < extra_per_key else 0)
             candidates = []
             for row in range(maze.rows):
                 for col in range(maze.cols):
@@ -594,7 +692,7 @@ class MazeModeMixin:
             candidates.sort()
             spawned_for_key = 0
             for _dist, _roll, col, row in candidates:
-                if (spawned_for_key >= MAZE_ENEMIES_PER_KEY
+                if (spawned_for_key >= target_for_key
                         or len(self.maze_enemies) >= max_enemies):
                     break
                 cell = (col, row)
@@ -673,7 +771,7 @@ class MazeModeMixin:
             return False
 
         col, row = self._maze_boss_spawn_cell()
-        hp = int(MAZE_BOSS_HEALTH * (1.0 + 0.22 * self._maze_legacy_level_index()))
+        hp = int(MAZE_BOSS_HEALTH)
         self.maze_boss = MazeBoss(col, row, self.maze_cell_size, *self.maze_origin, health=hp)
         self.maze_bosses = [self.maze_boss]
         self.maze_boss_spawned = True
@@ -683,7 +781,11 @@ class MazeModeMixin:
         self.maze_boss.angle = self._maze_player_angle_from_motion(dx, dy)
         self._burst(self.maze_boss.center_x, self.maze_boss.center_y, 48,
                     (255, 210, 90), 90, 320, 2.0, 4.6, .12, .34)
-        self.notif_text = "MAZE BOSS AWAKENED!"
+        self.notif_text = (
+            "FINAL MISSION: DEFEAT THE BOSS!"
+            if self._maze_is_final_floor()
+            else "MAZE BOSS ARRIVED!  DEFEAT IT TO FINISH!"
+        )
         self.notif_color = (255, 210, 90)
         self.notif_timer = 2.0
         return True
@@ -764,7 +866,7 @@ class MazeModeMixin:
             return
 
         pc, pr = self._maze_player_cell()
-        boss_speed = p.get_speed() * SHIPS[self.selected_ship]["spd_mult"]
+        boss_speed = self._maze_player_base_move_speed()
         for boss in list(bosses):
             boss.speed = boss_speed
             step = self._maze_boss_next_step(boss, pc, pr)
@@ -838,9 +940,17 @@ class MazeModeMixin:
             self.notif_color = (255, 210, 90)
             self.notif_timer = 1.5
         elif not bosses:
-            self.notif_text = "MAZE BOSS DESTROYED!"
-            self.notif_color = (255, 160, 95)
+            self.maze_run_complete = True
+            self.score += 5000
+            self.notif_text = (
+                "FINAL BOSS DEFEATED!"
+                if self._maze_is_final_floor()
+                else "MAZE BOSS DEFEATED!"
+            )
+            self.notif_color = (120, 255, 160)
             self.notif_timer = 2.0
+            self.game_state = STATE_MAZE_OVER
+            self.set_mouse_visible(True)
 
         self.maze_boss = bosses[0] if bosses else None
         self.boss_on_screen = bool(bosses)
@@ -1089,8 +1199,13 @@ class MazeModeMixin:
         pr  = min(34, cs * 0.20)
         ep  = 0.5 + 0.5 * math.sin(t * 4.8)
         exit_unlocked = self.maze_keys_collected >= MAZE_KEYS_REQUIRED
-        exit_c = EXIT_C if exit_unlocked else (255, 165, 60)
-        exit_label = "EXIT" if exit_unlocked else "LOCK"
+        final_mission = (
+            self._maze_is_final_floor()
+            and exit_unlocked
+            and (self.maze_boss_spawned or self._active_maze_bosses())
+        )
+        exit_c = (255, 210, 90) if final_mission else (EXIT_C if exit_unlocked else (255, 165, 60))
+        exit_label = "BOSS" if final_mission else ("EXIT" if exit_unlocked else "LOCK")
         arcade.draw_circle_filled(ex2, ey2, pr + 6 * ep, (*exit_c[:3], 55))
         arcade.draw_circle_filled(ex2, ey2, pr,            (*exit_c[:3], 130))
         arcade.draw_circle_outline(ex2, ey2, pr,            exit_c, 3)
@@ -1323,7 +1438,8 @@ class MazeModeMixin:
         arcade.draw_lrbt_rectangle_outline(
             panel_x, panel_x + panel_w, panel_y - panel_h, panel_y,
             (*amber, 180 if breach_count else 85), 1)
-        label = f"[B] BREACH  {breach_count}/{MAZE_BREACH_MAX_STORAGE}"
+        breach_limit = self._powerup_storage_limit("breach")
+        label = f"[B] BREACH  {breach_count}/{breach_limit}"
         if active:
             label += f"  {p.breach_timer:.0f}s"
         self._txt_shadow(label, panel_x + 10, panel_y - 20,
@@ -1622,7 +1738,7 @@ class MazeModeMixin:
         iy = float(self.up) - float(self.down)
         if ix and iy:
             ix *= 0.70710678;  iy *= 0.70710678
-        ship_spd = p.get_speed() * SHIPS[self.selected_ship]["spd_mult"]
+        ship_spd = self._maze_player_move_speed()
         sm = min(1.0, 14.0 * delta)
         p.change_x += (ix * ship_spd - p.change_x) * sm
         p.change_y += (iy * ship_spd - p.change_y) * sm
@@ -1687,22 +1803,26 @@ class MazeModeMixin:
                     self.notif_timer = 1.1
                     self.maze_exit_lock_notice_timer = 1.25
             else:
-                self.maze_exit_reached = True
-                bonus = max(0, 2000 - int(self.time_alive * 5))
-                self.score += bonus
-                if self.maze_level + 1 >= MAZE_MAX_LEVELS:
-                    self.maze_run_complete = True
-                    self.notif_text = f"MAZE COMPLETE!  +{bonus} TIME BONUS"
+                if self._maze_is_final_floor():
+                    if not self.maze_boss_spawned:
+                        self._spawn_maze_boss()
+                    if self.maze_exit_lock_notice_timer <= 0:
+                        self.notif_text = "FINAL MISSION: DEFEAT THE BOSS!"
+                        self.notif_color = (255, 210, 90)
+                        self.notif_timer = 1.2
+                        self.maze_exit_lock_notice_timer = 1.25
+                else:
+                    self.maze_exit_reached = True
+                    bonus = max(0, 2000 - int(self.time_alive * 5))
+                    self.score += bonus
+                    self.maze_level += 1
+                    self.setup_maze(keep_player=True)
+                    self.notif_text  = (
+                        f"FLOOR {self._maze_display_floor()} SPEED + STORAGE UP!  "
+                        f"+{bonus} TIME BONUS"
+                    )
                     self.notif_color = (120, 255, 160)
                     self.notif_timer = 1.8
-                    self.game_state = STATE_MAZE_OVER
-                    self.set_mouse_visible(True)
-                    return
-                self.maze_level += 1
-                self.notif_text  = f"EXIT FOUND!  +{bonus} TIME BONUS  →  FLOOR {self._maze_display_floor()}"
-                self.notif_color = (120, 255, 160)
-                self.notif_timer = 1.8
-                self.setup_maze(keep_player=True)
 
         self._update_particles(delta)
 
@@ -2055,6 +2175,7 @@ class MazeModeMixin:
             split_depth=child_depth,
         )
         child.shoot_timer = random.uniform(0.8, 2.4)
+        self._maybe_drop_maze_powerup(enemy.center_x, enemy.center_y)
         enemy.remove_from_sprite_lists()
         self.maze_enemies.append(child)
         self.maze_enemies_created += 1

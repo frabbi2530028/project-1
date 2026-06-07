@@ -2764,6 +2764,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
     #  POWERUP HANDLERS
     # ──────────────────────────────────────────────────
 
+    def _powerup_storage_limit(self, kind: str) -> int:
+        base_limit = MAZE_BREACH_MAX_STORAGE if kind == "breach" else MAX_POWERUP_STORAGE
+        if self.game_state == STATE_MAZE:
+            floor_index = self._maze_display_floor() - 1
+            base_limit += max(0, floor_index) * MAZE_POWERUP_STORAGE_PER_FLOOR
+        return base_limit
+
     def _collect_powerup(self, kind: str):
         p = self.player
         if kind == "beam360" and self.selected_ship not in BEAM_SHIP_INDICES:
@@ -2781,7 +2788,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self.notif_text  = "+30 HEALTH!"
             self.notif_color = (130,255,130);  self.notif_timer = 1.4
             return
-        storage_limit = MAZE_BREACH_MAX_STORAGE if kind == "breach" else MAX_POWERUP_STORAGE
+        storage_limit = self._powerup_storage_limit(kind)
         if p.inventory[kind] < storage_limit:
             p.inventory[kind] += 1
             self.notif_text  = f"{POWERUP_LABELS[kind]} STORED  [{p.inventory[kind]}/{storage_limit}]"

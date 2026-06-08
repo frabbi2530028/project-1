@@ -796,84 +796,23 @@ class GameWindow(MazeModeMixin, arcade.Window):
             pad_bottom = max(12, int(16 * pause_scale))
             gap_small = max(8, int(10 * pause_scale))
             gap_medium = max(10, int(12 * pause_scale))
-            diff_label_gap = max(12, int(16 * pause_scale))
             info_gap = max(14, int(18 * pause_scale))
             info_top = div_y - info_gap
 
-            qw, qh = 196, max(32, int(40 * pause_scale))
+            qw, qh = 220, max(32, int(40 * pause_scale))
             qx = w//2 - qw//2
             qy = pb + pad_bottom
 
-            rw, rh = 196, max(32, int(40 * pause_scale))
+            rw, rh = 220, max(32, int(40 * pause_scale))
             rx = w//2 - rw//2
             ry = qy + qh + gap_small
 
-            sw, sh2 = 230, max(30, int(38 * pause_scale))
-            sx2 = w//2 - sw//2
-            sy2 = ry + rh + gap_small
-
             bw, bh = 230, max(40, int(50 * pause_scale))
             bx = w//2 - bw//2
-            by = sy2 + sh2 + gap_medium
+            by = ry + rh + gap_medium
 
-            dw, dh = max(96, int(118 * pause_scale)), max(30, int(38 * pause_scale))
-            dgap = 10
-            dtotal = dw * 3 + dgap * 2
-            dx0 = (w - dtotal) // 2
-            diff_by = by + bh + info_gap
-            diff_label_y = diff_by + dh + diff_label_gap
-
-            info_bottom = diff_label_y + info_gap
+            info_bottom = by + bh + info_gap
             self._draw_pause_ship_summary(pl + 22, pr - 22, info_bottom, info_top, theme_c, t)
-
-            diff_font_size = 12 if pause_scale > 0.9 else 11
-            diff_btn_font = 14 if pause_scale > 0.9 else 13
-
-            arcade.draw_text("RUN DIFFICULTY", w//2 + 1, diff_label_y - 1, (0, 0, 0, 90), diff_font_size,
-                             anchor_x="center", bold=True, font_name=font_ui_local)
-            arcade.draw_text("RUN DIFFICULTY", w//2, diff_label_y,
-                             theme_c["text"], diff_font_size, anchor_x="center", bold=True, font_name=font_ui_local)
-
-            for di, dkey in enumerate(DIFFICULTY_ORDER):
-                preset = DIFFICULTY_PRESETS[dkey]
-                dleft = dx0 + di * (dw + dgap)
-                dright = dleft + dw
-                dtop = diff_by + dh
-                sel_d = (dkey == self.selected_difficulty)
-                hov_d = self._is_hovering(dleft, dright, diff_by, dtop)
-
-                dc = preset["color"]
-                if sel_d:
-                    fill = (*dc, 210)
-                    border = (*dc, 255)
-                    bthk = 3
-                    tcolor = (255, 255, 255)
-                elif hov_d:
-                    fill = (*dc[:3], 80)
-                    border = (*dc, 200)
-                    bthk = 2
-                    tcolor = (255, 255, 255)
-                else:
-                    fill = (*dc[:3], 30)
-                    border = (*dc[:3], 110)
-                    bthk = 1
-                    tcolor = (*dc[:3], 200)
-
-                arcade.draw_lrbt_rectangle_filled(dleft, dright, diff_by, dtop, fill)
-                arcade.draw_lrbt_rectangle_outline(dleft, dright, diff_by, dtop, border, bthk)
-                if sel_d:
-                    pulse = 0.5 + 0.5 * math.sin(t * 4.0)
-                    arcade.draw_lrbt_rectangle_outline(
-                        dleft - 3, dright + 3, diff_by - 3, dtop + 3, (*dc, int(50 + 45 * pulse)), 2
-                    )
-                sa_ = min(175, int((tcolor[3] if len(tcolor) == 4 else 255) * 0.4))
-                arcade.draw_text(preset["label"], dleft + dw//2 + 1, diff_by + dh//2 - 1,
-                                 (0, 0, 0, sa_), diff_btn_font, anchor_x="center", anchor_y="center",
-                                 bold=True, font_name=font_ui_local)
-                arcade.draw_text(preset["label"], dleft + dw//2, diff_by + dh//2,
-                                 tcolor, diff_btn_font, anchor_x="center", anchor_y="center",
-                                 bold=True, font_name=font_ui_local)
-                self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
 
             hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
             _draw_btn(bx, bw, by, bh,
@@ -881,14 +820,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
                       theme_c["btn_border"], theme_c["btn_text"],
                       "[ RESUME ]", 20 if pause_scale > 0.9 else 18)
             self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
-
-            hov_s = self._is_hovering(sx2, sx2+sw, sy2, sy2+sh2)
-            coin_label = f"[ SHOP ]  $ {self.coins:,}"
-            _draw_btn(sx2, sw, sy2, sh2,
-                      theme_c["btn_hover"] if hov_s else (*theme_c["btn_fill"][:3], 200),
-                      (255, 210, 30, 220), (255, 215, 40, 255),
-                      coin_label, 14 if pause_scale > 0.9 else 13)
-            self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
 
             hov_r = self._is_hovering(rx, rx+rw, ry, ry+rh)
             _draw_btn(rx, rw, ry, rh,

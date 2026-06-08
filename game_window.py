@@ -1043,62 +1043,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self._menu_btns[name] = (x, x + arrow_w, arrow_y, arrow_y + arrow_h)
 
         # ── Buttons ──────────────────────────────────
-        btn_top = cb - 12
-
-        # ── Difficulty selector ──────────────────────
-        arcade.draw_text("SELECT DIFFICULTY", w//2+1, btn_top-3, (0,0,0,90), scaled(12),
-                         anchor_x="center", bold=True, font_name=font_ui_local)
-        arcade.draw_text("SELECT DIFFICULTY", w//2, btn_top-2,
-                         theme_c["text"], scaled(12), anchor_x="center", bold=True, font_name=font_ui_local)
-
-        dw, dh = scaled(118), scaled(38)
-        dgap   = scaled(10)
-        dtotal = dw*3 + dgap*2
-        dx0    = (w - dtotal)//2
-        diff_by = btn_top - dh - 20   # bottom y of difficulty buttons
-
-        for di, dkey in enumerate(DIFFICULTY_ORDER):
-            preset = DIFFICULTY_PRESETS[dkey]
-            dleft  = dx0 + di*(dw+dgap)
-            dright = dleft + dw
-            dtop   = diff_by + dh
-            sel_d  = (dkey == self.selected_difficulty)
-            hov_d  = self._is_hovering(dleft, dright, diff_by, dtop)
-
-            dc     = preset["color"]
-            if sel_d:
-                fill   = (*dc, 210)
-                border = (*dc, 255)
-                bthk   = 3
-                tcolor = (255, 255, 255)
-            elif hov_d:
-                fill   = (*dc[:3], 80)
-                border = (*dc, 200)
-                bthk   = 2
-                tcolor = (255, 255, 255)
-            else:
-                fill   = (*dc[:3], 30)
-                border = (*dc[:3], 110)
-                bthk   = 1
-                tcolor = (*dc[:3], 200)
-
-            arcade.draw_lrbt_rectangle_filled(dleft, dright, diff_by, dtop, fill)
-            arcade.draw_lrbt_rectangle_outline(dleft, dright, diff_by, dtop, border, bthk)
-            if sel_d:
-                pulse = 0.5+0.5*math.sin(t*4.0)
-                arcade.draw_lrbt_rectangle_outline(
-                    dleft-3, dright+3, diff_by-3, dtop+3, (*dc, int(50+45*pulse)), 2)
-            sa_ = min(175, int((tcolor[3] if len(tcolor)==4 else 255)*0.4))
-            arcade.draw_text(preset["label"], dleft+dw//2+1, diff_by+dh//2-1,
-                             (0,0,0,sa_), scaled(14), anchor_x="center", anchor_y="center",
-                             bold=True, font_name=font_ui_local)
-            arcade.draw_text(preset["label"], dleft+dw//2, diff_by+dh//2,
-                             tcolor, scaled(14), anchor_x="center", anchor_y="center",
-                             bold=True, font_name=font_ui_local)
-
-            self._diff_btns[dkey] = (dleft, dright, diff_by, dtop)
-
-        play_y = diff_by - 14   # play button sits below difficulty row
+        play_y = cb - scaled(18)
 
         bw, bh = scaled(230), scaled(50)
         bx = w//2-bw//2;  by = play_y - bh
@@ -3217,6 +3162,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         self._cycle_space_theme(-1)
                     elif name == "__theme_next__":
                         self._cycle_space_theme(1)
+                    elif name == "__shop__":
+                        self._open_shop(STATE_MODE_SELECT)
                     elif name == "__enter__":
                         if self.selected_mode == "normal":
                             self.game_state = STATE_MENU

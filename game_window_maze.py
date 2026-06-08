@@ -2404,10 +2404,7 @@ class MazeModeMixin:
                                  bold=True, font_name=FU)
                 self._mode_btns[mode["key"]] = (cl, cr, cb, ct)
 
-        # ── ENTER / SHOP buttons ────────────────────────────────────────
-        shop_w = 240
-        shop_h = 38
-        shop_x = w // 2 - shop_w // 2
+        # ── ENTER button ────────────────────────────────────────────────
         if self.selected_mode:
             enter_w = 240;  enter_h = 48
             enter_x = w // 2 - enter_w // 2
@@ -2432,39 +2429,6 @@ class MazeModeMixin:
                              e_tc, 18, anchor_x="center", anchor_y="center",
                              bold=True, font_name=FU)
             self._mode_btns["__enter__"] = (enter_x, enter_x + enter_w, enter_y, enter_y + enter_h)
-            shop_y = enter_y - shop_h - 12
-        else:
-            shop_y = card_y - shop_h - 24
-
-        shop_hov = self._is_hovering(shop_x, shop_x + shop_w, shop_y, shop_y + shop_h)
-        coin_pulse = 0.5 + 0.5 * math.sin(t * 4.0)
-        shop_fill = (
-            18,
-            int(66 + 22 * coin_pulse),
-            int(150 + 28 * coin_pulse),
-            238 if shop_hov else 210,
-        )
-        shop_border = (255, 220, 45, 255 if shop_hov else 215)
-        if shop_hov:
-            arcade.draw_lrbt_rectangle_filled(
-                shop_x - 2, shop_x + shop_w + 2,
-                shop_y - 2, shop_y + shop_h + 2,
-                (255, 210, 35, 34),
-            )
-        arcade.draw_lrbt_rectangle_filled(shop_x, shop_x + shop_w, shop_y, shop_y + shop_h,
-                                           shop_fill)
-        arcade.draw_lrbt_rectangle_outline(shop_x, shop_x + shop_w, shop_y, shop_y + shop_h,
-                                            shop_border, 2)
-        arcade.draw_line(shop_x + 14, shop_y + shop_h - 7,
-                         shop_x + shop_w - 14, shop_y + shop_h - 7,
-                         (255, 244, 120, 42), 1)
-        arcade.draw_text(f"[ SHOP ]  $ {self.coins:,}", w // 2 + 1, shop_y + shop_h // 2 - 1,
-                         (0, 0, 0, 105), 14, anchor_x="center", anchor_y="center",
-                         bold=True, font_name=FU)
-        arcade.draw_text(f"[ SHOP ]  $ {self.coins:,}", w // 2, shop_y + shop_h // 2,
-                         (255, 224, 54, 255), 14, anchor_x="center", anchor_y="center",
-                         bold=True, font_name=FU)
-        self._mode_btns["__shop__"] = (shop_x, shop_x + shop_w, shop_y, shop_y + shop_h)
 
         # ── Footer hint ─────────────────────────────────────────────────
         arcade.draw_text("Click a mode card, then press ENTER GAME  ·  F11 Fullscreen",

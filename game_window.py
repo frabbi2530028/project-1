@@ -3107,8 +3107,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         self._cycle_space_theme(-1)
                     elif name == "__theme_next__":
                         self._cycle_space_theme(1)
-                    elif name == "__shop__":
-                        self._open_shop(STATE_MODE_SELECT)
                     elif name == "__enter__":
                         if self.selected_mode == "normal":
                             self.game_state = STATE_MENU

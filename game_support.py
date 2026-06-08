@@ -413,20 +413,21 @@ def _build_levels() -> list:
     Spawn rate tightens with each level.  Boss HP = combined enemy HP.
     """
     names = [
-        (1,  "DAWN PATROL",   "First contact — rookies in the dark",          (80,  220, 130), "AURORA VANGUARD", "image/aurora_vanguard.png", 3.00, 3.50),
-        (2,  "NOVA SURGE",    "Faster waves, denser skies",                    (90,  180, 255), "NOVA WRAITH",     "image/nova_wraith.png",     0.38, 0.44),
-        (3,  "IRON CROSS",    "Shielded interceptors join the fray",           (255, 200,  50), "IRON SERAPH",     "image/iron_seraph.png",     0.55, 0.72),
-        (4,  "CRIMSON TIDE",  "Elite fighters & coordinated fire",             (255, 100,  80), "CRIMSON VIPER",   "image/crimson_viper.png",   0.08, 0.10),
-        (5,  "SOLAR FLARE",   "Relentless sun-scorched assault",               (255, 165,  40), "SOLAR PHOENIX",   "image/solar_phoenix.png",   0.36, 0.44),
-        (6,  "NEBULA RIFT",   "Dense formations & heavy artillery",            (140, 100, 255), "NEBULA TITAN",    "image/nebula_titan.webp",   0.15, 0.18),
-        (7,  "OBSIDIAN GATE", "Elite guard — precision or death",              (80,  210, 220), "OBSIDIAN REX",     "image/obsidian_rex.png",    0.20, 0.32),
-        (8,  "VOID STORM",    "Maximum aggression — bullets everywhere",       (200, 100, 255), "VOID REAPER",      "image/void_reaper.png",     0.20, 0.32),
-        (9,  "SINGULARITY",   "The abyss opens — no mercy",                   (255,  60, 120), "GRAVECROWN",       "image/gravecrown.png",      0.20, 0.32),
-        (10, "FINAL HORIZON", "Last stand — the combined fleet arrives",       (255, 220,  80), "OMEGA CORE",       "image/omega_core.png",      0.20, 0.32),
+        (1,  "DAWN PATROL",   "First contact — rookies in the dark",          (80,  220, 130), "AURORA VANGUARD", "image/aurora_vanguard.png", 3.00, 3.50, 90.0),
+        (2,  "NOVA SURGE",    "Faster waves, denser skies",                    (90,  180, 255), "NOVA WRAITH",     "image/nova_wraith.png",     0.38, 0.44, 0.0),
+        (3,  "IRON CROSS",    "Shielded interceptors join the fray",           (255, 200,  50), "IRON SERAPH",     "image/iron_seraph.png",     0.55, 0.72, 0.0),
+        (4,  "CRIMSON TIDE",  "Elite fighters & coordinated fire",             (255, 100,  80), "CRIMSON VIPER",   "image/crimson_viper.png",   0.08, 0.10, 0.0),
+        (5,  "SOLAR FLARE",   "Relentless sun-scorched assault",               (255, 165,  40), "SOLAR PHOENIX",   "image/solar_phoenix.png",   0.36, 0.44, 0.0),
+        (6,  "NEBULA RIFT",   "Dense formations & heavy artillery",            (140, 100, 255), "NEBULA TITAN",    "image/nebula_titan.webp",   0.15, 0.18, 0.0),
+        (7,  "OBSIDIAN GATE", "Elite guard — precision or death",              (80,  210, 220), "OBSIDIAN REX",     "image/obsidian_rex.png",    0.20, 0.32, 0.0),
+        (8,  "VOID STORM",    "Maximum aggression — bullets everywhere",       (200, 100, 255), "VOID REAPER",      "image/void_reaper.png",     0.20, 0.32, 0.0),
+        (9,  "SINGULARITY",   "The abyss opens — no mercy",                   (255,  60, 120), "GRAVECROWN",       "image/gravecrown.png",      0.20, 0.32, 0.0),
+        (10, "FINAL HORIZON", "Last stand — the combined fleet arrives",       (255, 220,  80), "OMEGA CORE",       "image/omega_core.png",      0.20, 0.32, 0.0),
     ]
     levels = []
     for i, (num, name, subtitle, color, boss_name, boss_texture,
-            boss_texture_scale, boss_portrait_scale) in enumerate(names):
+            boss_texture_scale, boss_portrait_scale,
+            boss_front_angle_offset) in enumerate(names):
         n = i + 1
         if n == 1:
             total = 200
@@ -454,6 +455,7 @@ def _build_levels() -> list:
             "boss_texture":     boss_texture,
             "boss_texture_scale": boss_texture_scale,
             "boss_portrait_scale": boss_portrait_scale,
+            "boss_front_angle_offset": boss_front_angle_offset,
             "reward_coins":     reward,
             "requires_level":   i - 1,   # index of level that must be completed (-1 = none)
         })
@@ -888,22 +890,28 @@ def solid_texture(size: int, color: tuple) -> arcade.Texture:
 
 
 def _draw_texture_fitted(texture: arcade.Texture, center_x: float, center_y: float,
-                         max_width: float, max_height: float) -> None:
+                         max_width: float, max_height: float,
+                         angle: float = 0.0) -> None:
     """Draw a texture scaled to fit inside a bounded box."""
     if texture.width <= 0 or texture.height <= 0:
         return
 
-    scale = min(max_width / texture.width, max_height / texture.height)
+    theta = math.radians(angle % 180.0)
+    bound_w = abs(texture.width * math.cos(theta)) + abs(texture.height * math.sin(theta))
+    bound_h = abs(texture.width * math.sin(theta)) + abs(texture.height * math.cos(theta))
+    scale = min(max_width / max(1, bound_w), max_height / max(1, bound_h))
     draw_w = max(1, texture.width * scale)
     draw_h = max(1, texture.height * scale)
     try:
-        arcade.draw_texture_rect(texture, arcade.XYWH(center_x, center_y, draw_w, draw_h))
+        arcade.draw_texture_rect(texture, arcade.XYWH(center_x, center_y, draw_w, draw_h),
+                                 angle=angle)
     except (AttributeError, TypeError):
         sprite = arcade.Sprite()
         sprite.texture = texture
         sprite.center_x = center_x
         sprite.center_y = center_y
         sprite.scale = scale
+        sprite.angle = angle
         arcade.draw_sprite(sprite)
 
 
@@ -1247,12 +1255,13 @@ class ShootingEnemy(arcade.Sprite):
 class BossEnemy(arcade.Sprite):
     def __init__(self, x, y, health=BOSS_HEALTH,
                  texture_path="image/boss.png", texture_scale=0.2,
-                 boss_name="BOSS"):
+                 boss_name="BOSS", front_angle_offset: float = 0.0):
         super().__init__()
         self.texture       = load_texture_clean(texture_path, texture_scale)
         self.center_x      = x;  self.center_y  = y
         self.health        = health;  self.max_health = health
         self.boss_name     = boss_name
+        self.front_angle_offset = front_angle_offset
         self.normal_timer  = 0.0;  self.special_timer = 0.0
         self.electric_timer = 0.0
         self.is_final_boss = False

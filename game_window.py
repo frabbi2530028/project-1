@@ -800,13 +800,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
             info_gap = max(14, int(18 * pause_scale))
             info_top = div_y - info_gap
 
-            tw, th2 = 190, max(26, int(32 * pause_scale))
-            tx = w//2 - tw//2
-            ty2 = pb + pad_bottom
-
             qw, qh = 196, max(32, int(40 * pause_scale))
             qx = w//2 - qw//2
-            qy = ty2 + th2 + gap_small
+            qy = pb + pad_bottom
 
             rw, rh = 196, max(32, int(40 * pause_scale))
             rx = w//2 - rw//2
@@ -908,14 +904,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
                       "QUIT TO MENU", 14 if pause_scale > 0.9 else 13)
             self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
 
-            hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
-            _draw_btn(tx, tw, ty2, th2,
-                      theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 145),
-                      (*theme_c["btn_border"][:3], 158),
-                      theme_c["toggle_text"],
-                      "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]",
-                      12 if pause_scale > 0.9 else 11)
-            self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
             return
 
         arcade.draw_text("SELECT YOUR SHIP", w//2+1, div_y-23, (0,0,0,90), scaled(13),
@@ -928,8 +916,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
         avl = ship["available"]
         panel_inner_w = pw - 44
         cw = min(scaled(430), max(scaled(320), int(panel_inner_w * 0.48)))
-        card_height_limit = max(150, ph - 388)
-        ch = min(scaled(232), card_height_limit)
+        card_height_limit = max(170, ph - 350)
+        ch = min(scaled(270), card_height_limit)
         cl = w // 2 - cw // 2
         cr = cl + cw
         cb = div_y - 54 - ch
@@ -945,15 +933,16 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, bord, 1)
 
         content_pad = max(16, int(cw * 0.06))
-        fname_sz = max(15, min(21, cw // 22))
-        ftag_sz = max(12, min(15, cw // 27))
-        fstat_sz = max(12, min(15, cw // 26))
+        fname_sz = max(13, min(18, cw // 28))
+        ftag_sz = max(11, min(14, cw // 31))
+        fstat_sz = max(11, min(14, cw // 29))
 
-        badge_y = cb + max(12, int(ch * 0.07))
-        stats_y = cb + max(42, int(ch * 0.21))
-        tag_y = cb + max(72, int(ch * 0.35))
-        name_y = cb + max(98, int(ch * 0.48))
-        preview_bottom = name_y + fname_sz + max(10, int(ch * 0.045))
+        badge_y = cb + max(14, int(ch * 0.07))
+        stats_y = cb + max(46, int(ch * 0.20))
+        stat_label_y = stats_y + max(18, int(ch * 0.08))
+        tag_y = cb + max(90, int(ch * 0.39))
+        name_y = cb + max(116, int(ch * 0.50))
+        preview_bottom = name_y + fname_sz + max(22, int(ch * 0.08))
         preview_top = ct - max(10, content_pad // 2)
         preview_height = max(44, preview_top - preview_bottom)
         preview_width = max(140, cw - content_pad * 2)
@@ -1008,7 +997,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._txt_shadow(ship["tagline"] if avl else "COMING SOON", pcx, tag_y,
                          tagline_c, ftag_sz, FONT_UI_MENU,
                          anchor_x="center", ox=1, oy=-1)
-        arcade.draw_line(cl + 24, tag_y - 12, cr - 24, tag_y - 12,
+        stat_divider_y = (stat_label_y + fstat_sz + tag_y) * 0.5
+        arcade.draw_line(cl + 24, stat_divider_y, cr - 24, stat_divider_y,
                          (*theme_c["divider"][:3], 90), 1)
 
         stat_gap = cw / 3
@@ -1018,7 +1008,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             ("DEF", ship["stat_def"]),
         )):
             sx = cl + stat_gap * (idx + 0.5)
-            self._txt_shadow(lbl, sx, stats_y + 16, stat_c, fstat_sz, FONT_NUMERIC,
+            self._txt_shadow(lbl, sx, stat_label_y, stat_c, fstat_sz, FONT_NUMERIC,
                              anchor_x="center", bold=True, ox=1, oy=-1)
             pip_fill = (*ship_accent, 255) if avl else theme_c["stat_filled"]
             pip_empty = (
@@ -1131,7 +1121,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
                       (255, 210, 30, 220), (255, 215, 40, 255),
                       coin_label, scaled(14))
             self._menu_btns["shop"] = (sx2, sx2+sw, sy2, sy2+sh2)
-            _theme_ref_y = sy2
         else:
             sw, sh2 = scaled(230), scaled(38)
             sx2 = w//2 - sw//2;  sy2 = by - sh2 - 8
@@ -1160,20 +1149,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
                       (*theme_c["btn_border"][:3], 152), theme_c["btn_text_dim"],
                       "QUIT TO MENU", scaled(14))
             self._menu_btns["quit"] = (qx, qx+qw, qy, qy+qh)
-            _theme_ref_y = qy
-
-        # theme toggle — always a fixed gap below the lowest action button
-        tw, th2 = scaled(230), scaled(32)
-        tx  = w//2 - tw//2
-        ty2 = max(pb + 10, _theme_ref_y - th2 - 12)
-        hov_t = self._is_hovering(tx, tx+tw, ty2, ty2+th2)
-        _draw_btn(tx, tw, ty2, th2,
-                  theme_c["btn_hover"] if hov_t else (*theme_c["btn_fill"][:3], 145),
-                  (*theme_c["btn_border"][:3], 158),
-                  theme_c["toggle_text"],
-                  "[ LIGHT MODE ]" if self.menu_theme=="dark" else "[ DARK MODE ]",
-                  scaled(12))
-        self._menu_btns["theme"] = (tx, tx+tw, ty2, ty2+th2)
 
     # ══════════════════════════════════════════════════
     #  LEVEL SELECT SCREEN
@@ -1453,6 +1428,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         (portrait_bottom + portrait_top) * 0.5 + 4 + hover_y,
                         (portrait_right - portrait_left) * (0.82 * pulse),
                         (portrait_top - portrait_bottom) * (0.80 * pulse),
+                        angle=lvl.get("boss_front_angle_offset", 0.0),
                     )
 
                 arcade.draw_text(
@@ -2746,7 +2722,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         def _face_player(sprite, a_rad, smooth=18.0):
             """Smoothly rotate nose-up sprite art so the cone side faces the player."""
-            target = (90.0 - math.degrees(a_rad) + 180.0) % 360.0 - 180.0
+            base_target = 90.0 - math.degrees(a_rad)
+            target = (
+                base_target
+                + getattr(sprite, "front_angle_offset", 0.0)
+                + 180.0
+            ) % 360.0 - 180.0
             # Shortest-path angle difference  (-180 to +180)
             diff = (target - sprite.angle + 180) % 360 - 180
             sprite.angle += diff * min(1.0, smooth * delta)
@@ -3177,6 +3158,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             texture_path=lvl.get("boss_texture", "image/boss.png"),
             texture_scale=lvl.get("boss_texture_scale", 0.2),
             boss_name=lvl.get("boss_name", "BOSS"),
+            front_angle_offset=lvl.get("boss_front_angle_offset", 0.0),
         )
         if self.selected_level == len(LEVELS) - 1:
             boss.is_final_boss = True
@@ -3298,8 +3280,6 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         else:
                             self.game_state = STATE_MENU
                             self.set_mouse_visible(True)
-                    elif name == "theme":
-                        self.menu_theme = "light" if self.menu_theme=="dark" else "dark"
                     elif name == "ship_prev":
                         self._cycle_selected_ship(-1)
                     elif name == "ship_next":

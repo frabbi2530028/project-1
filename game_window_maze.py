@@ -2404,34 +2404,8 @@ class MazeModeMixin:
                                  bold=True, font_name=FU)
                 self._mode_btns[mode["key"]] = (cl, cr, cb, ct)
 
-        # ── ENTER button ────────────────────────────────────────────────
-        if self.selected_mode:
-            enter_w = 240;  enter_h = 48
-            enter_x = w // 2 - enter_w // 2
-            enter_y = card_y - enter_h - 24
-            enter_hov = self._is_hovering(enter_x, enter_x + enter_w, enter_y, enter_y + enter_h)
-            ep = 0.5 + 0.5 * math.sin(t * 3.5)
-            e_fill   = (int(28 + 24 * ep), int(88 + 30 * ep), int(215 + 20 * ep), 245)
-            e_border = (90, 198, 255, 255) if enter_hov else (70, 162, 255, 220)
-            e_tc     = (255, 255, 255, 255)
-            if enter_hov:
-                arcade.draw_lrbt_rectangle_filled(enter_x - 2, enter_x + enter_w + 2,
-                                                   enter_y - 2, enter_y + enter_h + 2,
-                                                   (90, 198, 255, 28))
-            arcade.draw_lrbt_rectangle_filled(enter_x, enter_x + enter_w,
-                                               enter_y, enter_y + enter_h, e_fill)
-            arcade.draw_lrbt_rectangle_outline(enter_x, enter_x + enter_w,
-                                                enter_y, enter_y + enter_h, e_border, 2)
-            arcade.draw_text("[ ENTER GAME ]", w // 2 + 1, enter_y + enter_h // 2 - 1,
-                             (0, 0, 0, 90), 18, anchor_x="center", anchor_y="center",
-                             bold=True, font_name=FU)
-            arcade.draw_text("[ ENTER GAME ]", w // 2, enter_y + enter_h // 2,
-                             e_tc, 18, anchor_x="center", anchor_y="center",
-                             bold=True, font_name=FU)
-            self._mode_btns["__enter__"] = (enter_x, enter_x + enter_w, enter_y, enter_y + enter_h)
-
         # ── Footer hint ─────────────────────────────────────────────────
-        arcade.draw_text("Click a mode card, then press ENTER GAME  ·  F11 Fullscreen",
+        arcade.draw_text("Double-click a mode card to enter  ·  F11 Fullscreen",
                          w // 2, 16, (80, 108, 165, 140), 9,
                          anchor_x="center", font_name=FN)
 
@@ -2580,10 +2554,6 @@ class MazeModeMixin:
         card_y  = h // 2 - card_h // 2 - 10
 
         self._maze_preset_btns = {}
-        selected_preset = next(
-            (p for p in MAZE_PRESETS if p["key"] == self.selected_maze_preset),
-            MAZE_PRESETS[0],
-        )
 
         for i, preset in enumerate(MAZE_PRESETS):
             cl  = start_x + i * (card_w + 18)
@@ -2666,48 +2636,7 @@ class MazeModeMixin:
 
             self._maze_preset_btns[preset["key"]] = (cl, cr, cb, ct)
 
-        # ENTER MAZE button
-        play_w = 240;  play_h = 48
-        play_x = w // 2 - play_w // 2
-        play_y = card_y - play_h - 22
-        play_hov = self._is_hovering(play_x, play_x + play_w, play_y, play_y + play_h)
-        ep = 0.5 + 0.5 * math.sin(t * 3.5)
-        sc = selected_preset["color"]
-        e_fill   = (
-            int(sc[0] * (0.72 + 0.16 * ep)),
-            int(sc[1] * (0.72 + 0.16 * ep)),
-            int(sc[2] * (0.72 + 0.16 * ep)),
-            248,
-        )
-        e_border = (*sc, 255 if play_hov else 225)
-        if play_hov:
-            arcade.draw_lrbt_rectangle_filled(play_x - 2, play_x + play_w + 2,
-                                               play_y - 2, play_y + play_h + 2,
-                                               (*sc, 34))
-        arcade.draw_lrbt_rectangle_filled(play_x, play_x + play_w,
-                                           play_y, play_y + play_h, e_fill)
-        arcade.draw_lrbt_rectangle_outline(play_x, play_x + play_w,
-                                            play_y, play_y + play_h, e_border, 2)
-        self._txt_shadow("[ ENTER MAZE ]", w // 2, play_y + play_h // 2,
-                         (255, 255, 255, 255), 18, FU,
-                         anchor_x="center", anchor_y="center", bold=True, ox=2, oy=-2)
-        self._maze_preset_btns["__play__"] = (play_x, play_x + play_w, play_y, play_y + play_h)
-
-        # Back button
-        back_w = 130;  back_h = 36
-        back_x = w // 2 - back_w // 2
-        back_y = play_y - back_h - 12
-        back_hov = self._is_hovering(back_x, back_x + back_w, back_y, back_y + back_h)
-        arcade.draw_lrbt_rectangle_filled(back_x, back_x + back_w, back_y, back_y + back_h,
-                                           tc["btn_hover"] if back_hov else (*tc["btn_fill"][:3], 180))
-        arcade.draw_lrbt_rectangle_outline(back_x, back_x + back_w, back_y, back_y + back_h,
-                                            tc["btn_border"], 1)
-        arcade.draw_text("[ BACK ]", w // 2, back_y + back_h // 2,
-                         (255, 255, 255, 220), 13, anchor_x="center", anchor_y="center",
-                         bold=True, font_name=FU)
-        self._maze_preset_btns["__back__"] = (back_x, back_x + back_w, back_y, back_y + back_h)
-
-        arcade.draw_text("Select a maze plan, then press ENTER MAZE  ·  ESC to go back",
+        arcade.draw_text("Double-click a maze plan to enter  ·  ESC to go back",
                          w // 2, 16, (70, 130, 95, 140), 9,
                          anchor_x="center", font_name=FN)
 

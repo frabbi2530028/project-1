@@ -3107,16 +3107,14 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         self._cycle_space_theme(-1)
                     elif name == "__theme_next__":
                         self._cycle_space_theme(1)
-                    elif name == "__enter__":
-                        if self.selected_mode == "normal":
-                            self.game_state = STATE_MENU
-                        elif self.selected_mode == "maze":
-                            self.game_state = STATE_MAZE_LOADOUT
-                    elif name == "maze":
-                        self.selected_mode = name
-                        self.game_state = STATE_MAZE_LOADOUT
-                    elif name == "normal":
-                        self.selected_mode = name
+                    elif name in ("normal", "maze"):
+                        if self.selected_mode == name:
+                            if name == "normal":
+                                self.game_state = STATE_MENU
+                            elif name == "maze":
+                                self.game_state = STATE_MAZE_LOADOUT
+                        else:
+                            self.selected_mode = name
                     return
             return
 
@@ -3124,10 +3122,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
             for name, rect in self._maze_preset_btns.items():
                 l, r, b, t = rect
                 if l <= x <= r and b <= y <= t:
-                    if name == "__play__":
+                    if self.selected_maze_preset == name:
                         self._start_maze_with_preset()
-                    elif name == "__back__":
-                        self.game_state = STATE_MAZE_LOADOUT
                     else:
                         self.selected_maze_preset = name
                     return

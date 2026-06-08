@@ -666,13 +666,14 @@ class GameWindow(MazeModeMixin, arcade.Window):
         height = top - bottom
         font_ui_local = FONT_UI_MENU
         header_size = 10 if height >= 86 else 9
-        name_size = 17 if height >= 96 else 14
-        tag_size = 10 if height >= 86 else 9
-        stat_label_size = 9 if height >= 86 else 8
-        preview_radius = min(32, max(22, int(height * 0.30)))
-        preview_offset_top = min(48, int(height * 0.42))
-        tagline_offset_top = min(70, int(height * 0.64))
-        stat_y = bottom + max(20, int(height * 0.24))
+        name_size = 18 if height >= 120 else 15
+        tag_size = 11 if height >= 120 else 9
+        stat_label_size = 9 if height >= 100 else 8
+        preview_radius = min(58, max(38, int(height * 0.36)))
+        header_y = top - max(28, int(height * 0.22))
+        name_y = header_y - max(22, int(height * 0.17))
+        tag_y = name_y - max(22, int(height * 0.16))
+        stat_y = bottom + max(28, int(height * 0.24))
 
         arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, theme_c["card_fill"])
         arcade.draw_lrbt_rectangle_outline(left, right, bottom, top, theme_c["card_sel_border"], 2)
@@ -683,29 +684,29 @@ class GameWindow(MazeModeMixin, arcade.Window):
             (*ship["color"], int(45 + 35 * pulse)), 2
         )
 
-        preview_x = left + min(58, width * 0.12)
+        preview_x = left + min(94, width * 0.16)
         preview_y = bottom + height * 0.52
         arcade.draw_circle_filled(preview_x, preview_y, preview_radius, (*ship["color"], 32))
 
         if ship["texture"]:
             tex = load_texture_clean(ship["texture"], ship["tex_scale"])
             draw_y = preview_y + math.sin(t * 2.8) * 3
-            _draw_texture_fitted(tex, preview_x, draw_y, preview_radius * 1.75, preview_radius * 1.75)
+            _draw_texture_fitted(tex, preview_x, draw_y, preview_radius * 2.25, preview_radius * 2.25)
 
-        separator_x = left + min(108, width * 0.24)
+        separator_x = left + min(168, width * 0.26)
         arcade.draw_line(separator_x, bottom + 14, separator_x, top - 14, theme_c["divider"], 1)
 
         name_x = separator_x + 16
-        arcade.draw_text("CURRENT SHIP", name_x, top - 24, theme_c["text_dim"], header_size,
+        arcade.draw_text("CURRENT SHIP", name_x, header_y, theme_c["text_dim"], header_size,
                          bold=True, font_name=font_ui_local)
-        arcade.draw_text(ship["name"], name_x + 1, top - preview_offset_top - 1, (0, 0, 0, 95), name_size,
+        arcade.draw_text(ship["name"], name_x + 1, name_y - 1, (0, 0, 0, 95), name_size,
                          bold=True, font_name=font_ui_local)
-        arcade.draw_text(ship["name"], name_x, top - preview_offset_top, theme_c["card_sel_border"], name_size,
+        arcade.draw_text(ship["name"], name_x, name_y, theme_c["card_sel_border"], name_size,
                          bold=True, font_name=font_ui_local)
-        arcade.draw_text(ship["tagline"], name_x, top - tagline_offset_top, theme_c["text"], tag_size,
+        arcade.draw_text(ship["tagline"], name_x, tag_y, theme_c["text"], tag_size,
                          font_name=font_ui_local)
 
-        stats_left = max(name_x + 20, left + width * 0.46)
+        stats_left = max(name_x + 210, left + width * 0.52)
         stats_right = right - 26
         stat_step = (stats_right - stats_left) / 3
         for idx, (label, value) in enumerate((
@@ -718,7 +719,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                              anchor_x="center", bold=True,
                              font_name=FONT_NUMERIC)
             self._draw_stat_pips(cx, stat_y, value, 5,
-                                 theme_c["stat_filled"], theme_c["stat_empty"], 72)
+                                 theme_c["stat_filled"], theme_c["stat_empty"],
+                                 max(54, int(stat_step * 0.66)))
 
     def _draw_menu(self, anim: dict | None = None, draw_background: bool = True):
         anim = anim or {}
@@ -797,22 +799,34 @@ class GameWindow(MazeModeMixin, arcade.Window):
             gap_small = max(8, int(10 * pause_scale))
             gap_medium = max(10, int(12 * pause_scale))
             info_gap = max(14, int(18 * pause_scale))
-            info_top = div_y - info_gap
+            summary_h = max(136, min(166, int(ph * 0.27)))
+            summary_w = min(pr - pl - 44, max(560, int(pw * 0.76)))
+            summary_left = w//2 - summary_w//2
+            summary_right = summary_left + summary_w
+            info_top = div_y - info_gap - 6
+            info_bottom = info_top - summary_h
 
             qw, qh = 220, max(32, int(40 * pause_scale))
             qx = w//2 - qw//2
-            qy = pb + pad_bottom
-
             rw, rh = 220, max(32, int(40 * pause_scale))
             rx = w//2 - rw//2
-            ry = qy + qh + gap_small
-
             bw, bh = 230, max(40, int(50 * pause_scale))
             bx = w//2 - bw//2
-            by = ry + rh + gap_medium
 
-            info_bottom = by + bh + info_gap
-            self._draw_pause_ship_summary(pl + 22, pr - 22, info_bottom, info_top, theme_c, t)
+            by = info_bottom - gap_medium - bh
+            ry = by - gap_small - rh
+            qy = ry - gap_small - qh
+            if qy < pb + pad_bottom:
+                shift = (pb + pad_bottom) - qy
+                info_top += shift
+                info_bottom += shift
+                by += shift
+                ry += shift
+                qy += shift
+
+            self._draw_pause_ship_summary(
+                summary_left, summary_right, info_bottom, info_top, theme_c, t
+            )
 
             hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
             _draw_btn(bx, bw, by, bh,

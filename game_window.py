@@ -689,7 +689,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         arcade.draw_circle_filled(preview_x, preview_y, preview_radius, (*ship["color"], 32))
 
         if ship["texture"]:
-            tex = load_texture_clean(ship["texture"], ship["tex_scale"])
+            tex = load_texture_preview(ship["texture"])
             draw_y = preview_y + math.sin(t * 2.8) * 3
             _draw_texture_fitted(tex, preview_x, draw_y, preview_radius * 2.25, preview_radius * 2.25)
 
@@ -912,7 +912,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             if anim_from is not None and anim_from != self.selected_ship and anim_p < 1.0:
                 prev_ship = SHIPS[anim_from]
                 if prev_ship["available"] and prev_ship["texture"]:
-                    prev_tex = load_texture_clean(prev_ship["texture"], prev_ship["tex_scale"])
+                    prev_tex = load_texture_preview(prev_ship["texture"])
                     prev_x = pcx - anim_dir * slide * ease
                     prev_scale = 1.0 - 0.16 * ease
                     _draw_texture_fitted(prev_tex, prev_x, pcy, preview_draw_w * prev_scale,
@@ -920,7 +920,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             elif anim_p >= 1.0:
                 self._ship_carousel_from = None
 
-            tex = load_texture_clean(ship["texture"], ship["tex_scale"])
+            tex = load_texture_preview(ship["texture"])
             draw_x = pcx + anim_dir * slide * (1.0 - ease) if anim_from is not None else pcx
             draw_y = pcy + bob
             draw_scale = 1.08 + 0.16 * ease

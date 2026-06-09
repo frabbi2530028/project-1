@@ -880,6 +880,39 @@ def load_texture_clean(path: str, scale: float = 1.0) -> arcade.Texture:
     return tex
 
 
+def load_texture_preview(path: str, scale: float = 1.0, pad: int = 8) -> arcade.Texture:
+    """Load a high-quality UI preview texture, cropped to visible pixels."""
+    key = ("preview", path, scale, pad)
+    if key in _texture_cache:
+        return _texture_cache[key]
+
+    resolved_path = _resolve_asset_path(path)
+    if resolved_path is None:
+        tex = load_texture_clean(path, scale)
+        _texture_cache[key] = tex
+        return tex
+
+    img = Image.open(resolved_path).convert("RGBA")
+    img = _remove_background(img, threshold=210)
+
+    bbox = img.getchannel("A").getbbox()
+    if bbox:
+        left = max(0, bbox[0] - pad)
+        upper = max(0, bbox[1] - pad)
+        right = min(img.width, bbox[2] + pad)
+        lower = min(img.height, bbox[3] + pad)
+        img = img.crop((left, upper, right, lower))
+
+    if scale != 1.0:
+        new_w = max(1, int(img.width * scale))
+        new_h = max(1, int(img.height * scale))
+        img = img.resize((new_w, new_h), _RESAMPLE)
+
+    tex = arcade.Texture(image=img)
+    _texture_cache[key] = tex
+    return tex
+
+
 def solid_texture(size: int, color: tuple) -> arcade.Texture:
     key = ("solid", size, color)
     if key in _texture_cache:

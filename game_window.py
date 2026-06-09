@@ -1396,13 +1396,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
         pb = (h - ph) // 2
         ptop = pb + ph
 
-        div_y = ptop - 102
+        div_y = ptop - 118
         cols = 3
         rows = max(1, math.ceil(len(SHOP_ITEMS) / cols))
         side_pad = 28
         gap_ = 14
         cw_ = (pw - side_pad * 2 - gap_ * (cols - 1)) // cols
-        grid_top = div_y - 18
+        grid_top = div_y - 20
         back_band = 66
         grid_bottom = pb + back_band
         available_h = max(320, grid_top - grid_bottom)
@@ -1470,7 +1470,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
         arcade.draw_text(bal_str, w//2, ty_title-30,
                          (255, 220, 40, 245), 14, anchor_x="center",
                          bold=True, font_name=font_n)
-        arcade.draw_text(self.shop_feedback, w//2, ty_title-54,
+        feedback_y = div_y + 16
+        arcade.draw_text(self.shop_feedback, w//2, feedback_y,
                          self.shop_feedback_color, 10, anchor_x="center",
                          bold=True, font_name=font_u)
 
@@ -1503,26 +1504,20 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb_, ct, bord_c, 2)
 
             pad_x = max(14, int(cw_ * 0.07))
-            title_size = max(13, min(16, cw_ // 15))
-            icon_size = max(16, min(22, cw_ // 11))
+            title_size = max(12, min(14, cw_ // 18))
+            icon_size = max(16, min(21, cw_ // 12))
             desc_size = max(10, min(12, cw_ // 18))
             cost_size = max(12, min(15, cw_ // 15))
-            top_pad = max(14, int(ch_ * 0.08))
+            top_pad = max(18, int(ch_ * 0.12))
             title_y = ct - top_pad
-            badge_cy = title_y - max(26, int(ch_ * 0.17))
+            badge_cy = title_y - title_size - max(24, int(ch_ * 0.13))
             badge_w = max(54, int(cw_ * 0.22))
-            badge_h = max(28, int(ch_ * 0.16))
-            desc_y = badge_cy - max(24, int(ch_ * 0.16))
-            dot_y = desc_y - max(26, int(ch_ * 0.16))
+            desc_y = badge_cy - max(22, int(ch_ * 0.15))
+            dot_y = desc_y - max(26, int(ch_ * 0.15))
             price_y = cb_ + max(22, int(ch_ * 0.11))
 
-            # Icon badge
+            # Icon
             ic_alpha = 255 if (can_afford or maxed) else 110
-            arcade.draw_lrbt_rectangle_filled(
-                cl + pad_x, cl + pad_x + badge_w,
-                badge_cy - badge_h // 2, badge_cy + badge_h // 2,
-                (*ic[:3], 60 if can_afford else 30)
-            )
             self._txt_shadow(item["icon"], cl + pad_x + badge_w // 2, badge_cy - 1,
                              (*ic[:3], ic_alpha), icon_size, font_u,
                              anchor_x="center", anchor_y="center", bold=True, ox=1, oy=-1)
@@ -1530,7 +1525,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             # Name
             nc = (*ic[:3], 240) if (can_afford or maxed) else (80, 90, 120, 180)
             self._txt_shadow(item["name"], cl + cw_//2, title_y,
-                             nc, title_size, font_u, anchor_x="center",
+                             nc, title_size, font_u, anchor_x="center", anchor_y="top",
                              bold=True, ox=1, oy=-1)
             # Desc
             self._txt_shadow(item["desc"], cl + cw_//2, desc_y,

@@ -321,14 +321,16 @@ MAZE_BREACH_MAX_STORAGE   = 10     # floor-1 wall-breaking charge storage
 MAZE_POWERUP_STORAGE_PER_FLOOR = 2 # extra storage for each stored powerup per floor
 MAZE_BREAKABLE_WALL_HP    = 4      # breach hits needed to crack a fragile wall
 MAZE_BREAKABLE_WALL_CHANCE = 0.18  # only some closed internal walls can be destroyed
-MAZE_BOSS_TEXTURE         = "image/UvlV4Mu.png"
+MAZE_BOSS_TEXTURE         = "image/iron_seraph.png"
 MAZE_BOSS_TEXTURE_SCALE   = 1.05
-MAZE_BOSS_HEALTH          = 1_200
+MAZE_BOSS_HEALTH          = 1_000_000_000
 MAZE_BOSS_MAX_SPLITS      = 4
 MAZE_BOSS_SPLIT_SIZE_MULT = 0.72
 MAZE_BOSS_SHOT_DAMAGE     = 20     # same damage as player bullets
 MAZE_PLAYER_START_SPEED_MULT = 0.58
 MAZE_PLAYER_FINAL_SPEED_MULT = 1.0
+MAZE_PLAYER_START_DAMAGE_MULT = 1.0
+MAZE_PLAYER_FINAL_DAMAGE_MULT = 1_000_000.0
 MAZE_PLAYER_FINAL_HEALTH = MAZE_BOSS_HEALTH
 STATE_MAZE        = "maze"
 STATE_MAZE_OVER   = "maze_over"
@@ -603,6 +605,7 @@ SHIPS = [
         "available": True,
         "texture":   "image/player.png",
         "tex_scale": 0.22,
+        "front_angle_offset": 180.0,
         "spd_mult":  1.0,
         "hp_mult":   1.0,
     },
@@ -1226,6 +1229,7 @@ class Player(arcade.Sprite):
         self.health     = PLAYER_HEALTH
         self.max_health = PLAYER_HEALTH
         self.change_x   = 0.0;  self.change_y = 0.0
+        self.front_angle_offset = 0.0
 
         self.shield_active   = False;  self.shield_timer   = 0.0
         self.speed_active    = False;  self.speed_timer    = 0.0
@@ -1258,7 +1262,10 @@ class Player(arcade.Sprite):
         self.center_x += self.change_x * delta_time
         self.center_y += self.change_y * delta_time
         if math.hypot(self.change_x, self.change_y) > 4.0:
-            target = self.angle_from_motion(self.change_x, self.change_y)
+            target = (
+                self.angle_from_motion(self.change_x, self.change_y)
+                + self.front_angle_offset
+            )
             diff = (target - self.angle + 180.0) % 360.0 - 180.0
             self.angle += diff * min(1.0, 18.0 * delta_time)
 

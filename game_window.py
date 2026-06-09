@@ -67,7 +67,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         # ── UI/menu state ─────────────────────────────
         self.game_state    = STATE_MODE_SELECT
-        self.selected_mode      = None          # "normal" | "maze" | "multiplayer"
+        self.selected_mode      = None          # "normal" | "maze"
         self._mode_btns:  dict  = {}
         self._reset_confirm_btns: dict = {}
         self.reset_confirm_open = False
@@ -244,7 +244,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.player.health     = base_hp
         # Apply the selected ship's texture (Player.__init__ defaults to player.png)
         if ship["texture"]:
-            self.player.texture = load_texture_clean(ship["texture"], ship["tex_scale"])
+            self.player.texture = load_texture_clean(ship["texture"])
+            self.player.scale = ship["tex_scale"]
+            self.player.front_angle_offset = ship.get("front_angle_offset", 0.0)
+            self.player.angle = self.player.front_angle_offset
         # Speed multiplier from Engine Tuner
         self.player._engine_bonus = 1.0 + engine_tier * 0.12
 
@@ -691,7 +694,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
         if ship["texture"]:
             tex = load_texture_preview(ship["texture"])
             draw_y = preview_y + math.sin(t * 2.8) * 3
-            _draw_texture_fitted(tex, preview_x, draw_y, preview_radius * 2.25, preview_radius * 2.25)
+            _draw_texture_fitted(
+                tex, preview_x, draw_y,
+                preview_radius * 2.25, preview_radius * 2.25,
+                angle=ship.get("front_angle_offset", 0.0),
+            )
 
         separator_x = left + min(168, width * 0.26)
         arcade.draw_line(separator_x, bottom + 14, separator_x, top - 14, theme_c["divider"], 1)
@@ -916,7 +923,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     prev_x = pcx - anim_dir * slide * ease
                     prev_scale = 1.0 - 0.16 * ease
                     _draw_texture_fitted(prev_tex, prev_x, pcy, preview_draw_w * prev_scale,
-                                         preview_draw_h * prev_scale)
+                                         preview_draw_h * prev_scale,
+                                         angle=prev_ship.get("front_angle_offset", 0.0))
             elif anim_p >= 1.0:
                 self._ship_carousel_from = None
 
@@ -925,7 +933,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
             draw_y = pcy + bob
             draw_scale = 1.08 + 0.16 * ease
             _draw_texture_fitted(tex, draw_x, draw_y, preview_draw_w * draw_scale,
-                                 preview_draw_h * draw_scale)
+                                 preview_draw_h * draw_scale,
+                                 angle=ship.get("front_angle_offset", 0.0))
         else:
             arcade.draw_circle_outline(pcx, pcy, 40, theme_c["locked_border"], 2)
             arcade.draw_text("?", pcx, pcy, theme_c["locked_text"], 34,
@@ -993,7 +1002,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         bw, bh = scaled(230), scaled(50)
         bx = w//2-bw//2;  by = play_y - bh
         hov_p = self._is_hovering(bx, bx+bw, by, by+bh)
-        play_label = "[ RESUME ]" if is_pause else ("[ CHOOSE PLAN ]" if is_maze_loadout else "[ PLAY GAME ]")
+        play_label = "[ RESUME ]" if is_pause else ("[ SELECT SHIP ]" if is_maze_loadout else "[ PLAY GAME ]")
         _draw_btn(bx, bw, by, bh,
                   theme_c["btn_hover"] if hov_p else theme_c["btn_fill"],
                   theme_c["btn_border"], theme_c["btn_text"],
@@ -1715,6 +1724,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
              (255, 140,  40)),
         ]
         if getattr(self, "game_state", None) == STATE_MAZE:
+            slots.append(
+                ("B", "BRC", "BREACH", inv.get("breach", 0),
+                 p.breach_active, getattr(p, "breach_timer", 0), MAZE_BREACH_DURATION,
+                 (255, 190, 55)))
             special_count = inv.get("beam360", 0) + inv.get("elec360", 0)
             special_active = p.beam360_active or p.elec360_active
             special_timer = max(getattr(p, "beam360_timer", 0), getattr(p, "elec360_timer", 0))
@@ -1850,6 +1863,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         arcade.draw_line(ccx + math.cos(a)*4, ccy + math.sin(a)*4,
                                          ccx + math.cos(a)*12, ccy + math.sin(a)*12,
                                          icon_col, 2)
+                elif short == "BRC":
+                    # Breakable wall icon
+                    arcade.draw_lrbt_rectangle_filled(ccx - 12, ccx + 12, ccy - 7, ccy + 7, (*icon_col[:3], 40))
+                    arcade.draw_lrbt_rectangle_outline(ccx - 12, ccx + 12, ccy - 7, ccy + 7, icon_col, 2)
+                    arcade.draw_line(ccx - 2, ccy + 7, ccx - 7, ccy - 7, icon_col, 2)
+                    arcade.draw_line(ccx + 4, ccy + 7, ccx - 1, ccy - 7, icon_col, 2)
 
             # ── Hotkey badge (top-left corner) ───────────────────────────
             key_col = (*ic, 110) if dim else (*ic, 220)

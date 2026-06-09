@@ -65,6 +65,22 @@ class MazeModeMixin:
             + (MAZE_PLAYER_FINAL_SPEED_MULT - MAZE_PLAYER_START_SPEED_MULT) * progress
         )
 
+    def _maze_floor_power_scale(self, start: float, final: float) -> float:
+        start = max(0.000001, float(start))
+        final = max(start, float(final))
+        if self._maze_is_final_floor():
+            return final
+        return start * ((final / start) ** self._maze_floor_progress())
+
+    def _maze_player_damage_multiplier(self) -> float:
+        return self._maze_floor_power_scale(
+            MAZE_PLAYER_START_DAMAGE_MULT,
+            MAZE_PLAYER_FINAL_DAMAGE_MULT,
+        )
+
+    def _maze_player_damage(self, amount: float) -> float:
+        return amount * self._maze_player_damage_multiplier()
+
     def _maze_player_base_move_speed(self) -> float:
         player = getattr(self, "player", None)
         engine = getattr(player, "_engine_bonus", 1.0)
@@ -94,7 +110,7 @@ class MazeModeMixin:
 
         progress = self._maze_floor_progress()
         target_health = int(round(
-            base_health + (MAZE_PLAYER_FINAL_HEALTH - base_health) * progress
+            self._maze_floor_power_scale(base_health, MAZE_PLAYER_FINAL_HEALTH)
         ))
         target_health = max(1, target_health)
         old_max = max(1, getattr(player, "max_health", target_health))
@@ -109,8 +125,9 @@ class MazeModeMixin:
             boss_texture = load_texture_clean(MAZE_BOSS_TEXTURE, MAZE_BOSS_TEXTURE_SCALE)
             boss_size = max(boss_texture.width, boss_texture.height)
             player_size = max(1, max(player.texture.width, player.texture.height))
-            final_scale = max(1.0, boss_size / player_size)
-            player.scale = 1.0 + (final_scale - 1.0) * progress
+            base_scale = max(0.01, getattr(player, "_maze_base_scale", player.scale))
+            final_scale = max(base_scale, boss_size / player_size)
+            player.scale = base_scale + (final_scale - base_scale) * progress
 
     def setup_maze(self, keep_player: bool = False):
         """Generate a new maze level.  Call with keep_player=True to retain HP between floors."""
@@ -180,8 +197,10 @@ class MazeModeMixin:
             self.maze_player_base_health = self.player.max_health
         engine_tier = self.upgrades.get("engine", 0)
         self.player._engine_bonus = 1.0 + engine_tier * 0.12
-        tex = load_texture_clean(ship["texture"], ship["tex_scale"])
+        tex = load_texture_clean(ship["texture"])
         self.player.texture  = tex
+        self.player._maze_base_scale = ship["tex_scale"]
+        self.player.front_angle_offset = ship.get("front_angle_offset", 0.0)
         self._apply_maze_player_floor_stats(refill=not keep_player)
         # Spawn at top-left cell
         player_start_x = ox + 0.5 * cs
@@ -189,7 +208,7 @@ class MazeModeMixin:
         self.player.center_x = player_start_x
         self.player.center_y = player_start_y
         self.player.change_x = 0.0;  self.player.change_y = 0.0
-        self.player.angle    = 90.0   # art points up by default; rotate nose to face RIGHT
+        self.player.angle    = 90.0 + self.player.front_angle_offset
         self.maze_start_to_exit_steps = max(
             1,
             len(self.maze_grid.bfs(0, rows - 1, self.maze_exit_col, self.maze_exit_row)),
@@ -1307,10 +1326,11 @@ class MazeModeMixin:
         # ── Player ──────────────────────────────────
         if self.player:
             p  = self.player
-            pg = (95, 200, 255, 68)
-            arcade.draw_circle_filled(p.center_x, p.center_y, 34, pg)
+            glow_r = max(24, min(54, max(p.width, p.height) * 0.30))
+            pg = (95, 200, 255, 36)
+            arcade.draw_circle_filled(p.center_x, p.center_y, glow_r, pg)
             if p.shield_active:
-                rr = 34 + 2.5 * math.sin(t * 9)
+                rr = glow_r + 2.5 * math.sin(t * 9)
                 arcade.draw_circle_outline(p.center_x, p.center_y, rr, (90, 235, 255, 230), 3)
             self.player_list.draw()
 
@@ -1352,6 +1372,17 @@ class MazeModeMixin:
                              (110, 135, 185, 110), 9, FU)
             return
 
+        def compact_hp(value: float) -> str:
+            value = max(0, int(value))
+            units = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K"))
+            for divisor, suffix in units:
+                if value >= divisor:
+                    scaled = value / divisor
+                    decimals = 2 if scaled < 10 else 1 if scaled < 100 else 0
+                    text = f"{scaled:.{decimals}f}".rstrip("0").rstrip(".")
+                    return f"{text}{suffix}"
+            return str(value)
+
         # ── Health readout: classic stacked number + segmented bar ──
         hp_ratio = max(0.0, min(1.0, p.health / max(1, p.max_health)))
         hp_c = (70, 225, 105) if hp_ratio > 0.35 else (255, 70, 80)
@@ -1361,22 +1392,21 @@ class MazeModeMixin:
 
         hx = 24
         hy = h - 14
-        self._txt_shadow(str(int(max(0, p.health))), hx, hy,
-                         (190, 255, 205, 245), 32, FU, anchor_y="top", bold=True,
-                         ox=3, oy=-3)
-        self._txt_shadow("HEALTH", hx + 2, hy - 34,
+        hp_pair = f"{compact_hp(p.health)} / {compact_hp(p.max_health)}"
+        health_label_y = hy
+        self._txt_shadow("HEALTH", hx + 2, health_label_y,
                          (120, 255, 160, 190), 11, FU, anchor_y="top", bold=True)
 
-        hp_text_y = hy - 58
-        self._txt_shadow(f"{int(max(0, p.health))}  /  {p.max_health}", hx, hp_text_y,
-                         (*hp_c[:3], 235), 15, FN, anchor_y="top", bold=True)
+        hp_text_y = health_label_y - 22
+        self._txt_shadow(hp_pair, hx, hp_text_y,
+                         (*hp_c[:3], 235), 12, FN, anchor_y="top", bold=True)
 
         segs = 22
         gap = 3
         seg_w = 9
-        seg_h = 12
+        seg_h = 10
         bar_x = hx
-        bar_y = hp_text_y - 19
+        bar_y = hp_text_y - 38
         filled = int(hp_ratio * segs + 0.5)
         for i in range(segs):
             lx = bar_x + i * (seg_w + gap)
@@ -1435,29 +1465,6 @@ class MazeModeMixin:
         self._txt_shadow(f"KEYS  {self.maze_keys_collected}/{MAZE_KEYS_REQUIRED}   SHIFT {key_time:03d}s",
                          w - 16, h - 90, (255, 220, 95, 215 if keys_left else 170),
                          10, FN, anchor_x="right", bold=True)
-
-        # ── Breach-cell storage ─────────────────────
-        breach_count = p.inventory.get("breach", 0)
-        active = getattr(p, "breach_active", False)
-        panel_x = 16
-        panel_y = h - 118
-        panel_w = 210
-        panel_h = 28
-        amber = (255, 190, 55)
-        fill_a = 110 if active else 55
-        arcade.draw_lrbt_rectangle_filled(
-            panel_x, panel_x + panel_w, panel_y - panel_h, panel_y,
-            (*amber, fill_a))
-        arcade.draw_lrbt_rectangle_outline(
-            panel_x, panel_x + panel_w, panel_y - panel_h, panel_y,
-            (*amber, 180 if breach_count else 85), 1)
-        breach_limit = self._powerup_storage_limit("breach")
-        label = f"[B] BREACH  {breach_count}/{breach_limit}"
-        if active:
-            label += f"  {p.breach_timer:.0f}s"
-        self._txt_shadow(label, panel_x + 10, panel_y - 20,
-                         (*amber, 230 if breach_count or active else 130),
-                         10, FN, bold=True)
 
         self._draw_powerup_panel(p, t, FU, FN)
 
@@ -1775,7 +1782,10 @@ class MazeModeMixin:
         # Rotate the nose into the direction the ship is actually moving.
         speed_len = math.hypot(p.change_x, p.change_y)
         if speed_len > 4.0:
-            target_angle = self._maze_player_angle_from_motion(p.change_x, p.change_y)
+            target_angle = (
+                self._maze_player_angle_from_motion(p.change_x, p.change_y)
+                + getattr(p, "front_angle_offset", 0.0)
+            )
             diff = (target_angle - p.angle + 180.0) % 360.0 - 180.0
             p.angle += diff * min(1.0, 18.0 * delta)
         p.update_powerups(delta)
@@ -1832,7 +1842,7 @@ class MazeModeMixin:
                     self._save_maze_resume_floor()
                     self.setup_maze(keep_player=True)
                     self.notif_text  = (
-                        f"FLOOR {self._maze_display_floor()} SPEED + STORAGE UP!  "
+                        f"FLOOR {self._maze_display_floor()} SPEED + DAMAGE + STORAGE UP!  "
                         f"+{bonus} TIME BONUS"
                     )
                     self.notif_color = (120, 255, 160)
@@ -1971,7 +1981,11 @@ class MazeModeMixin:
             for boss in list(self._active_maze_bosses()):
                 hit_r = max(boss.width, boss.height) * 0.45
                 if beam.intersects_circle(boss.center_x, boss.center_y, hit_r):
-                    self._damage_maze_boss(boss, BEAM_DAMAGE_PER_SEC * delta, (255, 130, 70))
+                    self._damage_maze_boss(
+                        boss,
+                        self._maze_player_damage(BEAM_DAMAGE_PER_SEC * delta),
+                        (255, 130, 70),
+                    )
 
         for bolt in list(self.elec_bolts):
             hits = arcade.check_for_collision_with_list(bolt, self.maze_enemies)
@@ -1982,11 +1996,20 @@ class MazeModeMixin:
                 self._burst(bolt.center_x, bolt.center_y, 4,
                             (220, 200, 255), 80, 260, 0.8, 1.8, .04, .10)
                 bolt.remove_from_sprite_lists()
-                self._damage_maze_enemy(enemy, bolt.damage, (130, 90, 255), max_enemies)
+                self._damage_maze_enemy(
+                    enemy,
+                    self._maze_player_damage(bolt.damage),
+                    (130, 90, 255),
+                    max_enemies,
+                )
                 continue
             for boss in list(self._active_maze_bosses()):
                 if arcade.check_for_collision(bolt, boss):
-                    self._damage_maze_boss(boss, bolt.boss_damage, (150, 110, 255))
+                    self._damage_maze_boss(
+                        boss,
+                        self._maze_player_damage(bolt.boss_damage),
+                        (150, 110, 255),
+                    )
                     bolt.remove_from_sprite_lists()
                     break
 
@@ -1998,12 +2021,21 @@ class MazeModeMixin:
                 enemy = hits[0]
                 self._burst(b.center_x, b.center_y, 8,
                             (255, 220, 100), 55, 180, 1.0, 2.2, .07, .18)
-                self._damage_maze_enemy(enemy, 20, (255, 130, 70), max_enemies)
+                self._damage_maze_enemy(
+                    enemy,
+                    self._maze_player_damage(20),
+                    (255, 130, 70),
+                    max_enemies,
+                )
                 continue
             for boss in list(self._active_maze_bosses()):
                 if arcade.check_for_collision(b, boss):
                     b.remove_from_sprite_lists()
-                    self._damage_maze_boss(boss, 20, (255, 220, 100))
+                    self._damage_maze_boss(
+                        boss,
+                        self._maze_player_damage(20),
+                        (255, 220, 100),
+                    )
                     break
 
         # ── Enemy bullet → player collision ─────────────────────────
@@ -2234,7 +2266,7 @@ class MazeModeMixin:
         arcade.draw_line(w // 2 - 160, h - 148, w // 2 + 160, h - 148,
                          (70, 112, 205, 90), 1)
 
-        # ── Three mode cards ────────────────────────────────────────────
+        # ── Mode cards ──────────────────────────────────────────────────
         modes = [
             {
                 "key":     "normal",
@@ -2253,15 +2285,6 @@ class MazeModeMixin:
                 "detail":  f"{MAZE_MAX_LEVELS} floors · Procedural arenas",
                 "color":   (120, 255, 160),
                 "available": True,
-            },
-            {
-                "key":     "multiplayer",
-                "label":   "MULTIPLAYER",
-                "icon":    "⚔",
-                "desc":    "Battle with others",
-                "detail":  "Co-op & PvP online",
-                "color":   (255, 140, 80),
-                "available": False,
             },
         ]
 

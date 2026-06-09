@@ -2371,9 +2371,10 @@ class MazeModeMixin:
                              desc_c, 11, anchor_x="center", font_name=FU)
 
             # Detail line
-            det_c = (110, 140, 195, 160) if avail else (45, 55, 85, 120)
-            arcade.draw_text(mode["detail"], cx_, ct - 168,
-                             det_c, 9, anchor_x="center", font_name=FN)
+            det_c = (165, 195, 245, 220) if avail else (72, 86, 130, 150)
+            self._txt_shadow(mode["detail"], cx_, ct - 168,
+                             det_c, 10 if card_w >= 190 else 9, FU,
+                             anchor_x="center", ox=1, oy=-1)
 
             # COMING SOON badge
             if not avail:

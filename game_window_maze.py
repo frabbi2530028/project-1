@@ -1,6 +1,7 @@
 from game_support import *
 
 import arcade
+import itertools
 import math
 import random
 
@@ -258,6 +259,7 @@ class MazeModeMixin:
         self.maze_exit_reached  = False
         self.boss_on_screen     = False
         self._place_maze_keys()
+        self._reset_maze_autopilot_for_floor()
         self._spawn_maze_key_enemies()
         self._spawn_maze_potion("maze_health")
         self._spawn_maze_potion("maze_speed")
@@ -606,6 +608,517 @@ class MazeModeMixin:
         ox, oy = self.maze_origin
         return ox + (col + 0.5) * cs, oy + (row + 0.5) * cs
 
+    def _maze_autopilot_unlocked(self) -> bool:
+        checker = getattr(self, "_classic_campaign_complete", None)
+        return bool(checker and checker())
+
+    def _maze_autopilot_available(self) -> bool:
+        return bool(
+            getattr(self, "maze_autopilot_enabled", False)
+            and self._maze_autopilot_unlocked()
+        )
+
+    def _maze_autopilot_can_run_now(self) -> bool:
+        return bool(
+            self.maze_keys_collected < MAZE_KEYS_REQUIRED
+            or self._maze_autopilot_collectible_powerups()
+        )
+
+    def _toggle_maze_autopilot_from_game(self) -> None:
+        if not self._maze_autopilot_unlocked():
+            self.notif_text = "CLEAR ALL CLASSIC LEVELS TO UNLOCK AUTO PILOT"
+            self.notif_color = (255, 210, 95)
+            self.notif_timer = 1.6
+            return
+
+        if getattr(self, "maze_autopilot_enabled", False):
+            self.maze_autopilot_enabled = False
+            if hasattr(self, "_save_progress"):
+                self._save_progress()
+            self._maze_autopilot_handoff()
+            self.notif_text = "AUTO PILOT OFF - MANUAL CONTROL"
+            self.notif_color = (150, 205, 255)
+            self.notif_timer = 1.3
+            return
+
+        self.maze_autopilot_enabled = True
+        if hasattr(self, "_save_progress"):
+            self._save_progress()
+        self._reset_maze_autopilot_for_floor()
+        self._maze_autopilot_repath_timer = 0.0
+        if self.maze_autopilot_active:
+            self.notif_text = "AUTO PILOT ON"
+            self.notif_color = (120, 255, 170)
+        else:
+            self.notif_text = "AUTO PILOT ARMED FOR NEXT FLOOR"
+            self.notif_color = (140, 210, 255)
+        self.notif_timer = 1.5
+
+    def _reset_maze_autopilot_for_floor(self) -> None:
+        self._maze_autopilot_target_kind = None
+        self._maze_autopilot_target_id = None
+        self._maze_autopilot_path = []
+        self._maze_autopilot_repath_timer = 0.0
+        self._maze_autopilot_powerup_timer = 0.0
+        self._maze_autopilot_aim = None
+        self._maze_autopilot_fire_special = False
+        self.maze_autopilot_active = (
+            self._maze_autopilot_available()
+            and self._maze_autopilot_can_run_now()
+        )
+        if self.maze_autopilot_active:
+            self.notif_text = "AUTO KEY PILOT ONLINE"
+            self.notif_color = (120, 255, 170)
+            self.notif_timer = max(getattr(self, "notif_timer", 0.0), 1.4)
+
+    def _maze_autopilot_handoff(self, text: str | None = None) -> None:
+        was_active = bool(getattr(self, "maze_autopilot_active", False))
+        self.maze_autopilot_active = False
+        self._maze_autopilot_path = []
+        self._maze_autopilot_target_kind = None
+        self._maze_autopilot_target_id = None
+        self._maze_autopilot_aim = None
+        self._maze_autopilot_fire_special = False
+        self.mouse_held = False
+        self.fire_timer = 0.0
+        if was_active and text:
+            self.notif_text = text
+            self.notif_color = (120, 255, 170)
+            self.notif_timer = max(getattr(self, "notif_timer", 0.0), 1.6)
+
+    def _maze_autopilot_remaining_keys(self) -> list[dict]:
+        return [
+            key for key in getattr(self, "maze_keys", [])
+            if not key.get("collected", False)
+        ]
+
+    def _maze_autopilot_choose_key_path(self) -> tuple[dict | None, list[tuple[int, int]]]:
+        pc, pr = self._maze_player_cell()
+        keys = self._maze_autopilot_remaining_keys()
+        if not keys:
+            return None, []
+        paths_from_start = {}
+        for key in keys:
+            if (key["col"], key["row"]) == (pc, pr):
+                return key, []
+            path = self.maze_grid.bfs(pc, pr, key["col"], key["row"])
+            if not path:
+                continue
+            paths_from_start[key["id"]] = path
+
+        best_route = None
+        # Only three keys are active, so checking every order is cheap and gives
+        # the shortest remaining key route instead of a greedy nearest-key route.
+        for order in itertools.permutations(keys):
+            first = order[0]
+            if first["id"] not in paths_from_start:
+                continue
+            total_steps = len(paths_from_start[first["id"]])
+            route_ok = True
+            for current_key, next_key in zip(order, order[1:]):
+                leg = self.maze_grid.bfs(
+                    current_key["col"], current_key["row"],
+                    next_key["col"], next_key["row"],
+                )
+                if not leg:
+                    route_ok = False
+                    break
+                total_steps += len(leg)
+            if route_ok and (best_route is None or total_steps < best_route[0]):
+                best_route = (total_steps, first, paths_from_start[first["id"]])
+
+        if best_route is None:
+            return None, []
+        return best_route[1], best_route[2]
+
+    def _maze_autopilot_powerup_cell(self, pu: Powerup) -> tuple[int, int]:
+        ox, oy = self.maze_origin
+        cs = self.maze_cell_size
+        col = max(0, min(self.maze_grid.cols - 1, int((pu.center_x - ox) / cs)))
+        row = max(0, min(self.maze_grid.rows - 1, int((pu.center_y - oy) / cs)))
+        return col, row
+
+    def _maze_autopilot_collectible_powerups(self) -> list[Powerup]:
+        return [
+            pu for pu in getattr(self, "powerups", [])
+            if getattr(pu, "life", 0.0) > 0.9
+        ]
+
+    def _maze_autopilot_current_powerup(self) -> Powerup | None:
+        if getattr(self, "_maze_autopilot_target_kind", None) != "powerup":
+            return None
+        target_id = getattr(self, "_maze_autopilot_target_id", None)
+        for pu in self._maze_autopilot_collectible_powerups():
+            if id(pu) == target_id:
+                return pu
+        return None
+
+    def _maze_autopilot_powerup_value(self, pu: Powerup, path_len: int) -> float:
+        p = self.player
+        kind = getattr(pu, "kind", "")
+        speed = max(1.0, self._maze_player_move_speed())
+        eta = path_len * self.maze_cell_size / speed
+        if getattr(pu, "life", 0.0) < eta + 0.75:
+            return 0.0
+
+        if kind == "beam360" and self.selected_ship not in BEAM_SHIP_INDICES:
+            return 0.0
+        if kind == "elec360" and self.selected_ship not in ELECTRIC_SHIP_INDICES:
+            return 0.0
+
+        if kind in ("health", "maze_health"):
+            missing_ratio = max(0.0, (p.max_health - p.health) / max(1, p.max_health))
+            if missing_ratio <= 0.03:
+                return 2.0 if path_len <= 2 else 0.0
+            return 7.5 + missing_ratio * 8.0
+
+        if kind == "maze_speed":
+            return 3.0 if getattr(p, "speed_active", False) else 5.0
+
+        if kind in POWERUP_TYPES:
+            limit = self._powerup_storage_limit(kind)
+            stored = p.inventory.get(kind, 0)
+            active = getattr(p, f"{kind}_active", False)
+            if stored >= limit and kind in ("breach", "elec360"):
+                return 0.0
+            if stored >= limit and active:
+                return 0.0
+
+        close_threats = self._maze_autopilot_nearby_threat_count(self.maze_cell_size * 1.5)
+        surrounded = self._maze_autopilot_nearby_threat_count(self.maze_cell_size * 2.4)
+        health_ratio = p.health / max(1, p.max_health)
+
+        if kind == "shield":
+            return 9.5 if health_ratio <= 0.65 or close_threats >= 2 else 5.0
+        if kind == "speed":
+            return 2.5 if getattr(p, "speed_active", False) else 4.5
+        if kind == "triple":
+            return 6.0 if close_threats else 3.8
+        if kind == "breach":
+            key, key_path = self._maze_autopilot_choose_key_path()
+            return 6.5 if key is not None and len(key_path) >= 5 else 4.5
+        if kind in ("beam360", "elec360"):
+            return 8.5 if surrounded >= 3 else 5.5
+        return 2.5
+
+    def _maze_autopilot_choose_powerup_path(
+        self, key_path_len: int | None = None
+    ) -> tuple[Powerup | None, list[tuple[int, int]]]:
+        pc, pr = self._maze_player_cell()
+        keys_done = self.maze_keys_collected >= MAZE_KEYS_REQUIRED
+        best = None
+        for pu in self._maze_autopilot_collectible_powerups():
+            col, row = self._maze_autopilot_powerup_cell(pu)
+            if (col, row) == (pc, pr):
+                path = [(col, row)]
+            else:
+                path = self.maze_grid.bfs(pc, pr, col, row)
+                if not path:
+                    continue
+            px, py = self._maze_key_world(col, row)
+            local_dist = math.hypot(pu.center_x - px, pu.center_y - py) / max(1, self.maze_cell_size)
+            value = self._maze_autopilot_powerup_value(pu, len(path))
+            if value <= 0.0:
+                continue
+            if not keys_done and key_path_len is not None:
+                too_far_from_key = len(path) > key_path_len + 4
+                if too_far_from_key and value < 8.0:
+                    continue
+            travel_cost = len(path) * 0.85 + local_dist * 0.45
+            score = value - travel_cost
+            min_score = -0.5 if keys_done else 0.7
+            if score < min_score:
+                continue
+            if best is None or score > best[0]:
+                best = (score, pu, path)
+        if best is None:
+            return None, []
+        return best[1], best[2]
+
+    def _maze_autopilot_choose_objective(self) -> tuple[str | None, object | None, list[tuple[int, int]]]:
+        key, key_path = self._maze_autopilot_choose_key_path()
+        key_path_len = len(key_path) if key is not None else None
+        pu, pu_path = self._maze_autopilot_choose_powerup_path(key_path_len)
+        if pu is not None:
+            return "powerup", pu, pu_path
+        if key is not None:
+            return "key", key, key_path
+        return None, None, []
+
+    def _maze_autopilot_current_key(self) -> dict | None:
+        if getattr(self, "_maze_autopilot_target_kind", None) != "key":
+            return None
+        target_id = getattr(self, "_maze_autopilot_target_id", None)
+        for key in getattr(self, "maze_keys", []):
+            if key.get("id") == target_id and not key.get("collected", False):
+                return key
+        return None
+
+    def _maze_autopilot_targets(self) -> list:
+        return [
+            target for target in (
+                list(getattr(self, "maze_enemies", []))
+                + list(self._active_maze_bosses())
+            )
+            if getattr(target, "health", 1) > 0
+        ]
+
+    def _maze_autopilot_line_clear(self, tx: float, ty: float, slack: float = 18.0) -> bool:
+        p = self.player
+        dx = tx - p.center_x
+        dy = ty - p.center_y
+        dist = math.hypot(dx, dy)
+        if dist <= 1.0:
+            return True
+        angle = math.atan2(dy, dx)
+        open_length, _wall_hit, _hit_x, _hit_y = self._maze_ray_wall_contact(
+            p.center_x, p.center_y, angle, dist)
+        return open_length + slack >= dist
+
+    def _maze_autopilot_front_target(self, forward_x: float,
+                                     forward_y: float) -> tuple[float, float] | None:
+        p = self.player
+        f_len = math.hypot(forward_x, forward_y)
+        if f_len <= 0.001:
+            return None
+        fx = forward_x / f_len
+        fy = forward_y / f_len
+        max_dist = self.maze_cell_size * 4.5
+        cone_dot = math.cos(math.radians(42.0))
+        best = None
+        for target in self._maze_autopilot_targets():
+            dx = target.center_x - self.player.center_x
+            dy = target.center_y - self.player.center_y
+            dist_sq = dx * dx + dy * dy
+            if dist_sq <= 1.0 or dist_sq > max_dist * max_dist:
+                continue
+            dist = math.sqrt(dist_sq)
+            dot = (dx * fx + dy * fy) / dist
+            if dot < cone_dot:
+                continue
+            if not self._maze_autopilot_line_clear(target.center_x, target.center_y):
+                continue
+            score = dot * 2.0 - dist / max_dist
+            if best is None or score > best[0]:
+                best = (score, target)
+        if best is None:
+            return None
+        target = best[1]
+        return target.center_x, target.center_y
+
+    def _maze_autopilot_nearby_threat_count(self, radius: float) -> int:
+        p = self.player
+        radius_sq = radius * radius
+        count = 0
+        for target in self._maze_autopilot_targets():
+            dx = target.center_x - p.center_x
+            dy = target.center_y - p.center_y
+            if dx * dx + dy * dy <= radius_sq:
+                count += 1
+        for bullet in getattr(self, "maze_enemy_bullets", []):
+            dx = bullet.center_x - p.center_x
+            dy = bullet.center_y - p.center_y
+            if dx * dx + dy * dy <= radius_sq:
+                count += 1
+        return count
+
+    def _maze_autopilot_breach_target(self, key: dict | None,
+                                      path_len: int) -> tuple[float, float] | None:
+        p = self.player
+        has_breach = (
+            getattr(p, "breach_active", False)
+            or p.inventory.get("breach", 0) > 0
+        )
+        if key is None or not has_breach or path_len < 5:
+            return None
+        tx, ty = self._maze_key_world(key["col"], key["row"])
+        dx = tx - p.center_x
+        dy = ty - p.center_y
+        dist = math.hypot(dx, dy)
+        if dist <= self.maze_cell_size * 0.8:
+            return None
+        angle = math.atan2(dy, dx)
+        open_length, wall_hit, hit_x, hit_y = self._maze_ray_wall_contact(
+            p.center_x, p.center_y, angle, min(dist, self.maze_cell_size * 3.5))
+        if wall_hit is None:
+            return None
+        col, row, direction = wall_hit
+        if not self.maze_grid.is_breakable_wall(col, row, direction):
+            return None
+        if open_length > self.maze_cell_size * 2.9:
+            return None
+        return hit_x, hit_y
+
+    def _maze_autopilot_use_powerups(self, delta: float,
+                                     front_target: tuple[float, float] | None,
+                                     path_len: int,
+                                     breach_target: tuple[float, float] | None) -> None:
+        p = self.player
+        self._maze_autopilot_powerup_timer = max(
+            0.0, getattr(self, "_maze_autopilot_powerup_timer", 0.0) - delta)
+        if self._maze_autopilot_powerup_timer > 0.0:
+            return
+
+        def use(kind: str) -> bool:
+            if p.inventory.get(kind, 0) <= 0 or getattr(p, f"{kind}_active", False):
+                return False
+            self._use_stored_powerup(kind)
+            self._maze_autopilot_powerup_timer = 0.75
+            return True
+
+        health_ratio = p.health / max(1, p.max_health)
+        close_threats = self._maze_autopilot_nearby_threat_count(self.maze_cell_size * 1.35)
+        if (health_ratio <= 0.58 or close_threats >= 3) and use("shield"):
+            return
+
+        surrounded = self._maze_autopilot_nearby_threat_count(self.maze_cell_size * 2.2)
+        if surrounded >= 4:
+            if self.selected_ship in BEAM_SHIP_INDICES and use("beam360"):
+                return
+            if self.selected_ship in ELECTRIC_SHIP_INDICES and use("elec360"):
+                return
+
+        if front_target is not None and use("triple"):
+            return
+
+        if breach_target is not None:
+            if use("breach"):
+                return
+
+        if path_len >= 4 and close_threats == 0:
+            use("speed")
+
+    def _maze_autopilot_drive(self, delta: float, p: Player, cs: int) -> tuple[float, float] | None:
+        if not getattr(self, "maze_autopilot_active", False):
+            return None
+        if not self._maze_autopilot_available():
+            self._maze_autopilot_handoff()
+            return None
+        if (self.maze_keys_collected >= MAZE_KEYS_REQUIRED
+                and not self._maze_autopilot_collectible_powerups()):
+            self._maze_autopilot_handoff("AUTO KEY PILOT COMPLETE - MANUAL CONTROL")
+            return None
+
+        self._maze_autopilot_repath_timer = max(
+            0.0, getattr(self, "_maze_autopilot_repath_timer", 0.0) - delta)
+        current_target_collected = False
+        target_kind = getattr(self, "_maze_autopilot_target_kind", None)
+        target_id = getattr(self, "_maze_autopilot_target_id", None)
+        if target_kind == "powerup":
+            current_target_collected = self._maze_autopilot_current_powerup() is None
+        elif target_kind == "key":
+            current_target_collected = True
+            for key in getattr(self, "maze_keys", []):
+                if key.get("id") == target_id:
+                    current_target_collected = key.get("collected", False)
+                    break
+        if (self._maze_autopilot_repath_timer <= 0.0
+                or current_target_collected
+                or not getattr(self, "_maze_autopilot_path", [])):
+            target_kind, target, path = self._maze_autopilot_choose_objective()
+            if target is None:
+                self._maze_autopilot_handoff("AUTO KEY PILOT COMPLETE - MANUAL CONTROL")
+                return None
+            self._maze_autopilot_target_kind = target_kind
+            if target_kind == "powerup":
+                self._maze_autopilot_target_id = id(target)
+            else:
+                self._maze_autopilot_target_id = target.get("id")
+            self._maze_autopilot_path = list(path)
+            self._maze_autopilot_repath_timer = 0.22
+
+        path = getattr(self, "_maze_autopilot_path", [])
+        current_powerup = self._maze_autopilot_current_powerup()
+        if current_powerup is None and getattr(self, "_maze_autopilot_target_kind", None) == "powerup":
+            self._maze_autopilot_repath_timer = 0.0
+            return 0.0, 0.0
+
+        if not path:
+            if current_powerup is not None:
+                tx, ty = current_powerup.center_x, current_powerup.center_y
+                dx = tx - p.center_x
+                dy = ty - p.center_y
+                dist = math.hypot(dx, dy)
+                front_target = self._maze_autopilot_front_target(dx, dy)
+                self._maze_autopilot_aim = front_target
+                self._maze_autopilot_fire_special = (
+                    front_target is None
+                    and (p.beam360_active or p.elec360_active)
+                    and self._maze_autopilot_nearby_threat_count(cs * 2.2) > 0
+                )
+                self._maze_autopilot_use_powerups(delta, front_target, 0, None)
+                if dist <= 2.0:
+                    return 0.0, 0.0
+                return dx / dist, dy / dist
+            key, path = self._maze_autopilot_choose_key_path()
+            if key is None:
+                self._maze_autopilot_handoff("AUTO KEY PILOT COMPLETE - MANUAL CONTROL")
+                return None
+            self._maze_autopilot_target_kind = "key"
+            self._maze_autopilot_target_id = key.get("id")
+            self._maze_autopilot_path = list(path)
+            self._maze_autopilot_repath_timer = 0.22
+            front_target = self._maze_autopilot_front_target(p.change_x, p.change_y)
+            self._maze_autopilot_aim = front_target
+            self._maze_autopilot_fire_special = (
+                front_target is None
+                and (p.beam360_active or p.elec360_active)
+                and self._maze_autopilot_nearby_threat_count(cs * 2.2) > 0
+            )
+            self._maze_autopilot_use_powerups(delta, front_target, 0, None)
+            return 0.0, 0.0
+
+        target_col, target_row = path[0]
+        tx, ty = self._maze_key_world(target_col, target_row)
+        pc, pr = self._maze_player_cell()
+        if current_powerup is not None and (target_col, target_row) == (pc, pr):
+            tx, ty = current_powerup.center_x, current_powerup.center_y
+        if (target_col, target_row) != (pc, pr):
+            cx, cy = self._maze_key_world(pc, pr)
+            if target_col != pc and target_row == pr:
+                ty = cy
+            elif target_row != pr and target_col == pc:
+                tx = cx
+        dx = tx - p.center_x
+        dy = ty - p.center_y
+        dist = math.hypot(dx, dy)
+        close_enough = max(12.0, cs * 0.07)
+        if dist < close_enough and len(path) > 1:
+            self._maze_autopilot_path = path[1:]
+            target_col, target_row = self._maze_autopilot_path[0]
+            tx, ty = self._maze_key_world(target_col, target_row)
+            pc, pr = self._maze_player_cell()
+            if current_powerup is not None and (target_col, target_row) == (pc, pr):
+                tx, ty = current_powerup.center_x, current_powerup.center_y
+            if (target_col, target_row) != (pc, pr):
+                cx, cy = self._maze_key_world(pc, pr)
+                if target_col != pc and target_row == pr:
+                    ty = cy
+                elif target_row != pr and target_col == pc:
+                    tx = cx
+            dx = tx - p.center_x
+            dy = ty - p.center_y
+            dist = math.hypot(dx, dy)
+
+        if dist > 1.0:
+            forward_x, forward_y = dx, dy
+        else:
+            forward_x, forward_y = p.change_x, p.change_y
+        front_target = self._maze_autopilot_front_target(forward_x, forward_y)
+        target_key = self._maze_autopilot_current_key()
+        breach_target = None if front_target is not None else self._maze_autopilot_breach_target(
+            target_key, len(path))
+        self._maze_autopilot_use_powerups(delta, front_target, len(path), breach_target)
+        self._maze_autopilot_aim = front_target or breach_target
+        self._maze_autopilot_fire_special = (
+            self._maze_autopilot_aim is None
+            and (p.beam360_active or p.elec360_active)
+            and self._maze_autopilot_nearby_threat_count(cs * 2.2) > 0
+        )
+        if dist <= 1.0:
+            return 0.0, 0.0
+        return dx / dist, dy / dist
+
     def _maze_key_reserved_cells(self) -> set[tuple[int, int]]:
         maze = self.maze_grid
         reserved = {
@@ -750,6 +1263,7 @@ class MazeModeMixin:
             reserved.add((col, row))
 
         self.maze_key_relocate_timer = MAZE_KEY_RELOCATE_TIME
+        self._maze_autopilot_repath_timer = 0.0
         self.notif_text = "KEYS SHIFTED!"
         self.notif_color = (255, 220, 90)
         self.notif_timer = 1.2
@@ -768,8 +1282,13 @@ class MazeModeMixin:
             self.notif_color = (255, 230, 95)
             self.notif_timer = 1.4
             self._burst(kx, ky, 34, (255, 220, 90), 70, 260, 1.7, 3.5, .10, .28)
+            self._maze_autopilot_repath_timer = 0.0
             if self.maze_keys_collected >= MAZE_KEYS_REQUIRED:
                 self._spawn_maze_boss()
+                if self._maze_autopilot_collectible_powerups():
+                    self._maze_autopilot_repath_timer = 0.0
+                else:
+                    self._maze_autopilot_handoff("AUTO KEY PILOT COMPLETE - MANUAL CONTROL")
             break
 
     def _maze_boss_spawn_cell(self) -> tuple[int, int]:
@@ -1021,6 +1540,8 @@ class MazeModeMixin:
         pu.life = 60.0
         pu.scale = 1.35
         self.powerups.append(pu)
+        if getattr(self, "maze_autopilot_active", False):
+            self._maze_autopilot_repath_timer = 0.0
         glow = POWERUP_COLORS.get(kind, (255, 255, 255))[:3]
         self._burst(x, y, 18, glow, 36, 140, 0.8, 2.2, .06, .18)
         return True
@@ -1368,6 +1889,7 @@ class MazeModeMixin:
         FN     = FONT_NUMERIC
 
         if not self.show_hud:
+            self._maze_autopilot_btn = None
             self._txt_shadow("[H] show HUD", 14, h - 18,
                              (110, 135, 185, 110), 9, FU)
             return
@@ -1468,8 +1990,53 @@ class MazeModeMixin:
 
         self._draw_powerup_panel(p, t, FU, FN)
 
+        # ── In-game auto pilot toggle ───────────────────
+        auto_unlocked = self._maze_autopilot_unlocked()
+        auto_enabled = auto_unlocked and bool(getattr(self, "maze_autopilot_enabled", False))
+        auto_active = auto_enabled and bool(getattr(self, "maze_autopilot_active", False))
+        btn_w = min(250, max(204, int(w * 0.15)))
+        btn_h = 28
+        btn_x = w // 2 - btn_w // 2
+        btn_y = 30
+        self._maze_autopilot_btn = (btn_x, btn_x + btn_w, btn_y, btn_y + btn_h)
+        auto_hover = auto_unlocked and self._is_hovering(btn_x, btn_x + btn_w, btn_y, btn_y + btn_h)
+        if auto_active:
+            auto_fill = (12, 94, 62, 220)
+            auto_border = (110, 255, 175, 240)
+            auto_text = (150, 255, 195, 255)
+            auto_label = "[TAB] AUTO PILOT ON"
+        elif auto_enabled:
+            auto_fill = (18, 55, 95, 210)
+            auto_border = (120, 205, 255, 220)
+            auto_text = (170, 225, 255, 245)
+            auto_label = "[TAB] AUTO ARMED"
+        elif auto_unlocked:
+            auto_fill = (12, 28, 58, 190)
+            auto_border = (88, 165, 235, 200)
+            auto_text = (170, 215, 255, 235)
+            auto_label = "[TAB] AUTO PILOT OFF"
+        else:
+            auto_fill = (18, 22, 38, 145)
+            auto_border = (88, 105, 145, 145)
+            auto_text = (130, 145, 178, 175)
+            auto_label = "[TAB] AUTO LOCKED"
+        if auto_hover:
+            auto_fill = (*auto_fill[:3], min(255, auto_fill[3] + 35))
+            auto_border = (*auto_border[:3], 255)
+        arcade.draw_lrbt_rectangle_filled(btn_x + 4, btn_x + btn_w + 4,
+                                          btn_y - 4, btn_y + btn_h - 4,
+                                          (0, 0, 0, 70))
+        arcade.draw_lrbt_rectangle_filled(btn_x, btn_x + btn_w, btn_y, btn_y + btn_h, auto_fill)
+        arcade.draw_lrbt_rectangle_filled(btn_x + 2, btn_x + btn_w - 2,
+                                          btn_y + btn_h - 5, btn_y + btn_h - 2,
+                                          (255, 255, 255, 34 if auto_unlocked else 18))
+        arcade.draw_lrbt_rectangle_outline(btn_x, btn_x + btn_w, btn_y, btn_y + btn_h,
+                                           auto_border, 2)
+        self._txt_shadow(auto_label, btn_x + btn_w // 2, btn_y + btn_h // 2 - 1,
+                         auto_text, 10, FU, anchor_x="center", anchor_y="center", bold=True)
+
         # ── Hint ────────────────────────────────────
-        arcade.draw_text("WASD Move · Hold LMB to Fire · M Map · 1-3 Power-ups · 5 Special · B Breach · Find the EXIT · ESC Pause · H Hide HUD",
+        arcade.draw_text("WASD Move · Hold LMB Fire · TAB Auto · M Map · 1-3 Power-ups · 5 Special · B Breach · ESC Pause · H HUD",
                          w // 2, 12, (70, 100, 155, 130), 8,
                          anchor_x="center", font_name=FN)
 
@@ -1758,6 +2325,9 @@ class MazeModeMixin:
         iy = float(self.up) - float(self.down)
         if ix and iy:
             ix *= 0.70710678;  iy *= 0.70710678
+        auto_vec = self._maze_autopilot_drive(delta, p, cs)
+        if auto_vec is not None:
+            ix, iy = auto_vec
         ship_spd = self._maze_player_move_speed()
         sm = min(1.0, 14.0 * delta)
         p.change_x += (ix * ship_spd - p.change_x) * sm
@@ -1862,9 +2432,20 @@ class MazeModeMixin:
                     self._burst(pu.center_x, pu.center_y, 12,
                                 (255, 195, 65), 45, 150, 0.9, 2.1, .06, .18)
                 pu.remove_from_sprite_lists()
+                if getattr(self, "maze_autopilot_active", False):
+                    self._maze_autopilot_repath_timer = 0.0
 
-        # ── Player shooting (hold left-mouse to fire) ────────────────
-        if self.mouse_held:
+        # ── Player shooting (hold left-mouse, or auto-pilot while it collects keys) ──
+        auto_aim = getattr(self, "_maze_autopilot_aim", None)
+        auto_special_fire = bool(
+            getattr(self, "maze_autopilot_active", False)
+            and getattr(self, "_maze_autopilot_fire_special", False)
+        )
+        auto_fire = bool(
+            getattr(self, "maze_autopilot_active", False)
+            and (auto_aim is not None or auto_special_fire)
+        )
+        if self.mouse_held or auto_fire:
             is_beam_ship = (self.selected_ship in BEAM_SHIP_INDICES)
             is_electric_ship = (self.selected_ship in ELECTRIC_SHIP_INDICES)
             if p.elec360_active:
@@ -1875,8 +2456,14 @@ class MazeModeMixin:
             while self.fire_timer >= fire_rate:
                 self.fire_timer -= fire_rate
                 # Convert screen-space mouse → world coords
-                mx_w = self.maze_cam_x + self.mouse_x
-                my_w = self.maze_cam_y + self.mouse_y
+                if auto_fire:
+                    if auto_aim is not None:
+                        mx_w, my_w = auto_aim
+                    else:
+                        mx_w, my_w = p.center_x + 1.0, p.center_y
+                else:
+                    mx_w = self.maze_cam_x + self.mouse_x
+                    my_w = self.maze_cam_y + self.mouse_y
                 if is_beam_ship or p.beam360_active:
                     first_new = len(self.beams)
                     self._fire_beam(p.beam360_active, aim_x=mx_w, aim_y=my_w)
@@ -2178,6 +2765,8 @@ class MazeModeMixin:
         pu.life = 18.0
         pu.scale = 1.35
         self.powerups.append(pu)
+        if getattr(self, "maze_autopilot_active", False):
+            self._maze_autopilot_repath_timer = 0.0
         glow = POWERUP_COLORS.get(kind, (255, 255, 255))[:3]
         self._burst(x, y, 14, glow, 40, 150, 0.8, 2.0, .05, .16)
 

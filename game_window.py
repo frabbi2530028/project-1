@@ -76,6 +76,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._maze_preset_btns: dict   = {}
         self.maze_preset: dict | None  = None   # active preset params
         self.maze_saved_level: int = 0           # zero-based floor checkpoint
+        self.maze_autopilot_enabled = False      # unlocked by clearing classic campaign
         self.menu_theme         = "dark"
         self.space_theme        = CLASSIC_SPACE_THEMES[0]["key"]
         self.selected_ship      = 0
@@ -642,6 +643,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 self.selected_ship = idx
                 return
 
+    def _classic_campaign_complete(self) -> bool:
+        return all(idx in self.completed_levels for idx in range(len(LEVELS)))
+
     @staticmethod
     def _draw_stat_pips(cx: int, y: int, value: int, max_v: int,
                         c_on: tuple, c_off: tuple, max_width: int | None = None) -> None:
@@ -1009,10 +1013,38 @@ class GameWindow(MazeModeMixin, arcade.Window):
                   play_label, scaled(20))
         self._menu_btns["play"] = (bx, bx+bw, by, by+bh)
 
-        # ── Shop button (main menu only) ─────────────
+        # ── Secondary menu actions ───────────────────
         if not is_pause:
+            next_y = by - scaled(8)
+            if is_maze_loadout:
+                auto_unlocked = self._classic_campaign_complete()
+                auto_on = auto_unlocked and getattr(self, "maze_autopilot_enabled", False)
+                aw, ah = scaled(280), scaled(34)
+                ax = w // 2 - aw // 2
+                ay = next_y - ah
+                hov_a = auto_unlocked and self._is_hovering(ax, ax + aw, ay, ay + ah)
+                if auto_on:
+                    auto_fill = (16, 100, 70, 220)
+                    auto_border = (105, 255, 165, 235)
+                    auto_text = (145, 255, 190, 255)
+                    auto_label = "[ AUTO KEY PILOT ON ]"
+                elif auto_unlocked:
+                    auto_fill = theme_c["btn_hover"] if hov_a else (*theme_c["btn_fill"][:3], 190)
+                    auto_border = (95, 210, 255, 210)
+                    auto_text = (175, 235, 255, 245)
+                    auto_label = "[ AUTO KEY PILOT OFF ]"
+                else:
+                    auto_fill = (18, 24, 48, 145)
+                    auto_border = (92, 115, 165, 150)
+                    auto_text = (135, 150, 185, 185)
+                    auto_label = "[ AUTO KEY PILOT LOCKED ]"
+                _draw_btn(ax, aw, ay, ah, auto_fill, auto_border, auto_text,
+                          auto_label, scaled(12))
+                self._menu_btns["maze_autopilot"] = (ax, ax + aw, ay, ay + ah)
+                next_y = ay - scaled(8)
+
             sw, sh2 = scaled(230), scaled(38)
-            sx2 = w//2 - sw//2;  sy2 = by - sh2 - 8
+            sx2 = w//2 - sw//2;  sy2 = next_y - sh2
             hov_s = self._is_hovering(sx2, sx2+sw, sy2, sy2+sh2)
             coin_label = f"[ SHOP ]  $ {self.coins:,}"
             _draw_btn(sx2, sw, sy2, sh2,
@@ -2971,6 +3003,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     min(MAZE_MAX_LEVELS - 1, int(getattr(self, "maze_saved_level", 0))),
                 ),
                 "maze_preset":      getattr(self, "selected_maze_preset", "classic"),
+                "maze_autopilot_enabled": bool(getattr(self, "maze_autopilot_enabled", False)),
             }
             SAVE_FILE.write_text(__import__("json").dumps(data))
         except OSError:
@@ -2985,6 +3018,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.maze_saved_level = 0
         self.maze_level = 0
         self.selected_maze_preset = "classic"
+        self.maze_autopilot_enabled = False
         self.selected_level = 0
         self.selected_ship = 0
         self.selected_mode = None
@@ -3016,6 +3050,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             saved_preset = data.get("maze_preset", self.selected_maze_preset)
             if any(p["key"] == saved_preset for p in MAZE_PRESETS):
                 self.selected_maze_preset = saved_preset
+            self.maze_autopilot_enabled = bool(data.get("maze_autopilot_enabled", False))
         except (OSError, ValueError, KeyError):
             pass
 
@@ -3097,6 +3132,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
         if self.game_state == STATE_MAZE:
             if getattr(self, "maze_map_open", False):
                 return
+            auto_rect = getattr(self, "_maze_autopilot_btn", None)
+            if auto_rect is not None:
+                l, r, b, t = auto_rect
+                if l <= x <= r and b <= y <= t:
+                    self._toggle_maze_autopilot_from_game()
+                    return
             self.mouse_held = True
             return
 
@@ -3167,6 +3208,17 @@ class GameWindow(MazeModeMixin, arcade.Window):
                             self.game_state = STATE_MAZE_SELECT
                         else:
                             self._resume_from_pause()
+                    elif name == "maze_autopilot":
+                        if self._classic_campaign_complete():
+                            self.maze_autopilot_enabled = not getattr(
+                                self, "maze_autopilot_enabled", False)
+                            self._save_progress()
+                            state = "ON" if self.maze_autopilot_enabled else "OFF"
+                            self.mode_feedback = f"AUTO KEY PILOT {state}"
+                            self.mode_feedback_color = (120, 255, 170, 230)
+                        else:
+                            self.mode_feedback = "CLEAR ALL CLASSIC LEVELS TO UNLOCK AUTO KEY PILOT"
+                            self.mode_feedback_color = (255, 210, 95, 230)
                     elif name == "shop":
                         self._open_shop(self.game_state)
                     elif name == "reset":
@@ -3327,6 +3379,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         elif key == arcade.key.M and self.game_state == STATE_MAZE:
             self._open_maze_map_overlay()
+
+        elif key == arcade.key.TAB and self.game_state == STATE_MAZE:
+            self._toggle_maze_autopilot_from_game()
 
         elif key == arcade.key.R and self.game_state == STATE_GAMEOVER:
             self.setup()

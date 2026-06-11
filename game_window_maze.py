@@ -399,6 +399,8 @@ class MazeModeMixin:
         col, row, direction = wall_hit
         damaged, broken, hp_left = self.maze_grid.damage_wall(col, row, direction)
         if broken:
+            if isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
+                self._maze_autopilot_path_cache.clear()
             if hasattr(self, "_remember_multiplayer_open_wall"):
                 self._remember_multiplayer_open_wall(col, row, direction)
             self._maze_enemy_flow_target = None
@@ -711,6 +713,10 @@ class MazeModeMixin:
         self._maze_autopilot_powerup_timer = 0.0
         self._maze_autopilot_aim = None
         self._maze_autopilot_fire_special = False
+        self._maze_autopilot_decision_depth = 0
+        self._maze_autopilot_path_cache = {}
+        self._maze_autopilot_breach_savings_cache = {}
+        self._maze_autopilot_threat_cache = {}
         self.maze_autopilot_active = (
             self._maze_autopilot_available()
             and self._maze_autopilot_can_run_now()
@@ -740,6 +746,26 @@ class MazeModeMixin:
             key for key in getattr(self, "maze_keys", [])
             if not key.get("collected", False)
         ]
+
+    def _maze_autopilot_push_decision_cache(self) -> None:
+        depth = int(getattr(self, "_maze_autopilot_decision_depth", 0))
+        if depth <= 0:
+            if not isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
+                self._maze_autopilot_path_cache = {}
+            self._maze_autopilot_breach_savings_cache = {}
+            self._maze_autopilot_threat_cache = {}
+            depth = 0
+        self._maze_autopilot_decision_depth = depth + 1
+
+    def _maze_autopilot_pop_decision_cache(self) -> None:
+        depth = max(0, int(getattr(self, "_maze_autopilot_decision_depth", 0)) - 1)
+        self._maze_autopilot_decision_depth = depth
+        if depth == 0:
+            self._maze_autopilot_breach_savings_cache = {}
+            self._maze_autopilot_threat_cache = {}
+
+    def _maze_autopilot_decision_cache_active(self) -> bool:
+        return int(getattr(self, "_maze_autopilot_decision_depth", 0)) > 0
 
     def _maze_autopilot_has_breach_tool(self) -> bool:
         p = getattr(self, "player", None)
@@ -799,15 +825,24 @@ class MazeModeMixin:
         if not allow_breakable:
             breach_budget = 0
 
+        cache_key = (sc, sr, ec, er, bool(allow_breakable), int(breach_budget))
+        cache = getattr(self, "_maze_autopilot_path_cache", None)
+        if isinstance(cache, dict) and cache_key in cache:
+            cached_path, cached_breaks, cached_cost = cache[cache_key]
+            return list(cached_path), cached_breaks, cached_cost
+
         start = (sc, sr, 0)
         costs = {start: 0.0}
         previous: dict[tuple[int, int, int], tuple[int, int, int] | None] = {start: None}
-        heap: list[tuple[float, int, int, int, int]] = [(0.0, 0, 0, sc, sr)]
+        heuristic = lambda col, row: abs(col - ec) + abs(row - er)
+        heap: list[tuple[float, float, int, int, int, int]] = [
+            (float(heuristic(sc, sr)), 0.0, 0, 0, sc, sr)
+        ]
         sequence = 0
         best_target: tuple[int, int, int] | None = None
 
         while heap:
-            cost, breaks_used, _seq, col, row = heapq.heappop(heap)
+            _priority, cost, breaks_used, _seq, col, row = heapq.heappop(heap)
             state = (col, row, breaks_used)
             if cost > costs.get(state, math.inf) + 0.000001:
                 continue
@@ -842,9 +877,14 @@ class MazeModeMixin:
                 costs[next_state] = next_cost
                 previous[next_state] = state
                 sequence += 1
-                heapq.heappush(heap, (next_cost, next_breaks, sequence, nc, nr))
+                heapq.heappush(
+                    heap,
+                    (next_cost + heuristic(nc, nr), next_cost, next_breaks, sequence, nc, nr),
+                )
 
         if best_target is None:
+            if isinstance(cache, dict):
+                cache[cache_key] = ((), 0, math.inf)
             return [], 0, math.inf
 
         path: list[tuple[int, int]] = []
@@ -853,23 +893,47 @@ class MazeModeMixin:
             path.append((cur[0], cur[1]))
             cur = previous[cur]
         path.reverse()
-        return path, best_target[2], costs[best_target]
+        result = (tuple(path), best_target[2], costs[best_target])
+        if isinstance(cache, dict):
+            if len(cache) > 1024:
+                cache.clear()
+            cache[cache_key] = result
+        return list(result[0]), result[1], result[2]
 
     def _maze_autopilot_breach_route_savings(self, bonus_breach_charges: int = 1) -> float:
         pc, pr = self._maze_player_cell()
+        cache = (
+            getattr(self, "_maze_autopilot_breach_savings_cache", None)
+            if self._maze_autopilot_decision_cache_active()
+            else None
+        )
+        keys_signature = tuple(
+            (int(key.get("id", idx)), int(key.get("col", 0)), int(key.get("row", 0)))
+            for idx, key in enumerate(self._maze_autopilot_remaining_keys())
+        )
+        cache_key = (pc, pr, int(bonus_breach_charges), keys_signature)
+        if isinstance(cache, dict) and cache_key in cache:
+            return cache[cache_key]
+
         best_saving = 0.0
-        for key in self._maze_autopilot_remaining_keys():
-            open_path = self.maze_grid.bfs(pc, pr, key["col"], key["row"])
+        for _key_id, key_col, key_row in keys_signature:
+            open_path, _open_breaks, open_cost = self._maze_autopilot_shortest_path(
+                pc, pr, key_col, key_row,
+                allow_breakable=False,
+            )
             shortcut, breaks_used, shortcut_cost = self._maze_autopilot_shortest_path(
-                pc, pr, key["col"], key["row"],
+                pc, pr, key_col, key_row,
                 allow_breakable=True,
                 bonus_breach_charges=bonus_breach_charges,
             )
             if not shortcut or breaks_used <= 0:
                 continue
-            open_cost = len(open_path) if open_path else len(shortcut) + 10.0
+            open_cost = open_cost if open_path else len(shortcut) + 10.0
             best_saving = max(best_saving, open_cost - shortcut_cost)
-        return max(0.0, best_saving)
+        best_saving = max(0.0, best_saving)
+        if isinstance(cache, dict):
+            cache[cache_key] = best_saving
+        return best_saving
 
     def _maze_autopilot_next_breakable_wall(
         self, path: list[tuple[int, int]] | None
@@ -897,6 +961,16 @@ class MazeModeMixin:
         )
 
     def _maze_autopilot_choose_key_path(self) -> tuple[dict | None, list[tuple[int, int]]]:
+        needs_cache_scope = not self._maze_autopilot_decision_cache_active()
+        if needs_cache_scope:
+            self._maze_autopilot_push_decision_cache()
+        try:
+            return self._maze_autopilot_choose_key_path_cached()
+        finally:
+            if needs_cache_scope:
+                self._maze_autopilot_pop_decision_cache()
+
+    def _maze_autopilot_choose_key_path_cached(self) -> tuple[dict | None, list[tuple[int, int]]]:
         pc, pr = self._maze_player_cell()
         keys = self._maze_autopilot_remaining_keys()
         if not keys:
@@ -1015,11 +1089,66 @@ class MazeModeMixin:
     def _maze_autopilot_choose_powerup_path(
         self, key_path_len: int | None = None
     ) -> tuple[Powerup | None, list[tuple[int, int]]]:
+        needs_cache_scope = not self._maze_autopilot_decision_cache_active()
+        if needs_cache_scope:
+            self._maze_autopilot_push_decision_cache()
+        try:
+            return self._maze_autopilot_choose_powerup_path_cached(key_path_len)
+        finally:
+            if needs_cache_scope:
+                self._maze_autopilot_pop_decision_cache()
+
+    def _maze_autopilot_choose_powerup_path_cached(
+        self, key_path_len: int | None = None
+    ) -> tuple[Powerup | None, list[tuple[int, int]]]:
         pc, pr = self._maze_player_cell()
         keys_done = self.maze_keys_collected >= MAZE_KEYS_REQUIRED
-        best = None
+        speed = max(1.0, self._maze_player_move_speed())
+        health_ratio = self.player.health / max(1, self.player.max_health)
+        candidates = []
         for pu in self._maze_autopilot_collectible_powerups():
             col, row = self._maze_autopilot_powerup_cell(pu)
+            approx_steps = abs(col - pc) + abs(row - pr)
+            eta = approx_steps * self.maze_cell_size / speed
+            if getattr(pu, "life", 0.0) < eta * 0.55:
+                continue
+            kind = getattr(pu, "kind", "")
+            pre_value = self._maze_autopilot_powerup_value(pu, max(1, approx_steps))
+            if pre_value <= 0.0:
+                continue
+            if kind in ("health", "maze_health") and health_ratio < 0.45:
+                pre_value += 4.0
+            approx_score = pre_value - approx_steps * 0.42
+            candidates.append((-approx_score, approx_steps, pre_value, pu, col, row))
+
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        filtered_candidates = []
+        for idx, item in enumerate(candidates):
+            _rank, approx_steps, pre_value, pu, _col, _row = item
+            kind = getattr(pu, "kind", "")
+            near_key_route = (
+                key_path_len is not None
+                and approx_steps <= key_path_len + 5
+                and pre_value >= 7.0
+            )
+            if idx < 10 or near_key_route or kind == "breach":
+                filtered_candidates.append(item)
+        if len(filtered_candidates) > 14:
+            breach_candidates = [
+                item for item in filtered_candidates
+                if getattr(item[3], "kind", "") == "breach"
+            ]
+            other_candidates = [
+                item for item in filtered_candidates
+                if getattr(item[3], "kind", "") != "breach"
+            ]
+            filtered_candidates = (
+                breach_candidates
+                + other_candidates[:max(0, 14 - len(breach_candidates))]
+            )[:14]
+
+        best = None
+        for _rank, _approx_steps, _pre_value, pu, col, row in filtered_candidates:
             if (col, row) == (pc, pr):
                 path = [(col, row)]
                 route_cost = 0.0
@@ -1052,14 +1181,18 @@ class MazeModeMixin:
         return best[1], best[2]
 
     def _maze_autopilot_choose_objective(self) -> tuple[str | None, object | None, list[tuple[int, int]]]:
-        key, key_path = self._maze_autopilot_choose_key_path()
-        key_path_len = len(key_path) if key is not None else None
-        pu, pu_path = self._maze_autopilot_choose_powerup_path(key_path_len)
-        if pu is not None:
-            return "powerup", pu, pu_path
-        if key is not None:
-            return "key", key, key_path
-        return None, None, []
+        self._maze_autopilot_push_decision_cache()
+        try:
+            key, key_path = self._maze_autopilot_choose_key_path_cached()
+            key_path_len = len(key_path) if key is not None else None
+            pu, pu_path = self._maze_autopilot_choose_powerup_path_cached(key_path_len)
+            if pu is not None:
+                return "powerup", pu, pu_path
+            if key is not None:
+                return "key", key, key_path
+            return None, None, []
+        finally:
+            self._maze_autopilot_pop_decision_cache()
 
     def _maze_autopilot_current_key(self) -> dict | None:
         if getattr(self, "_maze_autopilot_target_kind", None) != "key":
@@ -1123,6 +1256,14 @@ class MazeModeMixin:
         return target.center_x, target.center_y
 
     def _maze_autopilot_nearby_threat_count(self, radius: float) -> int:
+        cache = (
+            getattr(self, "_maze_autopilot_threat_cache", None)
+            if self._maze_autopilot_decision_cache_active()
+            else None
+        )
+        cache_key = round(float(radius), 1)
+        if isinstance(cache, dict) and cache_key in cache:
+            return cache[cache_key]
         p = self.player
         radius_sq = radius * radius
         count = 0
@@ -1136,6 +1277,8 @@ class MazeModeMixin:
             dy = bullet.center_y - p.center_y
             if dx * dx + dy * dy <= radius_sq:
                 count += 1
+        if isinstance(cache, dict):
+            cache[cache_key] = count
         return count
 
     def _maze_autopilot_breach_target(
@@ -1640,6 +1783,8 @@ class MazeModeMixin:
         damaged, broken, _hp_left = maze.damage_wall(
             boss.maze_col, boss.maze_row, direction, MAZE_BREAKABLE_WALL_HP)
         if damaged:
+            if broken and isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
+                self._maze_autopilot_path_cache.clear()
             if broken and hasattr(self, "_remember_multiplayer_open_wall"):
                 self._remember_multiplayer_open_wall(boss.maze_col, boss.maze_row, direction)
             self._maze_enemy_flow_target = None

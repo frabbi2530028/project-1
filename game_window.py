@@ -1,5 +1,12 @@
 from game_support import *
 from game_window_maze import MazeModeMixin
+from multiplayer_support import (
+    MultiplayerClient,
+    MultiplayerHost,
+    compact_room_code,
+    local_room_code,
+    normalize_room_code,
+)
 
 # ===== Merged from game_window.py =====
 import arcade
@@ -94,6 +101,22 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.shop_feedback_color = (160, 180, 215, 180)
         self.mode_feedback      = ""
         self.mode_feedback_color = (160, 180, 215, 180)
+        self.multiplayer_selected_mode = "maze"
+        self.multiplayer_role: str | None = None
+        self.multiplayer_room_code = ""
+        self.multiplayer_join_code = ""
+        self.multiplayer_status = "HOST OR JOIN A SAME-WIFI ROOM"
+        self.multiplayer_player_id = 0
+        self.multiplayer_maze_seed: int | None = None
+        self.multiplayer_started = False
+        self.multiplayer_host: MultiplayerHost | None = None
+        self.multiplayer_client: MultiplayerClient | None = None
+        self.multiplayer_players: dict[int, dict] = {}
+        self.multiplayer_remote_players: dict[int, Player] = {}
+        self.multiplayer_pending_events: list[dict] = []
+        self._multiplayer_btns: dict = {}
+        self._multiplayer_last_net = 0.0
+        self._maze_next_enemy_id = 1
 
         # ── Level system ──────────────────────────────
         self.selected_level:    int  = 0
@@ -665,6 +688,666 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 arcade.draw_circle_filled(sx + i*spacing, y, 6, color)
                 arcade.draw_circle_outline(sx + i*spacing, y, 6,
                                            (*color[:3], 120), 1)
+
+    def _multiplayer_active(self) -> bool:
+        return self.multiplayer_role in ("host", "client")
+
+    def _multiplayer_is_client_world(self) -> bool:
+        return self.multiplayer_client is not None and self.multiplayer_role == "client"
+
+    def _queue_multiplayer_event(self, event: dict) -> None:
+        if self._multiplayer_is_client_world():
+            self.multiplayer_pending_events.append(event)
+
+    def _multiplayer_local_payload(self) -> dict:
+        p = self.player
+        if p is None:
+            return {
+                "name": f"P{self.multiplayer_player_id or 1}",
+                "ship": self.selected_ship,
+                "x": 0.0,
+                "y": 0.0,
+                "angle": 90.0 + SHIPS[self.selected_ship].get("front_angle_offset", 0.0),
+                "health": 100.0,
+                "max_health": 100.0,
+            }
+        return {
+            "name": f"P{self.multiplayer_player_id or 1}",
+            "ship": self.selected_ship,
+            "x": p.center_x,
+            "y": p.center_y,
+            "angle": p.angle,
+            "health": getattr(p, "health", 100.0),
+            "max_health": getattr(p, "max_health", 100.0),
+        }
+
+    def _shutdown_multiplayer(self) -> None:
+        if self.multiplayer_host is not None:
+            self.multiplayer_host.stop()
+        if self.multiplayer_client is not None:
+            self.multiplayer_client.close()
+        self.multiplayer_host = None
+        self.multiplayer_client = None
+        self.multiplayer_role = None
+        self.multiplayer_player_id = 0
+        self.multiplayer_started = False
+        self.multiplayer_maze_seed = None
+        self.multiplayer_players = {}
+        self.multiplayer_remote_players = {}
+        self.multiplayer_pending_events = []
+        self.multiplayer_status = "HOST OR JOIN A SAME-WIFI ROOM"
+
+    def _start_multiplayer_host(self) -> None:
+        if self.multiplayer_selected_mode != "maze":
+            self.multiplayer_status = "ONLY MAZE MULTIPLAYER IS AVAILABLE RIGHT NOW"
+            return
+        self._shutdown_multiplayer()
+        self.multiplayer_role = "host"
+        self.multiplayer_player_id = 1
+        self.multiplayer_room_code = local_room_code()
+        self.multiplayer_maze_seed = random.randint(10_000, 999_999)
+        preset_key = self.selected_maze_preset
+        if not any(preset["key"] == preset_key for preset in MAZE_PRESETS):
+            preset_key = MAZE_PRESETS[0]["key"]
+        host = MultiplayerHost(
+            self.multiplayer_room_code,
+            preset_key,
+            self.multiplayer_maze_seed,
+        )
+        self.multiplayer_host = host
+        host.update_local_player(self._multiplayer_local_payload())
+        host.start()
+        self.multiplayer_status = "ROOM OPEN - SHARE THE CODE WITH PLAYERS ON THIS WIFI"
+        self.game_state = STATE_MULTIPLAYER_LOBBY
+
+    def _join_multiplayer_room(self) -> None:
+        code = normalize_room_code(self.multiplayer_join_code)
+        if not code:
+            self.multiplayer_status = "TYPE THE HOST ROOM CODE FIRST"
+            return
+        self._shutdown_multiplayer()
+        client = MultiplayerClient(code)
+        self.multiplayer_status = "CONNECTING..."
+        if not client.connect():
+            self.multiplayer_status = client.error or "JOIN FAILED"
+            return
+        self.multiplayer_role = "client"
+        self.multiplayer_client = client
+        self.multiplayer_player_id = client.player_id
+        self.selected_maze_preset = client.preset_key
+        self.multiplayer_maze_seed = client.maze_seed
+        self.multiplayer_room_code = code
+        self.multiplayer_status = "CONNECTED - WAITING FOR HOST"
+        self.game_state = STATE_MULTIPLAYER_LOBBY
+
+    def _start_multiplayer_maze(self) -> None:
+        if self.multiplayer_started:
+            return
+        self.multiplayer_started = True
+        self.selected_mode = "multiplayer"
+        if self.multiplayer_host is not None:
+            self.multiplayer_host.started = True
+            self.selected_maze_preset = self.multiplayer_host.preset_key
+            self.multiplayer_maze_seed = self.multiplayer_host.maze_seed
+        elif self.multiplayer_client is not None:
+            self.selected_maze_preset = self.multiplayer_client.preset_key
+            self.multiplayer_maze_seed = self.multiplayer_client.maze_seed
+        self.maze_saved_level = 0
+        self.maze_level = 0
+        self.maze_run_complete = False
+        self.score = 0
+        self.time_alive = 0.0
+        self.run_coins = 0
+        self.setup_maze(keep_player=False)
+        self.notif_text = "LAN MAZE ROOM LIVE"
+        self.notif_color = (120, 220, 255)
+        self.notif_timer = 2.2
+
+    def _update_multiplayer_network(self, delta: float) -> None:
+        if not self._multiplayer_active():
+            return
+        self._multiplayer_last_net += delta
+        if self._multiplayer_last_net < 0.02:
+            return
+        self._multiplayer_last_net = 0.0
+        payload = self._multiplayer_local_payload()
+
+        if self.multiplayer_host is not None:
+            for event in self.multiplayer_host.drain_events():
+                self._handle_multiplayer_event(event)
+            if self.game_state == STATE_MAZE:
+                self.multiplayer_host.set_maze_state(self._multiplayer_maze_snapshot())
+            self.multiplayer_host.update_local_player(payload)
+            if self.multiplayer_host.error:
+                self.multiplayer_status = self.multiplayer_host.error
+            snapshot = self.multiplayer_host.snapshot()
+            self.multiplayer_players = {
+                int(player["id"]): player for player in snapshot.get("players", [])
+            }
+        elif self.multiplayer_client is not None:
+            if self.multiplayer_pending_events:
+                payload["events"] = self.multiplayer_pending_events[:]
+                self.multiplayer_pending_events.clear()
+            self.multiplayer_client.send_player(payload)
+            self.multiplayer_client.poll_state()
+            if self.multiplayer_client.error:
+                self.multiplayer_status = self.multiplayer_client.error
+            self.multiplayer_players = {
+                pid: {
+                    "id": player.player_id,
+                    "name": player.name,
+                    "ship": player.ship,
+                    "x": player.x,
+                    "y": player.y,
+                    "angle": player.angle,
+                    "health": player.health,
+                    "max_health": player.max_health,
+                }
+                for pid, player in self.multiplayer_client.players.items()
+            }
+            if self.multiplayer_client.started and self.game_state == STATE_MULTIPLAYER_LOBBY:
+                self._start_multiplayer_maze()
+            if self.game_state == STATE_MAZE and self.multiplayer_client.maze_state:
+                self._apply_multiplayer_maze_snapshot(self.multiplayer_client.maze_state)
+
+        local_id = self.multiplayer_player_id
+        if local_id and local_id not in self.multiplayer_players:
+            self.multiplayer_players[local_id] = {"id": local_id, **payload}
+        if self.game_state == STATE_MAZE:
+            self._sync_multiplayer_remote_players()
+
+    def _multiplayer_maze_snapshot(self) -> dict:
+        enemies = []
+        for enemy in getattr(self, "maze_enemies", []):
+            net_id = getattr(enemy, "net_id", None)
+            if net_id is None:
+                net_id = self._assign_maze_enemy_id(enemy)
+            enemies.append({
+                "id": net_id,
+                "col": int(getattr(enemy, "maze_col", 0)),
+                "row": int(getattr(enemy, "maze_row", 0)),
+                "x": round(enemy.center_x, 2),
+                "y": round(enemy.center_y, 2),
+                "angle": round(getattr(enemy, "angle", 0.0), 2),
+                "health": round(float(getattr(enemy, "health", 1.0)), 1),
+                "max_health": round(float(getattr(enemy, "max_health", 1.0)), 1),
+                "split_depth": int(getattr(enemy, "split_depth", 0)),
+            })
+
+        bosses = []
+        for boss in getattr(self, "_active_maze_bosses", lambda: [])():
+            net_id = getattr(boss, "net_id", None)
+            if net_id is None:
+                net_id = self._assign_maze_enemy_id(boss)
+            bosses.append({
+                "id": net_id,
+                "col": int(getattr(boss, "maze_col", 0)),
+                "row": int(getattr(boss, "maze_row", 0)),
+                "x": round(boss.center_x, 2),
+                "y": round(boss.center_y, 2),
+                "angle": round(getattr(boss, "angle", 0.0), 2),
+                "health": round(float(getattr(boss, "health", 1.0)), 1),
+                "max_health": round(float(getattr(boss, "max_health", 1.0)), 1),
+                "split_depth": int(getattr(boss, "split_depth", 0)),
+            })
+
+        return {
+            "level": int(getattr(self, "maze_level", 0)),
+            "keys_collected": int(getattr(self, "maze_keys_collected", 0)),
+            "key_timer": round(float(getattr(self, "maze_key_relocate_timer", 0.0)), 2),
+            "exit_reached": bool(getattr(self, "maze_exit_reached", False)),
+            "boss_spawned": bool(getattr(self, "maze_boss_spawned", False)),
+            "keys": [
+                {
+                    "id": int(key.get("id", idx)),
+                    "col": int(key.get("col", 0)),
+                    "row": int(key.get("row", 0)),
+                    "collected": bool(key.get("collected", False)),
+                    "phase": float(key.get("phase", 0.0)),
+                }
+                for idx, key in enumerate(getattr(self, "maze_keys", []))
+            ],
+            "enemies": enemies,
+            "bosses": bosses,
+        }
+
+    def _apply_multiplayer_maze_snapshot(self, snapshot: dict) -> None:
+        if not isinstance(snapshot, dict) or self.maze_grid is None:
+            return
+        level = int(snapshot.get("level", getattr(self, "maze_level", 0)))
+        if level != getattr(self, "maze_level", 0):
+            self.maze_level = max(0, min(MAZE_MAX_LEVELS - 1, level))
+            self.setup_maze(keep_player=True)
+
+        self.maze_keys = [
+            {
+                "id": int(key.get("id", idx)),
+                "col": int(key.get("col", 0)),
+                "row": int(key.get("row", 0)),
+                "collected": bool(key.get("collected", False)),
+                "phase": float(key.get("phase", 0.0)),
+            }
+            for idx, key in enumerate(snapshot.get("keys", []))
+        ]
+        self.maze_keys_collected = int(snapshot.get("keys_collected", self.maze_keys_collected))
+        self.maze_key_relocate_timer = float(snapshot.get("key_timer", self.maze_key_relocate_timer))
+        self.maze_exit_reached = bool(snapshot.get("exit_reached", self.maze_exit_reached))
+        self.maze_boss_spawned = bool(snapshot.get("boss_spawned", self.maze_boss_spawned))
+        self._sync_multiplayer_enemy_snapshot(snapshot.get("enemies", []))
+        self._sync_multiplayer_boss_snapshot(snapshot.get("bosses", []))
+
+    def _sync_multiplayer_enemy_snapshot(self, enemy_rows: list[dict]) -> None:
+        active_ids = set()
+        existing = {
+            getattr(enemy, "net_id", None): enemy
+            for enemy in getattr(self, "maze_enemies", [])
+            if getattr(enemy, "net_id", None) is not None
+        }
+        for row in enemy_rows:
+            enemy_id = int(row.get("id", 0))
+            if enemy_id <= 0:
+                continue
+            active_ids.add(enemy_id)
+            split_depth = int(row.get("split_depth", 0))
+            enemy = existing.get(enemy_id)
+            if enemy is not None and getattr(enemy, "split_depth", 0) != split_depth:
+                enemy.remove_from_sprite_lists()
+                enemy = None
+            if enemy is None:
+                enemy = MazeEnemy(
+                    int(row.get("col", 0)),
+                    int(row.get("row", 0)),
+                    self.maze_cell_size,
+                    *self.maze_origin,
+                    health=max(1, int(float(row.get("max_health", row.get("health", 1))))),
+                    split_depth=split_depth,
+                )
+                enemy.net_id = enemy_id
+                self.maze_enemies.append(enemy)
+            enemy.maze_col = int(row.get("col", enemy.maze_col))
+            enemy.maze_row = int(row.get("row", enemy.maze_row))
+            enemy.center_x = float(row.get("x", enemy.center_x))
+            enemy.center_y = float(row.get("y", enemy.center_y))
+            enemy.angle = float(row.get("angle", getattr(enemy, "angle", 0.0)))
+            enemy.max_health = float(row.get("max_health", enemy.max_health))
+            enemy.health = float(row.get("health", enemy.health))
+
+        for enemy in list(getattr(self, "maze_enemies", [])):
+            enemy_id = getattr(enemy, "net_id", None)
+            if enemy_id is not None and enemy_id not in active_ids:
+                enemy.remove_from_sprite_lists()
+
+    def _sync_multiplayer_boss_snapshot(self, boss_rows: list[dict]) -> None:
+        active_ids = set()
+        existing = {
+            getattr(boss, "net_id", None): boss
+            for boss in self._active_maze_bosses()
+            if getattr(boss, "net_id", None) is not None
+        }
+        bosses = []
+        for row in boss_rows:
+            boss_id = int(row.get("id", 0))
+            if boss_id <= 0:
+                continue
+            active_ids.add(boss_id)
+            split_depth = int(row.get("split_depth", 0))
+            boss = existing.get(boss_id)
+            if boss is None:
+                boss = MazeBoss(
+                    int(row.get("col", 0)),
+                    int(row.get("row", 0)),
+                    self.maze_cell_size,
+                    *self.maze_origin,
+                    health=max(1, int(float(row.get("max_health", row.get("health", 1))))),
+                    split_depth=split_depth,
+                )
+                boss.net_id = boss_id
+            boss.maze_col = int(row.get("col", boss.maze_col))
+            boss.maze_row = int(row.get("row", boss.maze_row))
+            boss.center_x = float(row.get("x", boss.center_x))
+            boss.center_y = float(row.get("y", boss.center_y))
+            boss.angle = float(row.get("angle", getattr(boss, "angle", 0.0)))
+            boss.max_health = float(row.get("max_health", boss.max_health))
+            boss.health = float(row.get("health", boss.health))
+            bosses.append(boss)
+        self.maze_bosses = bosses
+        self.maze_boss = bosses[0] if bosses else None
+        self.boss_on_screen = bool(bosses)
+
+    def _assign_maze_enemy_id(self, enemy) -> int:
+        net_id = int(getattr(self, "_maze_next_enemy_id", 1))
+        self._maze_next_enemy_id = net_id + 1
+        enemy.net_id = net_id
+        return net_id
+
+    def _find_maze_enemy_by_net_id(self, enemy_id: int):
+        for enemy in getattr(self, "maze_enemies", []):
+            if getattr(enemy, "net_id", None) == enemy_id:
+                return enemy
+        for boss in self._active_maze_bosses():
+            if getattr(boss, "net_id", None) == enemy_id:
+                return boss
+        return None
+
+    def _handle_multiplayer_event(self, event: dict) -> None:
+        if not isinstance(event, dict):
+            return
+        event_type = event.get("type")
+        if event_type == "enemy_damage":
+            target = self._find_maze_enemy_by_net_id(int(event.get("enemy_id", 0)))
+            if target is None:
+                return
+            amount = max(0.0, min(float(event.get("amount", 0.0)), float(getattr(target, "max_health", 1.0))))
+            if isinstance(target, MazeBoss):
+                self._damage_maze_boss(target, amount, (255, 220, 100))
+            else:
+                self._damage_maze_enemy(target, amount, (255, 130, 70), self._maze_enemy_cap())
+        elif event_type == "key_collect":
+            key_id = int(event.get("key_id", -1))
+            for key in getattr(self, "maze_keys", []):
+                if int(key.get("id", -2)) == key_id and not key.get("collected", False):
+                    key["collected"] = True
+                    self.maze_keys_collected = min(MAZE_KEYS_REQUIRED, self.maze_keys_collected + 1)
+                    kx, ky = self._maze_key_world(key["col"], key["row"])
+                    self._burst(kx, ky, 30, (255, 220, 90), 65, 230, 1.4, 3.0, .08, .22)
+                    if self.maze_keys_collected >= MAZE_KEYS_REQUIRED:
+                        self._spawn_maze_boss()
+                    break
+
+    def _sync_multiplayer_remote_players(self) -> None:
+        if not self._multiplayer_active():
+            return
+        local_id = self.multiplayer_player_id
+        active_ids = set()
+        for player_id, data in self.multiplayer_players.items():
+            if player_id == local_id:
+                continue
+            active_ids.add(player_id)
+            ship_idx = max(0, min(len(SHIPS) - 1, int(data.get("ship", 0))))
+            sprite = self.multiplayer_remote_players.get(player_id)
+            if sprite is None:
+                sprite = Player()
+                self.multiplayer_remote_players[player_id] = sprite
+            ship = SHIPS[ship_idx]
+            if getattr(sprite, "_mp_ship_idx", None) != ship_idx:
+                sprite.texture = load_texture_clean(ship["texture"])
+                sprite.scale = ship["tex_scale"]
+                sprite.front_angle_offset = ship.get("front_angle_offset", 0.0)
+                sprite._mp_ship_idx = ship_idx
+            sprite.center_x = float(data.get("x", sprite.center_x))
+            sprite.center_y = float(data.get("y", sprite.center_y))
+            sprite.angle = float(data.get("angle", sprite.angle))
+            sprite.health = float(data.get("health", getattr(sprite, "health", 100.0)))
+            sprite.max_health = float(data.get("max_health", getattr(sprite, "max_health", 100.0)))
+        for player_id in list(self.multiplayer_remote_players):
+            if player_id not in active_ids:
+                self.multiplayer_remote_players.pop(player_id, None)
+
+    def _draw_multiplayer_remote_players(self, t: float) -> None:
+        if not self.multiplayer_remote_players:
+            return
+        for player_id, sprite in self.multiplayer_remote_players.items():
+            data = self.multiplayer_players.get(player_id, {})
+            ship_idx = max(0, min(len(SHIPS) - 1, int(data.get("ship", 0))))
+            ship_c = SHIPS[ship_idx]["color"]
+            pulse = 0.5 + 0.5 * math.sin(t * 4.0 + player_id)
+            glow_r = max(24, min(54, max(sprite.width, sprite.height) * 0.32))
+            arcade.draw_circle_filled(
+                sprite.center_x, sprite.center_y, glow_r,
+                (*ship_c[:3], int(28 + 28 * pulse)),
+            )
+            arcade.draw_sprite(sprite)
+            name = data.get("name", f"P{player_id}")
+            self._txt_shadow(name, sprite.center_x, sprite.center_y + glow_r + 18,
+                             (*ship_c[:3], 230), 10, FONT_UI_MENU,
+                             anchor_x="center", bold=True)
+            hp = float(data.get("health", 100.0))
+            max_hp = max(1.0, float(data.get("max_health", 100.0)))
+            bar_w = 54
+            bar_x = sprite.center_x - bar_w / 2
+            bar_y = sprite.center_y + glow_r + 6
+            arcade.draw_lrbt_rectangle_filled(bar_x, bar_x + bar_w, bar_y, bar_y + 5,
+                                               (18, 26, 38, 185))
+            arcade.draw_lrbt_rectangle_filled(bar_x, bar_x + bar_w * max(0.0, min(1.0, hp / max_hp)),
+                                               bar_y, bar_y + 5, (90, 240, 130, 225))
+
+    def _draw_multiplayer_ship_picker(self, cx: float, cy: float, width: float) -> None:
+        ship = SHIPS[self.selected_ship]
+        ship_c = tuple(ship["color"][:3])
+        panel_l = cx - width / 2
+        panel_r = cx + width / 2
+        panel_b = cy - 84
+        panel_t = cy + 84
+        arcade.draw_lrbt_rectangle_filled(panel_l, panel_r, panel_b, panel_t, (8, 18, 46, 222))
+        arcade.draw_lrbt_rectangle_outline(panel_l, panel_r, panel_b, panel_t, (*ship_c, 170), 2)
+        arcade.draw_text("YOUR PLANE", cx, panel_t - 22, (180, 215, 255, 210),
+                         10, anchor_x="center", bold=True, font_name=FONT_UI_MENU)
+        if ship["texture"]:
+            tex = load_texture_preview(ship["texture"])
+            _draw_texture_fitted(tex, cx, cy + 10, 220, 92,
+                                 angle=ship.get("front_angle_offset", 0.0))
+        self._txt_shadow(ship["name"], cx, panel_b + 24, (*ship_c, 255), 14,
+                         FONT_UI_MENU, anchor_x="center", bold=True)
+        arrow_w, arrow_h = 42, 58
+        for key, ax, label in (
+            ("ship_prev", panel_l + 18, "<"),
+            ("ship_next", panel_r - 18 - arrow_w, ">"),
+        ):
+            hov = self._is_hovering(ax, ax + arrow_w, cy - arrow_h / 2, cy + arrow_h / 2)
+            color = (235, 250, 255, 255) if hov else (140, 180, 230, 210)
+            self._txt_shadow(label, ax + arrow_w / 2, cy,
+                             color, 30, FONT_UI_MENU, anchor_x="center",
+                             anchor_y="center", bold=True)
+            self._multiplayer_btns[key] = (ax, ax + arrow_w, cy - arrow_h / 2, cy + arrow_h / 2)
+
+    def _draw_multiplayer_menu(self) -> None:
+        w, h = self.width, self.height
+        t = self.bg_time
+        self._draw_space_theme_background(dim_alpha=64)
+        self._multiplayer_btns = {}
+
+        self._txt_shadow("MULTIPLAYER", w // 2, h - 58,
+                         (120, 220, 255, 255), 34, FONT_UI_DISPLAY,
+                         anchor_x="center", bold=True)
+        arcade.draw_text("SAME WIFI OR HOTSPOT", w // 2, h - 91,
+                         (150, 185, 235, 190), 12, anchor_x="center",
+                         font_name=FONT_UI_MENU)
+
+        card_w = min(270, max(220, int(w * 0.28)))
+        card_h = min(230, max(190, int(h * 0.36)))
+        gap = 24
+        total_w = card_w * 2 + gap
+        start_x = w / 2 - total_w / 2
+        card_y = h / 2 - card_h / 2 + 18
+        modes = [
+            ("maze", "MAZE", "Shared maze world", f"Up to {3} players", (120, 255, 160), True),
+            ("classic", "CLASSIC", "Space combat", "COMING SOON", (90, 198, 255), False),
+        ]
+        for i, (key, label, desc, detail, color, available) in enumerate(modes):
+            l = start_x + i * (card_w + gap)
+            r = l + card_w
+            b = card_y
+            top = b + card_h
+            selected = self.multiplayer_selected_mode == key
+            hover = available and self._is_hovering(l, r, b, top)
+            fill = (10, 28, 52, 232) if selected else (8, 18, 46, 220)
+            if hover:
+                fill = (14, 38, 72, 235)
+            border = (*color, 230 if (selected or hover) else 130)
+            arcade.draw_lrbt_rectangle_filled(l + 6, r + 6, b - 6, top - 6, (0, 0, 0, 70))
+            arcade.draw_lrbt_rectangle_filled(l, r, b, top, fill if available else (12, 16, 38, 180))
+            arcade.draw_lrbt_rectangle_outline(l, r, b, top, border, 2 if selected else 1)
+            pulse = int(160 + 70 * math.sin(t * 3.0 + i)) if available else 100
+            arcade.draw_text("LAN" if key == "maze" else "SOON", (l + r) / 2, top - 58,
+                             (*color, pulse), 24, anchor_x="center", bold=True,
+                             font_name=FONT_UI_DISPLAY)
+            self._txt_shadow(label, (l + r) / 2, top - 104,
+                             (*color, 255) if available else (90, 105, 145, 180),
+                             16, FONT_UI_MENU, anchor_x="center", bold=True)
+            arcade.draw_text(desc, (l + r) / 2, top - 135,
+                             (200, 225, 255, 220) if available else (95, 110, 150, 170),
+                             10, anchor_x="center", font_name=FONT_UI_MENU)
+            arcade.draw_text(detail, (l + r) / 2, top - 158,
+                             (170, 210, 235, 200) if available else (110, 120, 150, 160),
+                             9, anchor_x="center", font_name=FONT_NUMERIC)
+            if available:
+                self._multiplayer_btns[f"mode_{key}"] = (l, r, b, top)
+
+        btn_y = card_y - 62
+        btn_w, btn_h = 188, 42
+        host_x = w / 2 - btn_w - 12
+        join_x = w / 2 + 12
+        for name, x, label, color in (
+            ("host", host_x, "HOST ROOM", (120, 255, 160)),
+            ("join", join_x, "JOIN ROOM", (120, 220, 255)),
+        ):
+            hov = self._is_hovering(x, x + btn_w, btn_y, btn_y + btn_h)
+            _draw_btn(x, btn_w, btn_y, btn_h,
+                      (*color, 220) if hov else (*color[:3], 70),
+                      (*color, 240), (8, 16, 24, 255) if hov else (*color, 230),
+                      label, 14)
+            self._multiplayer_btns[name] = (x, x + btn_w, btn_y, btn_y + btn_h)
+
+        back_w, back_h = 126, 32
+        _draw_btn(22, back_w, 22, back_h, (16, 24, 52, 195),
+                  (90, 125, 190, 180), (175, 205, 245, 220), "BACK", 11)
+        self._multiplayer_btns["back"] = (22, 22 + back_w, 22, 22 + back_h)
+        arcade.draw_text(self.multiplayer_status, w // 2, 18,
+                         (145, 180, 230, 170), 9, anchor_x="center",
+                         font_name=FONT_NUMERIC)
+
+    def _draw_multiplayer_join(self) -> None:
+        w, h = self.width, self.height
+        self._draw_space_theme_background(dim_alpha=66)
+        self._multiplayer_btns = {}
+        self._txt_shadow("JOIN ROOM", w // 2, h - 70,
+                         (120, 220, 255, 255), 32, FONT_UI_DISPLAY,
+                         anchor_x="center", bold=True)
+        arcade.draw_text("ENTER THE HOST CODE FROM THE SAME WIFI OR HOTSPOT",
+                         w // 2, h - 108, (160, 195, 240, 190), 11,
+                         anchor_x="center", font_name=FONT_UI_MENU)
+
+        box_w = min(520, w - 80)
+        box_h = 64
+        box_x = w / 2 - box_w / 2
+        box_y = h / 2 + 28
+        arcade.draw_lrbt_rectangle_filled(box_x, box_x + box_w, box_y, box_y + box_h,
+                                           (8, 18, 46, 235))
+        arcade.draw_lrbt_rectangle_outline(box_x, box_x + box_w, box_y, box_y + box_h,
+                                            (120, 220, 255, 230), 2)
+        code_text = self.multiplayer_join_code or "192.168.1.25"
+        code_color = (235, 250, 255, 255) if self.multiplayer_join_code else (95, 120, 160, 165)
+        self._txt_shadow(code_text, w // 2, box_y + box_h / 2,
+                         code_color, 22, FONT_NUMERIC, anchor_x="center",
+                         anchor_y="center", bold=True)
+        arcade.draw_text("You can type dots, or use the digits-only code shown by the host.",
+                         w // 2, box_y - 28, (130, 165, 215, 175), 9,
+                         anchor_x="center", font_name=FONT_UI_MENU)
+
+        btn_w, btn_h = 176, 42
+        join_x = w / 2 - btn_w - 10
+        back_x = w / 2 + 10
+        btn_y = box_y - 92
+        _draw_btn(join_x, btn_w, btn_y, btn_h, (120, 220, 255, 80),
+                  (120, 220, 255, 230), (120, 220, 255, 245), "CONNECT", 14)
+        _draw_btn(back_x, btn_w, btn_y, btn_h, (16, 24, 52, 205),
+                  (90, 125, 190, 180), (175, 205, 245, 220), "BACK", 14)
+        self._multiplayer_btns["join_connect"] = (join_x, join_x + btn_w, btn_y, btn_y + btn_h)
+        self._multiplayer_btns["join_back"] = (back_x, back_x + btn_w, btn_y, btn_y + btn_h)
+        arcade.draw_text(self.multiplayer_status, w // 2, 42,
+                         (255, 210, 95, 220) if "FAILED" in self.multiplayer_status else (145, 190, 235, 190),
+                         10, anchor_x="center", bold=True, font_name=FONT_UI_MENU)
+
+    def _draw_multiplayer_lobby(self) -> None:
+        w, h = self.width, self.height
+        self._draw_space_theme_background(dim_alpha=62)
+        self._multiplayer_btns = {}
+        self._txt_shadow("LAN LOBBY", w // 2, h - 58,
+                         (120, 220, 255, 255), 32, FONT_UI_DISPLAY,
+                         anchor_x="center", bold=True)
+
+        left = max(34, int(w * 0.08))
+        right = min(w - 34, int(w * 0.92))
+        top = h - 108
+        bottom = 86
+        arcade.draw_lrbt_rectangle_filled(left, right, bottom, top, (7, 15, 40, 224))
+        arcade.draw_lrbt_rectangle_outline(left, right, bottom, top, (90, 198, 255, 150), 2)
+        mid = (left + right) / 2
+
+        if self.multiplayer_role == "host":
+            code = self.multiplayer_room_code or local_room_code()
+            compact = compact_room_code(code)
+            self._txt_shadow("ROOM CODE", mid, top - 38,
+                             (150, 190, 240, 210), 11, FONT_UI_MENU,
+                             anchor_x="center", bold=True)
+            self._txt_shadow(code, mid, top - 70,
+                             (120, 255, 160, 255), 24, FONT_NUMERIC,
+                             anchor_x="center", bold=True)
+            arcade.draw_text(f"Digits-only: {compact}", mid, top - 96,
+                             (165, 205, 235, 185), 10, anchor_x="center",
+                             font_name=FONT_NUMERIC)
+        else:
+            self._txt_shadow("CONNECTED TO HOST", mid, top - 58,
+                             (120, 255, 160, 245), 18, FONT_UI_MENU,
+                             anchor_x="center", bold=True)
+            arcade.draw_text("Waiting for the host to start the maze.",
+                             mid, top - 86, (165, 205, 235, 185), 10,
+                             anchor_x="center", font_name=FONT_UI_MENU)
+
+        picker_w = min(360, right - left - 60)
+        self._draw_multiplayer_ship_picker(mid, bottom + 188, picker_w)
+
+        players = self._multiplayer_player_rows()
+        row_top = bottom + 86
+        row_w = min(620, right - left - 60)
+        row_l = mid - row_w / 2
+        arcade.draw_text(f"PLAYERS {len(players)}/3", row_l, row_top + 28,
+                         (160, 205, 245, 210), 11, bold=True, font_name=FONT_UI_MENU)
+        for idx, player in enumerate(players):
+            row_y = row_top - idx * 28
+            ship_idx = max(0, min(len(SHIPS) - 1, int(player.get("ship", 0))))
+            ship_c = SHIPS[ship_idx]["color"]
+            arcade.draw_lrbt_rectangle_filled(row_l, row_l + row_w, row_y - 17, row_y + 7,
+                                               (10, 24, 52, 180))
+            arcade.draw_circle_filled(row_l + 16, row_y - 5, 7, (*ship_c[:3], 230))
+            label = player.get("name", f"P{player.get('id', idx + 1)}")
+            suffix = "  HOST" if int(player.get("id", 0)) == 1 else ""
+            if int(player.get("id", 0)) == self.multiplayer_player_id:
+                suffix += "  YOU"
+            arcade.draw_text(f"{label}{suffix}", row_l + 34, row_y - 12,
+                             (220, 238, 255, 230), 10, font_name=FONT_UI_MENU)
+            arcade.draw_text(SHIPS[ship_idx]["name"], row_l + row_w - 12, row_y - 12,
+                             (*ship_c[:3], 225), 10, anchor_x="right",
+                             font_name=FONT_UI_MENU)
+
+        btn_w, btn_h = 178, 42
+        btn_y = 26
+        if self.multiplayer_role == "host":
+            start_x = w / 2 - btn_w - 10
+            _draw_btn(start_x, btn_w, btn_y, btn_h, (120, 255, 160, 78),
+                      (120, 255, 160, 230), (120, 255, 160, 245),
+                      "START MAZE", 14)
+            self._multiplayer_btns["start"] = (start_x, start_x + btn_w, btn_y, btn_y + btn_h)
+            leave_x = w / 2 + 10
+        else:
+            leave_x = w / 2 - btn_w / 2
+        _draw_btn(leave_x, btn_w, btn_y, btn_h, (70, 24, 38, 190),
+                  (255, 110, 125, 190), (255, 180, 190, 230),
+                  "LEAVE ROOM", 14)
+        self._multiplayer_btns["leave"] = (leave_x, leave_x + btn_w, btn_y, btn_y + btn_h)
+        status = self.multiplayer_status
+        if self.multiplayer_host is not None and self.multiplayer_host.error:
+            status = self.multiplayer_host.error
+        arcade.draw_text(status, w // 2, 10,
+                         (255, 210, 95, 220) if "ERROR" in status else (145, 190, 235, 165),
+                         9, anchor_x="center", font_name=FONT_NUMERIC)
+
+    def _multiplayer_player_rows(self) -> list[dict]:
+        rows = list(self.multiplayer_players.values())
+        local_id = self.multiplayer_player_id
+        if local_id and not any(int(row.get("id", 0)) == local_id for row in rows):
+            rows.append({"id": local_id, **self._multiplayer_local_payload()})
+        return sorted(rows, key=lambda row: int(row.get("id", 99)))
 
     def _draw_pause_ship_summary(self, left: int, right: int, bottom: int, top: int,
                                  theme_c: dict, t: float) -> None:
@@ -2183,6 +2866,18 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self._draw_mode_select()
             return
 
+        if self.game_state == STATE_MULTIPLAYER_MENU:
+            self._draw_multiplayer_menu()
+            return
+
+        if self.game_state == STATE_MULTIPLAYER_JOIN:
+            self._draw_multiplayer_join()
+            return
+
+        if self.game_state == STATE_MULTIPLAYER_LOBBY:
+            self._draw_multiplayer_lobby()
+            return
+
         if self.game_state == STATE_MENU:
             self._draw_menu()
             return
@@ -2378,6 +3073,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
         if self.contact_damage_timer > 0: self.contact_damage_timer -= delta
         if self.combo_timer > 0: self.combo_timer -= delta
         elif self.combo > 0:     self.combo = 0
+
+        if self.game_state in (STATE_MULTIPLAYER_LOBBY, STATE_MAZE):
+            self._update_multiplayer_network(delta)
 
         if self.game_state == STATE_MAZE:
             self._update_maze(delta)
@@ -3162,14 +3860,61 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         self._cycle_space_theme(-1)
                     elif name == "__theme_next__":
                         self._cycle_space_theme(1)
-                    elif name in ("normal", "maze"):
+                    elif name in ("normal", "maze", "multiplayer"):
                         if self.selected_mode == name:
                             if name == "normal":
                                 self.game_state = STATE_MENU
                             elif name == "maze":
                                 self.game_state = STATE_MAZE_LOADOUT
+                            elif name == "multiplayer":
+                                self.game_state = STATE_MULTIPLAYER_MENU
                         else:
                             self.selected_mode = name
+                    return
+            return
+
+        if self.game_state == STATE_MULTIPLAYER_MENU:
+            for name, rect in self._multiplayer_btns.items():
+                l, r, b, t = rect
+                if l <= x <= r and b <= y <= t:
+                    if name == "mode_maze":
+                        self.multiplayer_selected_mode = "maze"
+                    elif name == "host":
+                        self._start_multiplayer_host()
+                    elif name == "join":
+                        self.multiplayer_join_code = ""
+                        self.multiplayer_status = "TYPE THE HOST ROOM CODE"
+                        self.game_state = STATE_MULTIPLAYER_JOIN
+                    elif name == "back":
+                        self.game_state = STATE_MODE_SELECT
+                    return
+            return
+
+        if self.game_state == STATE_MULTIPLAYER_JOIN:
+            for name, rect in self._multiplayer_btns.items():
+                l, r, b, t = rect
+                if l <= x <= r and b <= y <= t:
+                    if name == "join_connect":
+                        self._join_multiplayer_room()
+                    elif name == "join_back":
+                        self.game_state = STATE_MULTIPLAYER_MENU
+                    return
+            return
+
+        if self.game_state == STATE_MULTIPLAYER_LOBBY:
+            for name, rect in self._multiplayer_btns.items():
+                l, r, b, t = rect
+                if l <= x <= r and b <= y <= t:
+                    if name == "ship_prev":
+                        self._cycle_selected_ship(-1)
+                    elif name == "ship_next":
+                        self._cycle_selected_ship(1)
+                    elif name == "start" and self.multiplayer_role == "host":
+                        self._start_multiplayer_maze()
+                    elif name == "leave":
+                        self._shutdown_multiplayer()
+                        self.game_state = STATE_MULTIPLAYER_MENU
+                        self.set_mouse_visible(True)
                     return
             return
 
@@ -3319,7 +4064,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._pause_return_state = None
         self._clear_movement_input()
         self.mouse_held = False
-        self.game_state = STATE_MAZE_SELECT if paused_from == STATE_MAZE else STATE_MENU
+        if paused_from == STATE_MAZE and self._multiplayer_active():
+            self._shutdown_multiplayer()
+            self.game_state = STATE_MULTIPLAYER_MENU
+        else:
+            self.game_state = STATE_MAZE_SELECT if paused_from == STATE_MAZE else STATE_MENU
         self.set_mouse_visible(True)
 
     def _reset_from_pause(self) -> None:
@@ -3331,6 +4080,14 @@ class GameWindow(MazeModeMixin, arcade.Window):
         else:
             self.setup()
 
+    def on_text(self, text):
+        if self.game_state != STATE_MULTIPLAYER_JOIN:
+            return
+        for ch in text:
+            if ch.isdigit() or ch == ".":
+                if len(self.multiplayer_join_code) < 15:
+                    self.multiplayer_join_code += ch
+
     def on_key_press(self, key, modifiers):
         if self._screen_transition and key != arcade.key.F11:
             return
@@ -3340,6 +4097,31 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 self._close_maze_map_overlay()
             elif key == arcade.key.F11:
                 self._toggle_fullscreen()
+            return
+
+        if self.game_state in (STATE_MULTIPLAYER_MENU, STATE_MULTIPLAYER_JOIN, STATE_MULTIPLAYER_LOBBY):
+            if key == arcade.key.F11:
+                self._toggle_fullscreen()
+            elif key == arcade.key.ESCAPE:
+                if self.game_state == STATE_MULTIPLAYER_MENU:
+                    self.game_state = STATE_MODE_SELECT
+                elif self.game_state == STATE_MULTIPLAYER_JOIN:
+                    self.game_state = STATE_MULTIPLAYER_MENU
+                else:
+                    self._shutdown_multiplayer()
+                    self.game_state = STATE_MULTIPLAYER_MENU
+                self.set_mouse_visible(True)
+            elif self.game_state == STATE_MULTIPLAYER_JOIN and key == arcade.key.BACKSPACE:
+                self.multiplayer_join_code = self.multiplayer_join_code[:-1]
+            elif key in (arcade.key.ENTER, arcade.key.RETURN):
+                if self.game_state == STATE_MULTIPLAYER_JOIN:
+                    self._join_multiplayer_room()
+                elif self.game_state == STATE_MULTIPLAYER_LOBBY and self.multiplayer_role == "host":
+                    self._start_multiplayer_maze()
+            elif self.game_state == STATE_MULTIPLAYER_LOBBY and key in (arcade.key.LEFT, arcade.key.A):
+                self._cycle_selected_ship(-1)
+            elif self.game_state == STATE_MULTIPLAYER_LOBBY and key in (arcade.key.RIGHT, arcade.key.D):
+                self._cycle_selected_ship(1)
             return
 
         if key in {arcade.key.W, arcade.key.A, arcade.key.S, arcade.key.D,
@@ -3398,6 +4180,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     self.game_state = STATE_MENU
                 elif self.selected_mode == "maze":
                     self.game_state = STATE_MAZE_LOADOUT
+                elif self.selected_mode == "multiplayer":
+                    self.game_state = STATE_MULTIPLAYER_MENU
             elif self.game_state == STATE_MAZE_LOADOUT:
                 self.game_state = STATE_MAZE_SELECT
             elif self.game_state == STATE_MAZE_SELECT:
@@ -3426,6 +4210,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
     def on_deactivate(self):
         self._clear_movement_input()
+
+    def on_close(self):
+        self._shutdown_multiplayer()
+        super().on_close()
 
     # ──────────────────────────────────────────────────
     #  FULLSCREEN

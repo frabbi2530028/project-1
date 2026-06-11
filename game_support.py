@@ -277,6 +277,9 @@ STATE_GAMEOVER    = "gameover"
 STATE_LEVEL_SELECT = "level_select"
 STATE_LEVEL_CLEAR  = "level_clear"
 STATE_MODE_SELECT  = "mode_select"
+STATE_MULTIPLAYER_MENU = "multiplayer_menu"
+STATE_MULTIPLAYER_JOIN = "multiplayer_join"
+STATE_MULTIPLAYER_LOBBY = "multiplayer_lobby"
 
 # ─────────────────────────────────────────────────────
 #  MAZE MODE CONSTANTS

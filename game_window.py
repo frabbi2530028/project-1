@@ -874,6 +874,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
         elif self.multiplayer_client is not None:
             self.selected_maze_preset = self.multiplayer_client.preset_key
             self.multiplayer_maze_seed = self.multiplayer_client.maze_seed
+        self.maze_preset = next(
+            (preset for preset in MAZE_PRESETS if preset["key"] == self.selected_maze_preset),
+            MAZE_PRESETS[0],
+        )
         self.maze_saved_level = 0
         self.maze_level = 0
         self.maze_run_complete = False
@@ -883,7 +887,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.setup_maze(keep_player=False)
         if self.multiplayer_host is not None:
             self.multiplayer_host.set_maze_state(self._multiplayer_maze_snapshot())
-        self.notif_text = "LAN MAZE ROOM LIVE"
+        self.notif_text = "MULTIPLAYER MAZE LIVE"
         self.notif_color = (120, 220, 255)
         self.notif_timer = 2.2
 
@@ -928,6 +932,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self.multiplayer_client.poll_state()
             if self.multiplayer_client.error:
                 self.multiplayer_status = self.multiplayer_client.error
+            self.selected_maze_preset = self.multiplayer_client.preset_key
             self.multiplayer_players = {
                 pid: {
                     "id": player.player_id,
@@ -1450,6 +1455,63 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_lrbt_rectangle_filled(bar_x, bar_x + bar_w * max(0.0, min(1.0, hp / max_hp)),
                                                bar_y, bar_y + 5, (90, 240, 130, 225))
 
+    def _multiplayer_current_maze_preset(self) -> dict:
+        preset_key = self.selected_maze_preset
+        if self.multiplayer_host is not None:
+            preset_key = self.multiplayer_host.preset_key
+        elif self.multiplayer_client is not None:
+            preset_key = self.multiplayer_client.preset_key
+        return next(
+            (preset for preset in MAZE_PRESETS if preset["key"] == preset_key),
+            MAZE_PRESETS[0],
+        )
+
+    def _set_multiplayer_maze_preset(self, direction: int) -> None:
+        if self.multiplayer_host is None or self.multiplayer_started:
+            return
+        current = self._multiplayer_current_maze_preset()
+        idx = next(
+            (i for i, preset in enumerate(MAZE_PRESETS) if preset["key"] == current["key"]),
+            0,
+        )
+        preset = MAZE_PRESETS[(idx + direction) % len(MAZE_PRESETS)]
+        self.selected_maze_preset = preset["key"]
+        self.multiplayer_host.preset_key = preset["key"]
+        self.multiplayer_status = f"MAZE TYPE: {preset['name']}"
+
+    def _draw_multiplayer_maze_preset_picker(self, cx: float, cy: float, width: float) -> None:
+        preset = self._multiplayer_current_maze_preset()
+        preset_c = tuple(preset["color"][:3])
+        panel_l = cx - width / 2
+        panel_r = cx + width / 2
+        panel_b = cy - 40
+        panel_t = cy + 40
+        arcade.draw_lrbt_rectangle_filled(panel_l, panel_r, panel_b, panel_t, (8, 18, 46, 214))
+        arcade.draw_lrbt_rectangle_outline(panel_l, panel_r, panel_b, panel_t, (*preset_c, 175), 2)
+        title = "MAZE TYPE" if self.multiplayer_role == "host" else "HOST MAZE TYPE"
+        arcade.draw_text(title, cx, panel_t - 16,
+                         (175, 205, 245, 205), 9, anchor_x="center",
+                         bold=True, font_name=FONT_UI_MENU)
+        self._txt_shadow(preset["name"], cx, cy + 2, (*preset_c, 255),
+                         16, FONT_UI_MENU, anchor_x="center", bold=True)
+        arcade.draw_text(preset["desc"], cx, panel_b + 14,
+                         (180, 210, 240, 185), 9, anchor_x="center",
+                         font_name=FONT_UI_MENU)
+
+        if self.multiplayer_role != "host" or self.multiplayer_started:
+            return
+        arrow_w, arrow_h = 36, 44
+        for key, ax, label in (
+            ("preset_prev", panel_l + 14, "<"),
+            ("preset_next", panel_r - 14 - arrow_w, ">"),
+        ):
+            hov = self._is_hovering(ax, ax + arrow_w, cy - arrow_h / 2, cy + arrow_h / 2)
+            color = (245, 250, 255, 255) if hov else (150, 188, 240, 210)
+            self._txt_shadow(label, ax + arrow_w / 2, cy,
+                             color, 26, FONT_UI_MENU, anchor_x="center",
+                             anchor_y="center", bold=True)
+            self._multiplayer_btns[key] = (ax, ax + arrow_w, cy - arrow_h / 2, cy + arrow_h / 2)
+
     def _draw_multiplayer_ship_picker(self, cx: float, cy: float, width: float) -> None:
         ship = SHIPS[self.selected_ship]
         ship_c = tuple(ship["color"][:3])
@@ -1517,7 +1579,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_lrbt_rectangle_filled(l, r, b, top, fill if available else (12, 16, 38, 180))
             arcade.draw_lrbt_rectangle_outline(l, r, b, top, border, 2 if selected else 1)
             pulse = int(160 + 70 * math.sin(t * 3.0 + i)) if available else 100
-            arcade.draw_text("LAN" if key == "maze" else "SOON", (l + r) / 2, top - 58,
+            arcade.draw_text("CO-OP" if key == "maze" else "SOON", (l + r) / 2, top - 58,
                              (*color, pulse), 24, anchor_x="center", bold=True,
                              font_name=FONT_UI_DISPLAY)
             self._txt_shadow(label, (l + r) / 2, top - 104,
@@ -1607,7 +1669,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         w, h = self.width, self.height
         self._draw_space_theme_background(dim_alpha=62)
         self._multiplayer_btns = {}
-        self._txt_shadow("LAN LOBBY", w // 2, h - 58,
+        self._txt_shadow("MULTIPLAYER LOBBY", w // 2, h - 58,
                          (120, 220, 255, 255), 32, FONT_UI_DISPLAY,
                          anchor_x="center", bold=True)
 
@@ -1650,6 +1712,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_text("Waiting for the host to start the maze.",
                              mid, top - 86, (165, 205, 235, 185), 10,
                              anchor_x="center", font_name=FONT_UI_MENU)
+
+        preset_w = min(430, right - left - 60)
+        preset_y = (bottom + 272 + top - 116) / 2
+        self._draw_multiplayer_maze_preset_picker(mid, preset_y, preset_w)
 
         picker_w = min(360, right - left - 60)
         self._draw_multiplayer_ship_picker(mid, bottom + 188, picker_w)
@@ -4270,6 +4336,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
                         self._cycle_selected_ship(-1)
                     elif name == "ship_next":
                         self._cycle_selected_ship(1)
+                    elif name == "preset_prev":
+                        self._set_multiplayer_maze_preset(-1)
+                    elif name == "preset_next":
+                        self._set_multiplayer_maze_preset(1)
                     elif name == "start" and self.multiplayer_role == "host":
                         self._start_multiplayer_maze()
                     elif name == "leave":

@@ -1,6 +1,7 @@
 from game_support import *
 
 import arcade
+import heapq
 import itertools
 import math
 import random
@@ -737,40 +738,198 @@ class MazeModeMixin:
             if not key.get("collected", False)
         ]
 
+    def _maze_autopilot_has_breach_tool(self) -> bool:
+        p = getattr(self, "player", None)
+        return bool(
+            p is not None
+            and (
+                getattr(p, "breach_active", False)
+                or p.inventory.get("breach", 0) > 0
+            )
+        )
+
+    def _maze_autopilot_breach_wall_budget(self, bonus_charges: int = 0) -> int:
+        p = getattr(self, "player", None)
+        if p is None:
+            return 0
+        charges = max(0, int(p.inventory.get("breach", 0))) + max(0, int(bonus_charges))
+        if getattr(p, "breach_active", False):
+            charges += 1
+        return min(9, charges * 3)
+
+    @staticmethod
+    def _maze_autopilot_step_direction(col: int, row: int,
+                                       next_col: int, next_row: int) -> int | None:
+        for direction in (MazeGrid.N, MazeGrid.E, MazeGrid.S, MazeGrid.W):
+            if (
+                col + MazeGrid.DX[direction] == next_col
+                and row + MazeGrid.DY[direction] == next_row
+            ):
+                return direction
+        return None
+
+    def _maze_autopilot_shortest_path(
+        self,
+        sc: int,
+        sr: int,
+        ec: int,
+        er: int,
+        allow_breakable: bool | None = None,
+        bonus_breach_charges: int = 0,
+        max_breakable_walls: int | None = None,
+    ) -> tuple[list[tuple[int, int]], int, float]:
+        maze = getattr(self, "maze_grid", None)
+        if maze is None:
+            return [], 0, math.inf
+        if not (0 <= sc < maze.cols and 0 <= sr < maze.rows):
+            return [], 0, math.inf
+        if not (0 <= ec < maze.cols and 0 <= er < maze.rows):
+            return [], 0, math.inf
+        if (sc, sr) == (ec, er):
+            return [], 0, 0.0
+
+        breach_budget = self._maze_autopilot_breach_wall_budget(bonus_breach_charges)
+        if max_breakable_walls is not None:
+            breach_budget = max(0, min(breach_budget, int(max_breakable_walls)))
+        if allow_breakable is None:
+            allow_breakable = breach_budget > 0
+        if not allow_breakable:
+            breach_budget = 0
+
+        start = (sc, sr, 0)
+        costs = {start: 0.0}
+        previous: dict[tuple[int, int, int], tuple[int, int, int] | None] = {start: None}
+        heap: list[tuple[float, int, int, int, int]] = [(0.0, 0, 0, sc, sr)]
+        sequence = 0
+        best_target: tuple[int, int, int] | None = None
+
+        while heap:
+            cost, breaks_used, _seq, col, row = heapq.heappop(heap)
+            state = (col, row, breaks_used)
+            if cost > costs.get(state, math.inf) + 0.000001:
+                continue
+            if (col, row) == (ec, er):
+                best_target = state
+                break
+
+            for direction in (MazeGrid.N, MazeGrid.E, MazeGrid.S, MazeGrid.W):
+                nc = col + MazeGrid.DX[direction]
+                nr = row + MazeGrid.DY[direction]
+                if not (0 <= nc < maze.cols and 0 <= nr < maze.rows):
+                    continue
+
+                extra_breaks = 0
+                step_cost = 1.0
+                if maze.is_open(col, row, direction):
+                    pass
+                elif allow_breakable and maze.is_breakable_wall(col, row, direction):
+                    extra_breaks = 1
+                    if breaks_used + extra_breaks > breach_budget:
+                        continue
+                    wall_hp = max(1, maze.wall_hp(col, row, direction))
+                    step_cost += wall_hp * 0.12 + (breaks_used + extra_breaks) * 0.15
+                else:
+                    continue
+
+                next_breaks = breaks_used + extra_breaks
+                next_state = (nc, nr, next_breaks)
+                next_cost = cost + step_cost
+                if next_cost + 0.000001 >= costs.get(next_state, math.inf):
+                    continue
+                costs[next_state] = next_cost
+                previous[next_state] = state
+                sequence += 1
+                heapq.heappush(heap, (next_cost, next_breaks, sequence, nc, nr))
+
+        if best_target is None:
+            return [], 0, math.inf
+
+        path: list[tuple[int, int]] = []
+        cur = best_target
+        while previous[cur] is not None:
+            path.append((cur[0], cur[1]))
+            cur = previous[cur]
+        path.reverse()
+        return path, best_target[2], costs[best_target]
+
+    def _maze_autopilot_breach_route_savings(self, bonus_breach_charges: int = 1) -> float:
+        pc, pr = self._maze_player_cell()
+        best_saving = 0.0
+        for key in self._maze_autopilot_remaining_keys():
+            open_path = self.maze_grid.bfs(pc, pr, key["col"], key["row"])
+            shortcut, breaks_used, shortcut_cost = self._maze_autopilot_shortest_path(
+                pc, pr, key["col"], key["row"],
+                allow_breakable=True,
+                bonus_breach_charges=bonus_breach_charges,
+            )
+            if not shortcut or breaks_used <= 0:
+                continue
+            open_cost = len(open_path) if open_path else len(shortcut) + 10.0
+            best_saving = max(best_saving, open_cost - shortcut_cost)
+        return max(0.0, best_saving)
+
+    def _maze_autopilot_next_breakable_wall(
+        self, path: list[tuple[int, int]] | None
+    ) -> tuple[int, int, int] | None:
+        if not path:
+            return None
+        pc, pr = self._maze_player_cell()
+        target_col, target_row = path[0]
+        direction = self._maze_autopilot_step_direction(pc, pr, target_col, target_row)
+        if direction is None:
+            return None
+        if self.maze_grid.is_open(pc, pr, direction):
+            return None
+        if not self.maze_grid.is_breakable_wall(pc, pr, direction):
+            return None
+        return pc, pr, direction
+
+    def _maze_autopilot_wall_aim_point(
+        self, col: int, row: int, direction: int
+    ) -> tuple[float, float]:
+        cx, cy = self._maze_key_world(col, row)
+        return (
+            cx + MazeGrid.DX[direction] * self.maze_cell_size * 0.52,
+            cy + MazeGrid.DY[direction] * self.maze_cell_size * 0.52,
+        )
+
     def _maze_autopilot_choose_key_path(self) -> tuple[dict | None, list[tuple[int, int]]]:
         pc, pr = self._maze_player_cell()
         keys = self._maze_autopilot_remaining_keys()
         if not keys:
             return None, []
-        paths_from_start = {}
         for key in keys:
             if (key["col"], key["row"]) == (pc, pr):
                 return key, []
-            path = self.maze_grid.bfs(pc, pr, key["col"], key["row"])
-            if not path:
-                continue
-            paths_from_start[key["id"]] = path
 
         best_route = None
+        breach_budget = self._maze_autopilot_breach_wall_budget()
         # Only three keys are active, so checking every order is cheap and gives
         # the shortest remaining key route instead of a greedy nearest-key route.
         for order in itertools.permutations(keys):
+            cur_col, cur_row = pc, pr
             first = order[0]
-            if first["id"] not in paths_from_start:
-                continue
-            total_steps = len(paths_from_start[first["id"]])
+            first_path: list[tuple[int, int]] = []
+            total_cost = 0.0
+            total_breaks = 0
             route_ok = True
-            for current_key, next_key in zip(order, order[1:]):
-                leg = self.maze_grid.bfs(
-                    current_key["col"], current_key["row"],
+            for index, next_key in enumerate(order):
+                remaining_breaks = breach_budget - total_breaks
+                leg, leg_breaks, leg_cost = self._maze_autopilot_shortest_path(
+                    cur_col, cur_row,
                     next_key["col"], next_key["row"],
+                    max_breakable_walls=remaining_breaks,
                 )
-                if not leg:
+                if not leg and (cur_col, cur_row) != (next_key["col"], next_key["row"]):
                     route_ok = False
                     break
-                total_steps += len(leg)
-            if route_ok and (best_route is None or total_steps < best_route[0]):
-                best_route = (total_steps, first, paths_from_start[first["id"]])
+                total_breaks += leg_breaks
+                total_cost += leg_cost
+                if index == 0:
+                    first_path = leg
+                cur_col, cur_row = next_key["col"], next_key["row"]
+            if route_ok and (best_route is None or total_cost < best_route[0]):
+                best_route = (total_cost, first, first_path)
 
         if best_route is None:
             return None, []
@@ -840,8 +999,12 @@ class MazeModeMixin:
         if kind == "triple":
             return 6.0 if close_threats else 3.8
         if kind == "breach":
+            shortcut_savings = self._maze_autopilot_breach_route_savings(
+                bonus_breach_charges=1)
+            if shortcut_savings >= 1.0:
+                return 6.0 + min(8.0, shortcut_savings * 0.9)
             key, key_path = self._maze_autopilot_choose_key_path()
-            return 6.5 if key is not None and len(key_path) >= 5 else 4.5
+            return 5.2 if key is not None and len(key_path) >= 5 else 4.0
         if kind in ("beam360", "elec360"):
             return 8.5 if surrounded >= 3 else 5.5
         return 2.5
@@ -856,20 +1019,25 @@ class MazeModeMixin:
             col, row = self._maze_autopilot_powerup_cell(pu)
             if (col, row) == (pc, pr):
                 path = [(col, row)]
+                route_cost = 0.0
             else:
-                path = self.maze_grid.bfs(pc, pr, col, row)
+                path, _breaks_used, route_cost = self._maze_autopilot_shortest_path(
+                    pc, pr, col, row,
+                    allow_breakable=self._maze_autopilot_has_breach_tool(),
+                )
                 if not path:
                     continue
             px, py = self._maze_key_world(col, row)
             local_dist = math.hypot(pu.center_x - px, pu.center_y - py) / max(1, self.maze_cell_size)
-            value = self._maze_autopilot_powerup_value(pu, len(path))
+            travel_steps = max(len(path), int(math.ceil(route_cost)))
+            value = self._maze_autopilot_powerup_value(pu, travel_steps)
             if value <= 0.0:
                 continue
             if not keys_done and key_path_len is not None:
-                too_far_from_key = len(path) > key_path_len + 4
+                too_far_from_key = travel_steps > key_path_len + 4
                 if too_far_from_key and value < 8.0:
                     continue
-            travel_cost = len(path) * 0.85 + local_dist * 0.45
+            travel_cost = route_cost * 0.85 + local_dist * 0.45
             score = value - travel_cost
             min_score = -0.5 if keys_done else 0.7
             if score < min_score:
@@ -967,14 +1135,21 @@ class MazeModeMixin:
                 count += 1
         return count
 
-    def _maze_autopilot_breach_target(self, key: dict | None,
-                                      path_len: int) -> tuple[float, float] | None:
+    def _maze_autopilot_breach_target(
+        self,
+        key: dict | None,
+        path_len: int,
+        path: list[tuple[int, int]] | None = None,
+    ) -> tuple[float, float] | None:
         p = self.player
-        has_breach = (
-            getattr(p, "breach_active", False)
-            or p.inventory.get("breach", 0) > 0
-        )
-        if key is None or not has_breach or path_len < 5:
+        if not self._maze_autopilot_has_breach_tool():
+            return None
+
+        next_wall = self._maze_autopilot_next_breakable_wall(path)
+        if next_wall is not None:
+            return self._maze_autopilot_wall_aim_point(*next_wall)
+
+        if key is None or path_len < 5:
             return None
         tx, ty = self._maze_key_world(key["col"], key["row"])
         dx = tx - p.center_x
@@ -1130,6 +1305,7 @@ class MazeModeMixin:
         close_enough = max(12.0, cs * 0.07)
         if dist < close_enough and len(path) > 1:
             self._maze_autopilot_path = path[1:]
+            path = self._maze_autopilot_path
             target_col, target_row = self._maze_autopilot_path[0]
             tx, ty = self._maze_key_world(target_col, target_row)
             pc, pr = self._maze_player_cell()
@@ -1149,10 +1325,15 @@ class MazeModeMixin:
             forward_x, forward_y = dx, dy
         else:
             forward_x, forward_y = p.change_x, p.change_y
-        front_target = self._maze_autopilot_front_target(forward_x, forward_y)
+        immediate_wall = self._maze_autopilot_next_breakable_wall(path)
+        if immediate_wall is not None and not self._maze_autopilot_has_breach_tool():
+            self._maze_autopilot_repath_timer = 0.0
+            return 0.0, 0.0
+        front_target = None if immediate_wall is not None else self._maze_autopilot_front_target(
+            forward_x, forward_y)
         target_key = self._maze_autopilot_current_key()
         breach_target = None if front_target is not None else self._maze_autopilot_breach_target(
-            target_key, len(path))
+            target_key, len(path), path)
         self._maze_autopilot_use_powerups(delta, front_target, len(path), breach_target)
         self._maze_autopilot_aim = front_target or breach_target
         self._maze_autopilot_fire_special = (
@@ -1692,6 +1873,83 @@ class MazeModeMixin:
         mx, my, mw, mh, _mm_cs, pad = self._maze_minimap_layout()
         return mx - pad <= x <= mx + mw + pad and my - pad <= y <= my + mh + pad
 
+    def _maze_team_map_markers(self) -> list[dict]:
+        if self.player is None or self.maze_grid is None:
+            return []
+
+        def safe_float(value, fallback: float) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return fallback
+
+        def safe_int(value, fallback: int = 0) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return fallback
+
+        markers = []
+        local_id = safe_int(getattr(self, "multiplayer_player_id", 0), 0) or 1
+        players = getattr(self, "multiplayer_players", {})
+        active_mp = getattr(self, "_multiplayer_active", lambda: False)()
+        rows = players.items() if active_mp else [(local_id, {})]
+        seen_ids = set()
+
+        for player_id, data in sorted(rows, key=lambda item: safe_int(item[0])):
+            player_id = safe_int(player_id, local_id)
+            if not isinstance(data, dict):
+                data = {}
+            if player_id in seen_ids:
+                continue
+            seen_ids.add(player_id)
+            is_local = player_id == local_id
+            fallback_ship = getattr(self, "selected_ship", 0)
+            ship_idx = safe_int(data.get("ship", fallback_ship), fallback_ship) if isinstance(data, dict) else fallback_ship
+            ship_idx = max(0, min(len(SHIPS) - 1, ship_idx))
+            x = self.player.center_x if is_local else safe_float(data.get("x"), self.player.center_x)
+            y = self.player.center_y if is_local else safe_float(data.get("y"), self.player.center_y)
+            health = self.player.health if is_local else safe_float(data.get("health", 100.0), 100.0)
+            markers.append({
+                "id": player_id,
+                "name": "YOU" if is_local else str(data.get("name", f"P{player_id}"))[:6],
+                "x": x,
+                "y": y,
+                "color": tuple(SHIPS[ship_idx]["color"][:3]),
+                "is_local": is_local,
+                "alive": health > 0,
+            })
+
+        if local_id not in seen_ids:
+            ship_idx = max(0, min(len(SHIPS) - 1, getattr(self, "selected_ship", 0)))
+            markers.append({
+                "id": local_id,
+                "name": "YOU",
+                "x": self.player.center_x,
+                "y": self.player.center_y,
+                "color": tuple(SHIPS[ship_idx]["color"][:3]),
+                "is_local": True,
+                "alive": self.player.health > 0,
+            })
+        return markers
+
+    def _draw_maze_map_player_marker(
+            self, x: float, y: float, radius: float, marker: dict,
+            label: bool = False) -> None:
+        color = marker["color"]
+        alpha = 245 if marker.get("alive", True) else 120
+        pulse = 0.5 + 0.5 * math.sin(self.bg_time * 5.4 + int(marker.get("id", 0)))
+        ring_c = (235, 250, 255, 215) if marker.get("is_local") else (*color, 190)
+        arcade.draw_circle_filled(x, y, radius * (1.55 + 0.18 * pulse), (*color, int(34 + 32 * pulse)))
+        arcade.draw_circle_filled(x, y, radius, (*color, alpha))
+        arcade.draw_circle_outline(x, y, radius * 1.55, ring_c, 2)
+        if label:
+            text = "YOU" if marker.get("is_local") else f"P{int(marker.get('id', 0))}"
+            arcade.draw_text(text, x, y,
+                             (8, 10, 22, 245), max(7, min(10, int(radius * 1.55))),
+                             anchor_x="center", anchor_y="center", bold=True,
+                             font_name=FONT_NUMERIC)
+
     def _open_maze_map_overlay(self) -> None:
         self.maze_map_open = True
         self.mouse_held = False
@@ -2218,12 +2476,6 @@ class MazeModeMixin:
             arcade.draw_circle_filled(kx, ky, max(2, mm_cs * 0.36), (255, 220, 70, 235))
             arcade.draw_circle_outline(kx, ky, max(3, mm_cs * 0.55), (255, 245, 160, 160), 1)
 
-        # Player marker
-        pc2, pr2 = self._maze_player_cell()
-        px3 = mx + (pc2 - col_min + 0.5) * mm_cs
-        py3 = my + (pr2 - row_min + 0.5) * mm_cs
-        arcade.draw_circle_filled(px3, py3, mm_cs * 0.46, (90, 200, 255, 245))
-
         enemy_count = len(self.maze_enemies)
         for enemy in self.maze_enemies:
             e_col = (enemy.center_x - ox) / cs
@@ -2244,6 +2496,15 @@ class MazeModeMixin:
                 by = my + (b_row - row_min) * mm_cs
                 arcade.draw_circle_filled(bx, by, max(3, mm_cs * 0.42), (255, 190, 70, 245))
                 arcade.draw_circle_outline(bx, by, max(5, mm_cs * 0.72), (255, 235, 130, 180), 2)
+
+        for marker in self._maze_team_map_markers():
+            p_col = (marker["x"] - ox) / cs
+            p_row = (marker["y"] - oy) / cs
+            if not (col_min <= p_col < col_max and row_min <= p_row < row_max):
+                continue
+            px3 = mx + (p_col - col_min) * mm_cs
+            py3 = my + (p_row - row_min) * mm_cs
+            self._draw_maze_map_player_marker(px3, py3, max(2.5, mm_cs * 0.42), marker)
 
         self._txt_shadow(f"ENEMY {enemy_count}", mx + mw + pad, my - 14,
                          (255, 135, 115, 210), 8, FONT_NUMERIC,
@@ -2314,12 +2575,6 @@ class MazeModeMixin:
             arcade.draw_circle_filled(kx, ky, max(4, mm_cs * 0.30), (255, 220, 70, 240))
             arcade.draw_circle_outline(kx, ky, max(7, mm_cs * 0.52), (255, 245, 160, 170), 2)
 
-        pc, pr = self._maze_player_cell()
-        px = mx + (pc + 0.5) * mm_cs
-        py = my + (pr + 0.5) * mm_cs
-        arcade.draw_circle_filled(px, py, max(5, mm_cs * 0.36), (90, 200, 255, 245))
-        arcade.draw_circle_outline(px, py, max(8, mm_cs * 0.58), (180, 235, 255, 190), 2)
-
         enemy_count = len(self.maze_enemies)
         for enemy in self.maze_enemies:
             ex3 = mx + ((enemy.center_x - ox) / cs) * mm_cs
@@ -2333,6 +2588,13 @@ class MazeModeMixin:
             by = my + ((boss.center_y - oy) / cs) * mm_cs
             arcade.draw_circle_filled(bx, by, max(5, mm_cs * 0.42), (255, 190, 70, 245))
             arcade.draw_circle_outline(bx, by, max(8, mm_cs * 0.75), (255, 235, 130, 180), 2)
+
+        for marker in self._maze_team_map_markers():
+            px = mx + ((marker["x"] - ox) / cs) * mm_cs
+            py = my + ((marker["y"] - oy) / cs) * mm_cs
+            if not (mx <= px <= mx + mw and my <= py <= my + mh):
+                continue
+            self._draw_maze_map_player_marker(px, py, max(5, mm_cs * 0.36), marker, label=True)
 
         progress = int(max(getattr(self, "maze_progress_best", 0.0), self._maze_completion_ratio()) * 100)
         self._txt_shadow("MAZE MAP", w // 2, my + mh + 52, (190, 255, 220, 245),
@@ -3045,10 +3307,10 @@ class MazeModeMixin:
             {
                 "key":     "multiplayer",
                 "label":   "MULTIPLAYER",
-                "icon":    "LAN",
-                "desc":    "Same Wi-Fi rooms",
-                "detail":  "Up to 3 players · Maze",
-                "color":   (120, 220, 255),
+                "icon":    "crossed_swords",
+                "desc":    "Battle with others",
+                "detail":  "Co-op & PvP online",
+                "color":   (176, 116, 255),
                 "available": True,
             },
         ]
@@ -3105,17 +3367,21 @@ class MazeModeMixin:
 
             # Card body
             if not avail:
-                fill   = (12, 16, 40, 210)
-                border = (38, 46, 80, 130)
+                if mode["key"] == "multiplayer":
+                    fill = (7, 13, 37, 232)
+                    border = (45, 64, 126, 185)
+                else:
+                    fill = (12, 16, 40, 210)
+                    border = (38, 46, 80, 130)
             elif hov:
-                fill   = (14, 32, 80, 220)
+                fill = (42, 20, 88, 230) if mode["key"] == "multiplayer" else (14, 32, 80, 220)
                 border = (*mc, 255)
             elif sel:
-                fill   = (11, 22, 58, 228)
-                border = (*mc[:3], 180)
+                fill = (30, 14, 72, 236) if mode["key"] == "multiplayer" else (11, 22, 58, 228)
+                border = (*mc[:3], 210 if mode["key"] == "multiplayer" else 180)
             else:
-                fill   = (9, 18, 50, 220)
-                border = (*mc[:3], 110)
+                fill = (14, 10, 50, 226) if mode["key"] == "multiplayer" else (9, 18, 50, 220)
+                border = (*mc[:3], 135 if mode["key"] == "multiplayer" else 110)
 
             arcade.draw_lrbt_rectangle_filled(cl, cr, cb, ct, fill)
             arcade.draw_lrbt_rectangle_outline(cl, cr, cb, ct, border, 2 if (sel or hov) else 1)
@@ -3136,44 +3402,60 @@ class MazeModeMixin:
                 arcade.draw_line(px2, py2, px2, py2 + sy2 * sz, ac2, 2)
 
             # Icon
-            icon_c = mc if avail else (55, 65, 100, 180)
-            icon_a = int(200 + 55 * math.sin(t * 3.0 + i)) if avail else 100
-            arcade.draw_text(mode["icon"], cx_, ct - 62,
-                             (*icon_c[:3], icon_a), 34,
-                             anchor_x="center", anchor_y="center", font_name=FU)
+            icon_c = mc if avail else (55, 65, 100, 150)
+            icon_a = int(200 + 55 * math.sin(t * 3.0 + i)) if avail else 105
+            if mode["icon"] == "crossed_swords":
+                ix = cx_
+                iy = ct - 62
+                sword_c = (*icon_c[:3], icon_a)
+                shadow_c = (0, 0, 0, 70)
+                for dx, dy, color in [(2, -2, shadow_c), (0, 0, sword_c)]:
+                    arcade.draw_line(ix - 18 + dx, iy + 18 + dy,
+                                     ix + 18 + dx, iy - 18 + dy, color, 3)
+                    arcade.draw_line(ix + 18 + dx, iy + 18 + dy,
+                                     ix - 18 + dx, iy - 18 + dy, color, 3)
+                    arcade.draw_line(ix - 20 + dx, iy - 18 + dy,
+                                     ix - 10 + dx, iy - 8 + dy, color, 3)
+                    arcade.draw_line(ix + 20 + dx, iy - 18 + dy,
+                                     ix + 10 + dx, iy - 8 + dy, color, 3)
+            else:
+                arcade.draw_text(mode["icon"], cx_, ct - 62,
+                                 (*icon_c[:3], icon_a), 34,
+                                 anchor_x="center", anchor_y="center", font_name=FU)
 
             # Divider
             div_c = (*mc[:3], 80) if avail else (38, 46, 80, 60)
             arcade.draw_line(cl + 18, ct - 90, cr - 18, ct - 90, div_c, 1)
 
             # Mode label
-            lbl_c = (*mc, 255) if avail else (55, 65, 105, 180)
+            lbl_c = (*mc, 255) if avail else (78, 98, 160, 210)
+            label_size = 18 if mode["key"] == "multiplayer" else 15
             arcade.draw_text(mode["label"], cx_ + 1, ct - 118,
-                             (0, 0, 0, 80), 15, anchor_x="center", bold=True, font_name=FU)
+                             (0, 0, 0, 80), label_size, anchor_x="center", bold=True, font_name=FU)
             arcade.draw_text(mode["label"], cx_, ct - 116,
-                             lbl_c, 15, anchor_x="center", bold=True, font_name=FU)
+                             lbl_c, label_size, anchor_x="center", bold=True, font_name=FU)
 
             # Short description
-            desc_c = (180, 205, 245, 210) if avail else (60, 72, 110, 160)
+            desc_c = (180, 205, 245, 210) if avail else (82, 104, 166, 185)
             arcade.draw_text(mode["desc"], cx_, ct - 148,
                              desc_c, 11, anchor_x="center", font_name=FU)
 
             # Detail line
-            det_c = (165, 195, 245, 220) if avail else (72, 86, 130, 150)
+            det_c = (165, 195, 245, 220) if avail else (44, 58, 100, 145)
             self._txt_shadow(mode["detail"], cx_, ct - 168,
                              det_c, 10 if card_w >= 190 else 9, FU,
                              anchor_x="center", ox=1, oy=-1)
 
             # COMING SOON badge
             if not avail:
-                bw2 = card_w - 28;  bh2 = 24
-                bx2 = cl + 14;      by2 = cb + 18
+                bw2 = card_w - 28;  bh2 = 34
+                bx2 = cl + 14;      by2 = cb + 30
                 arcade.draw_lrbt_rectangle_filled(bx2, bx2 + bw2, by2, by2 + bh2,
                                                    (22, 28, 62, 220))
                 arcade.draw_lrbt_rectangle_outline(bx2, bx2 + bw2, by2, by2 + bh2,
-                                                    (60, 75, 130, 180), 1)
+                                                    (76, 96, 166, 205), 2)
                 arcade.draw_text("COMING SOON", bx2 + bw2 // 2, by2 + bh2 // 2,
-                                 (100, 120, 185, 200), 9, anchor_x="center",
+                                 (116, 142, 218, 220), 11, anchor_x="center",
                                  anchor_y="center", bold=True, font_name=FU)
             else:
                 # SELECT button at bottom of card

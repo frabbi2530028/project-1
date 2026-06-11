@@ -97,9 +97,9 @@ def format_join_error(exc: BaseException, host_code: str = "") -> str:
     if isinstance(exc, socket.timeout):
         return "JOIN FAILED: CONNECTION TIMED OUT"
     if isinstance(exc, ConnectionRefusedError):
-        return "JOIN FAILED: ROOM NOT OPEN ON THAT CODE"
+        return "JOIN FAILED: ROOM NOT OPEN OR FIREWALL BLOCKED"
     if error_no in unreachable_errors:
-        return "JOIN FAILED: HOST NOT REACHABLE - USE AUTO-FIND"
+        return "JOIN FAILED: HOST NOT REACHABLE - CHECK WIFI/FIREWALL"
     if isinstance(exc, socket.gaierror):
         return "JOIN FAILED: BAD ROOM CODE"
     detail = str(exc).strip()
@@ -344,6 +344,8 @@ class MultiplayerHost:
                 continue
             except OSError:
                 break
+            if self._server is None or self.error:
+                continue
             payload = _decode_discovery(data)
             if not payload or payload.get("type") != "discover":
                 continue

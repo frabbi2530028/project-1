@@ -40,6 +40,20 @@ def _notif_color(kind: str) -> tuple:
             "breach":(255,205,80)}.get(kind,(255,255,255))
 
 
+def _net_float(value, default: float = 0.0) -> float:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            try:
+                return float(item)
+            except (TypeError, ValueError):
+                continue
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class GameWindow(MazeModeMixin, arcade.Window):
 
     # ──────────────────────────────────────────────────
@@ -817,8 +831,19 @@ class GameWindow(MazeModeMixin, arcade.Window):
         client = MultiplayerClient(code)
         self.multiplayer_status = "CONNECTING..."
         if not client.connect():
-            self.multiplayer_status = client.error or "JOIN FAILED"
-            return
+            first_error = client.error or "JOIN FAILED"
+            self.multiplayer_status = "CODE FAILED - SEARCHING SAME WIFI..."
+            found_code = discover_lan_room(timeout=0.9)
+            if found_code and normalize_room_code(found_code) != code:
+                code = normalize_room_code(found_code)
+                self.multiplayer_join_code = code
+                client = MultiplayerClient(code)
+                if not client.connect():
+                    self.multiplayer_status = client.error or first_error
+                    return
+            else:
+                self.multiplayer_status = first_error
+                return
         self.multiplayer_role = "client"
         self.multiplayer_client = client
         self.multiplayer_player_id = client.player_id
@@ -856,9 +881,23 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.time_alive = 0.0
         self.run_coins = 0
         self.setup_maze(keep_player=False)
+        if self.multiplayer_host is not None:
+            self.multiplayer_host.set_maze_state(self._multiplayer_maze_snapshot())
         self.notif_text = "LAN MAZE ROOM LIVE"
         self.notif_color = (120, 220, 255)
         self.notif_timer = 2.2
+
+    def _multiplayer_snapshot_ready(self, snapshot: dict | None) -> bool:
+        if not isinstance(snapshot, dict):
+            return False
+        keys = snapshot.get("keys")
+        enemies = snapshot.get("enemies")
+        return (
+            "level" in snapshot
+            and isinstance(keys, list)
+            and len(keys) > 0
+            and isinstance(enemies, list)
+        )
 
     def _update_multiplayer_network(self, delta: float) -> None:
         if not self._multiplayer_active():
@@ -902,10 +941,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 }
                 for pid, player in self.multiplayer_client.players.items()
             }
+            host_maze = self.multiplayer_client.maze_state
             if self.multiplayer_client.started and self.game_state == STATE_MULTIPLAYER_LOBBY:
-                self._start_multiplayer_maze()
-            if self.game_state == STATE_MAZE and self.multiplayer_client.maze_state:
-                self._apply_multiplayer_maze_snapshot(self.multiplayer_client.maze_state)
+                if self._multiplayer_snapshot_ready(host_maze):
+                    self._start_multiplayer_maze()
+                    self._apply_multiplayer_maze_snapshot(host_maze)
+                else:
+                    self.multiplayer_status = "WAITING FOR HOST MAP..."
+            if self.game_state == STATE_MAZE and self._multiplayer_snapshot_ready(host_maze):
+                self._apply_multiplayer_maze_snapshot(host_maze)
 
         local_id = self.multiplayer_player_id
         if local_id and local_id not in self.multiplayer_players:
@@ -959,7 +1003,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 "x": round(pu.center_x, 2),
                 "y": round(pu.center_y, 2),
                 "life": round(float(getattr(pu, "life", 0.0)), 2),
-                "scale": round(float(getattr(pu, "scale", 1.0)), 3),
+                "scale": round(_net_float(getattr(pu, "scale", 1.0), 1.0), 3),
             })
 
         enemy_bullets = []
@@ -976,7 +1020,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 "angle": round(float(getattr(bullet, "angle", 0.0)), 2),
                 "life": round(float(getattr(bullet, "life", 0.0)), 2),
                 "damage": round(float(getattr(bullet, "damage", MAZE_ENEMY_BULLET_DAMAGE)), 1),
-                "scale": round(float(getattr(bullet, "scale", 1.0)), 3),
+                "scale": round(_net_float(getattr(bullet, "scale", 1.0), 1.0), 3),
             })
 
         return {
@@ -1146,8 +1190,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 self.powerups.append(pu)
             pu.center_x = float(row.get("x", pu.center_x))
             pu.center_y = float(row.get("y", pu.center_y))
-            pu.life = float(row.get("life", getattr(pu, "life", 18.0)))
-            pu.scale = float(row.get("scale", getattr(pu, "scale", 1.35)))
+            pu.life = _net_float(row.get("life", getattr(pu, "life", 18.0)), 18.0)
+            pu.scale = _net_float(row.get("scale", getattr(pu, "scale", 1.35)), 1.35)
 
         for pu in list(getattr(self, "powerups", [])):
             powerup_id = getattr(pu, "net_id", None)
@@ -1188,9 +1232,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
             bullet.change_x = float(row.get("change_x", getattr(bullet, "change_x", 0.0)))
             bullet.change_y = float(row.get("change_y", getattr(bullet, "change_y", 0.0)))
             bullet.angle = float(row.get("angle", getattr(bullet, "angle", 0.0)))
-            bullet.life = float(row.get("life", getattr(bullet, "life", 1.0)))
-            bullet.damage = float(row.get("damage", getattr(bullet, "damage", MAZE_ENEMY_BULLET_DAMAGE)))
-            bullet.scale = float(row.get("scale", getattr(bullet, "scale", 1.0)))
+            bullet.life = _net_float(row.get("life", getattr(bullet, "life", 1.0)), 1.0)
+            bullet.damage = _net_float(
+                row.get("damage", getattr(bullet, "damage", MAZE_ENEMY_BULLET_DAMAGE)),
+                MAZE_ENEMY_BULLET_DAMAGE,
+            )
+            bullet.scale = _net_float(row.get("scale", getattr(bullet, "scale", 1.0)), 1.0)
 
         for bullet in list(getattr(self, "maze_enemy_bullets", [])):
             bullet_id = getattr(bullet, "net_id", None)

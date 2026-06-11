@@ -207,6 +207,8 @@ class RemotePlayerState:
     ship: int = 0
     x: float = 0.0
     y: float = 0.0
+    vx: float = 0.0
+    vy: float = 0.0
     angle: float = 0.0
     health: float = 100.0
     max_health: float = 100.0
@@ -224,6 +226,7 @@ class MultiplayerHost:
         self.players: dict[int, RemotePlayerState] = {}
         self.maze_state: dict | None = None
         self.incoming_events: list[dict] = []
+        self.broadcast_events: list[dict] = []
         self.running = False
         self.started = False
         self.error = ""
@@ -232,6 +235,7 @@ class MultiplayerHost:
         self._clients: dict[int, socket.socket] = {}
         self._lock = threading.Lock()
         self._next_player_id = 2
+        self._next_event_id = 1
 
     def start(self) -> None:
         if self.running:
@@ -276,6 +280,24 @@ class MultiplayerHost:
             self.incoming_events.clear()
             return events
 
+    def queue_event(self, event: dict, player_id: int | None = None) -> None:
+        if not isinstance(event, dict):
+            return
+        with self._lock:
+            self._queue_event_locked(event, self.player_id if player_id is None else player_id, False)
+
+    def _queue_event_locked(self, event: dict, player_id: int, incoming: bool) -> dict:
+        routed = dict(event)
+        routed["player_id"] = int(player_id)
+        routed["event_id"] = self._next_event_id
+        self._next_event_id += 1
+        self.broadcast_events.append(routed)
+        if len(self.broadcast_events) > 96:
+            self.broadcast_events = self.broadcast_events[-96:]
+        if incoming:
+            self.incoming_events.append(routed)
+        return routed
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
@@ -285,6 +307,7 @@ class MultiplayerHost:
                 "seed": self.maze_seed,
                 "maze": self.maze_state,
                 "players": [_player_to_payload(p) for p in self.players.values() if p.connected],
+                "events": self.broadcast_events[-96:],
             }
 
     def _accept_loop(self) -> None:
@@ -388,7 +411,7 @@ class MultiplayerHost:
                         if isinstance(events, list):
                             for event in events:
                                 if isinstance(event, dict):
-                                    self.incoming_events.append({"player_id": player_id, **event})
+                                    self._queue_event_locked(event, player_id, True)
                     _send_json(client, self.snapshot())
         except (OSError, json.JSONDecodeError):
             pass
@@ -411,6 +434,7 @@ class MultiplayerClient:
         self.maze_seed = 0
         self.players: dict[int, RemotePlayerState] = {}
         self.maze_state: dict | None = None
+        self.events: list[dict] = []
         self.connected = False
         self.started = False
         self.error = ""
@@ -437,7 +461,7 @@ class MultiplayerClient:
             self.preset_key = welcome.get("preset", "classic")
             self.maze_seed = int(welcome.get("seed", 0))
             self.connected = True
-            sock.settimeout(0.002)
+            sock.settimeout(0.006)
             return True
         except OSError as exc:
             self.error = format_join_error(exc, self.host_code)
@@ -493,6 +517,14 @@ class MultiplayerClient:
                     for p in message.get("players", [])
                     if "id" in p
                 }
+                for event in message.get("events", []):
+                    if isinstance(event, dict):
+                        self.events.append(event)
+
+    def drain_events(self) -> list[dict]:
+        events = self.events[:]
+        self.events.clear()
+        return events
 
     def _recv_wait(self, timeout: float) -> dict | None:
         deadline = time.time() + timeout
@@ -509,6 +541,8 @@ def _apply_player_payload(state: RemotePlayerState, payload: dict) -> None:
     state.ship = int(payload.get("ship", state.ship))
     state.x = float(payload.get("x", state.x))
     state.y = float(payload.get("y", state.y))
+    state.vx = float(payload.get("vx", state.vx))
+    state.vy = float(payload.get("vy", state.vy))
     state.angle = float(payload.get("angle", state.angle))
     state.health = float(payload.get("health", state.health))
     state.max_health = float(payload.get("max_health", state.max_health))
@@ -521,6 +555,8 @@ def _player_to_payload(player: RemotePlayerState) -> dict:
         "ship": player.ship,
         "x": round(player.x, 2),
         "y": round(player.y, 2),
+        "vx": round(player.vx, 2),
+        "vy": round(player.vy, 2),
         "angle": round(player.angle, 2),
         "health": round(player.health, 1),
         "max_health": round(player.max_health, 1),

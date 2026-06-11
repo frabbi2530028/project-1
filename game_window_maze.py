@@ -251,6 +251,9 @@ class MazeModeMixin:
         self.maze_enemy_bullets = arcade.SpriteList()   # enemy bullets  (wall-blocked)
         self.beams              = []                    # Interceptor beams in maze mode
         self.elec_bolts         = arcade.SpriteList()   # Reaper bolts in maze mode
+        self.multiplayer_remote_bullets = arcade.SpriteList()
+        self.multiplayer_remote_elec_bolts = arcade.SpriteList()
+        self.multiplayer_remote_beams = []
         self.maze_boss          = None
         self.maze_bosses        = []
         self.maze_boss_spawned  = False
@@ -2185,6 +2188,8 @@ class MazeModeMixin:
             beam.draw()
         for bolt in self.elec_bolts:
             bolt.draw_bolt()
+        if hasattr(self, "_draw_multiplayer_remote_fire_visuals"):
+            self._draw_multiplayer_remote_fire_visuals()
 
         if hasattr(self, "_draw_multiplayer_remote_players"):
             self._draw_multiplayer_remote_players(t)
@@ -2851,16 +2856,30 @@ class MazeModeMixin:
                 else:
                     mx_w = self.maze_cam_x + self.mouse_x
                     my_w = self.maze_cam_y + self.mouse_y
+                base_angle = math.atan2(my_w - p.center_y, mx_w - p.center_x)
+                shot_angles = (
+                    [base_angle - 0.18, base_angle, base_angle + 0.18]
+                    if p.triple_active else [base_angle]
+                )
                 if is_beam_ship or p.beam360_active:
                     first_new = len(self.beams)
+                    if hasattr(self, "_queue_multiplayer_fire_event"):
+                        self._queue_multiplayer_fire_event(
+                            "beam", p.center_x, p.center_y,
+                            shot_angles, full_360=p.beam360_active)
                     self._fire_beam(p.beam360_active, aim_x=mx_w, aim_y=my_w)
                     self._clip_new_maze_beams(first_new)
                 elif is_electric_ship or p.elec360_active:
+                    if hasattr(self, "_queue_multiplayer_fire_event"):
+                        self._queue_multiplayer_fire_event(
+                            "electric", p.center_x, p.center_y,
+                            shot_angles, full_360=p.elec360_active)
                     self._fire_electric(full_360=p.elec360_active, aim_x=mx_w, aim_y=my_w)
                 else:
-                    base = math.atan2(my_w - p.center_y, mx_w - p.center_x)
-                    for off in ([-0.18, 0.0, 0.18] if p.triple_active else [0.0]):
-                        ang = base + off
+                    if hasattr(self, "_queue_multiplayer_fire_event"):
+                        self._queue_multiplayer_fire_event(
+                            "bullet", p.center_x, p.center_y, shot_angles)
+                    for ang in shot_angles:
                         b = Bullet(p.center_x, p.center_y, ang)
                         self.maze_bullets.append(b)
                         self._spawn_muzzle(p.center_x, p.center_y, ang)
@@ -2884,6 +2903,9 @@ class MazeModeMixin:
                     self._burst(bolt.center_x, bolt.center_y, 6,
                                 (150, 110, 255), 42, 135, 0.8, 1.8, .04, .12)
                 bolt.remove_from_sprite_lists()
+
+        if hasattr(self, "_update_multiplayer_remote_fire_visuals"):
+            self._update_multiplayer_remote_fire_visuals(delta)
 
         # ── Move player bullets + wall collision ─────────────────────
         self.maze_bullets.update(delta)

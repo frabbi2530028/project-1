@@ -134,6 +134,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_pending_powerup_ids: set[int] = set()
         self.multiplayer_pending_enemy_bullet_ids: set[int] = set()
         self.multiplayer_opened_walls: set[tuple[int, int, int]] = set()
+        self.multiplayer_seen_event_ids: set[int] = set()
+        self.multiplayer_remote_bullets = arcade.SpriteList()
+        self.multiplayer_remote_elec_bolts = arcade.SpriteList()
+        self.multiplayer_remote_beams: list[BeamRay] = []
         self._multiplayer_btns: dict = {}
         self._multiplayer_last_net = 0.0
         self._maze_next_enemy_id = 1
@@ -718,12 +722,32 @@ class GameWindow(MazeModeMixin, arcade.Window):
         return self.multiplayer_client is not None and self.multiplayer_role == "client"
 
     def _queue_multiplayer_event(self, event: dict) -> None:
-        if self._multiplayer_is_client_world():
+        if not self._multiplayer_active() or not isinstance(event, dict):
+            return
+        event = dict(event)
+        if self.multiplayer_host is not None:
+            self.multiplayer_host.queue_event(event, self.multiplayer_player_id or 1)
+        elif self._multiplayer_is_client_world():
             self.multiplayer_pending_events.append(event)
             if event.get("type") == "powerup_collect":
                 self.multiplayer_pending_powerup_ids.add(int(event.get("powerup_id", 0)))
             elif event.get("type") == "enemy_bullet_hit":
                 self.multiplayer_pending_enemy_bullet_ids.add(int(event.get("bullet_id", 0)))
+
+    def _queue_multiplayer_fire_event(self, weapon: str, x: float, y: float,
+                                      angles: list[float] | tuple[float, ...],
+                                      full_360: bool = False) -> None:
+        if not self._multiplayer_active() or self.game_state != STATE_MAZE:
+            return
+        self._queue_multiplayer_event({
+            "type": "player_fire",
+            "weapon": weapon,
+            "x": round(float(x), 2),
+            "y": round(float(y), 2),
+            "angles": [round(float(angle), 5) for angle in angles],
+            "full_360": bool(full_360),
+            "ship": int(self.selected_ship),
+        })
 
     def _powerup_allowed_for_ship(self, kind: str, ship_idx: int | None = None) -> bool:
         if ship_idx is None:
@@ -760,6 +784,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 "ship": self.selected_ship,
                 "x": 0.0,
                 "y": 0.0,
+                "vx": 0.0,
+                "vy": 0.0,
                 "angle": 90.0 + SHIPS[self.selected_ship].get("front_angle_offset", 0.0),
                 "health": 100.0,
                 "max_health": 100.0,
@@ -769,6 +795,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
             "ship": self.selected_ship,
             "x": p.center_x,
             "y": p.center_y,
+            "vx": getattr(p, "change_x", 0.0),
+            "vy": getattr(p, "change_y", 0.0),
             "angle": p.angle,
             "health": getattr(p, "health", 100.0),
             "max_health": getattr(p, "max_health", 100.0),
@@ -792,6 +820,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_pending_powerup_ids = set()
         self.multiplayer_pending_enemy_bullet_ids = set()
         self.multiplayer_opened_walls = set()
+        self.multiplayer_seen_event_ids = set()
+        self.multiplayer_remote_bullets = arcade.SpriteList()
+        self.multiplayer_remote_elec_bolts = arcade.SpriteList()
+        self.multiplayer_remote_beams = []
         self.multiplayer_status = "HOST OR JOIN A SAME-WIFI ROOM"
 
     def _start_multiplayer_host(self) -> None:
@@ -907,7 +939,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         if not self._multiplayer_active():
             return
         self._multiplayer_last_net += delta
-        if self._multiplayer_last_net < 0.02:
+        if self._multiplayer_last_net < 0.012:
             return
         self._multiplayer_last_net = 0.0
         payload = self._multiplayer_local_payload()
@@ -940,12 +972,16 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     "ship": player.ship,
                     "x": player.x,
                     "y": player.y,
+                    "vx": player.vx,
+                    "vy": player.vy,
                     "angle": player.angle,
                     "health": player.health,
                     "max_health": player.max_health,
                 }
                 for pid, player in self.multiplayer_client.players.items()
             }
+            for event in self.multiplayer_client.drain_events():
+                self._handle_multiplayer_event_once(event)
             host_maze = self.multiplayer_client.maze_state
             if self.multiplayer_client.started and self.game_state == STATE_MULTIPLAYER_LOBBY:
                 if self._multiplayer_snapshot_ready(host_maze):
@@ -1327,11 +1363,135 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 return boss
         return None
 
+    def _handle_multiplayer_event_once(self, event: dict) -> None:
+        if not isinstance(event, dict):
+            return
+        event_id = int(event.get("event_id", 0) or 0)
+        if event_id > 0:
+            if event_id in self.multiplayer_seen_event_ids:
+                return
+            self.multiplayer_seen_event_ids.add(event_id)
+            if len(self.multiplayer_seen_event_ids) > 160:
+                self.multiplayer_seen_event_ids = set(sorted(self.multiplayer_seen_event_ids)[-96:])
+        self._handle_multiplayer_event(event)
+
+    def _clip_multiplayer_remote_maze_beams(self, start_index: int) -> None:
+        if self.game_state != STATE_MAZE or self.maze_grid is None:
+            return
+        for beam in self.multiplayer_remote_beams[start_index:]:
+            length, _wall_hit, _hit_x, _hit_y = self._maze_ray_wall_contact(
+                beam.ox, beam.oy, beam.angle_rad, beam.length)
+            beam.length = length
+
+    def _replay_multiplayer_fire_event(self, event: dict) -> None:
+        if self.game_state != STATE_MAZE or self.maze_grid is None:
+            return
+        player_id = int(event.get("player_id", 0) or 0)
+        if player_id == self.multiplayer_player_id:
+            return
+
+        weapon = str(event.get("weapon", "bullet"))
+        x = _net_float(event.get("x"), 0.0)
+        y = _net_float(event.get("y"), 0.0)
+        raw_angles = event.get("angles", [])
+        if not isinstance(raw_angles, list):
+            raw_angles = []
+        angles = []
+        for angle in raw_angles[:32]:
+            try:
+                angles.append(float(angle))
+            except (TypeError, ValueError):
+                continue
+        full_360 = bool(event.get("full_360", False))
+        if not angles and not full_360:
+            return
+
+        if weapon == "beam":
+            first_new = len(self.multiplayer_remote_beams)
+            if full_360:
+                for i in range(BEAM_360_ANGLES):
+                    self.multiplayer_remote_beams.append(
+                        BeamRay(x, y, i * (math.tau / BEAM_360_ANGLES)))
+                self._burst(x, y, 14, (255, 135, 75), 60, 210, 1.2, 2.6, .08, .18)
+            else:
+                for angle in angles:
+                    self.multiplayer_remote_beams.append(BeamRay(x, y, angle))
+                    self._spawn_muzzle(x, y, angle)
+            self._clip_multiplayer_remote_maze_beams(first_new)
+            return
+
+        if weapon == "electric":
+            if full_360:
+                for i in range(ELECTRIC_360_COUNT):
+                    bolt = ElectricBolt(
+                        x, y, i * (math.tau / ELECTRIC_360_COUNT),
+                        damage=ELECTRIC_360_DAMAGE,
+                        boss_damage=ELECTRIC_360_BOSS_DAMAGE,
+                        max_range=ELECTRIC_360_RADIUS,
+                    )
+                    self.multiplayer_remote_elec_bolts.append(bolt)
+                self._burst(x, y, 20, (130, 90, 255), 80, 260, 1.4, 3.0, .08, .24)
+            else:
+                for angle in angles:
+                    self.multiplayer_remote_elec_bolts.append(ElectricBolt(x, y, angle))
+                    self._spawn_muzzle(x, y, angle)
+            return
+
+        for angle in angles[:6]:
+            self.multiplayer_remote_bullets.append(Bullet(x, y, angle))
+            self._spawn_muzzle(x, y, angle)
+
+    def _update_multiplayer_remote_fire_visuals(self, delta: float) -> None:
+        self.multiplayer_remote_beams = [
+            beam for beam in getattr(self, "multiplayer_remote_beams", [])
+            if getattr(beam, "life", 0.0) > 0
+        ]
+        for beam in self.multiplayer_remote_beams:
+            beam.update(delta)
+
+        if not hasattr(self, "multiplayer_remote_bullets"):
+            self.multiplayer_remote_bullets = arcade.SpriteList()
+        if not hasattr(self, "multiplayer_remote_elec_bolts"):
+            self.multiplayer_remote_elec_bolts = arcade.SpriteList()
+
+        self.multiplayer_remote_bullets.update(delta)
+        for bullet in list(self.multiplayer_remote_bullets):
+            wall_hit = self._maze_wall_at_point(bullet.center_x, bullet.center_y, 5)
+            blocked = not self._maze_can_move_to(bullet.center_x, bullet.center_y, 5)
+            if bullet.life <= 0 or wall_hit is not None or blocked:
+                self._burst(bullet.center_x, bullet.center_y, 4,
+                            (180, 220, 255), 28, 95, 0.5, 1.2, .03, .08)
+                bullet.remove_from_sprite_lists()
+
+        self.multiplayer_remote_elec_bolts.update(delta)
+        for bolt in list(self.multiplayer_remote_elec_bolts):
+            wall_hit = self._maze_wall_at_point(bolt.center_x, bolt.center_y, 5)
+            blocked = not self._maze_can_move_to(bolt.center_x, bolt.center_y, 5)
+            if bolt.life <= 0 or wall_hit is not None or blocked:
+                if bolt.life > 0:
+                    self._burst(bolt.center_x, bolt.center_y, 5,
+                                (150, 110, 255), 34, 115, 0.6, 1.4, .03, .10)
+                bolt.remove_from_sprite_lists()
+
+    def _draw_multiplayer_remote_fire_visuals(self) -> None:
+        if hasattr(self, "multiplayer_remote_bullets"):
+            self.multiplayer_remote_bullets.draw()
+        for beam in getattr(self, "multiplayer_remote_beams", []):
+            beam.draw()
+        if hasattr(self, "multiplayer_remote_elec_bolts"):
+            for bolt in self.multiplayer_remote_elec_bolts:
+                bolt.draw_bolt()
+
     def _handle_multiplayer_event(self, event: dict) -> None:
         if not isinstance(event, dict):
             return
+        event_player_id = int(event.get("player_id", 0) or 0)
+        if self._multiplayer_is_client_world() and event_player_id == self.multiplayer_player_id:
+            return
         event_type = event.get("type")
-        if event_type == "enemy_damage":
+        if event_type == "player_fire":
+            self._replay_multiplayer_fire_event(event)
+        elif event_type == "enemy_damage":
             target = self._find_maze_enemy_by_net_id(int(event.get("enemy_id", 0)))
             if target is None:
                 return
@@ -1418,8 +1578,21 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 sprite.scale = ship["tex_scale"]
                 sprite.front_angle_offset = ship.get("front_angle_offset", 0.0)
                 sprite._mp_ship_idx = ship_idx
-            sprite.center_x = float(data.get("x", sprite.center_x))
-            sprite.center_y = float(data.get("y", sprite.center_y))
+            target_x = float(data.get("x", sprite.center_x)) + float(data.get("vx", 0.0)) * 0.045
+            target_y = float(data.get("y", sprite.center_y)) + float(data.get("vy", 0.0)) * 0.045
+            if getattr(sprite, "_mp_first_sync", True):
+                sprite.center_x = target_x
+                sprite.center_y = target_y
+                sprite._mp_first_sync = False
+            else:
+                dist = math.hypot(target_x - sprite.center_x, target_y - sprite.center_y)
+                if dist > max(140.0, self.maze_cell_size * 0.8):
+                    sprite.center_x = target_x
+                    sprite.center_y = target_y
+                else:
+                    blend = 0.72
+                    sprite.center_x += (target_x - sprite.center_x) * blend
+                    sprite.center_y += (target_y - sprite.center_y) * blend
             sprite.angle = float(data.get("angle", sprite.angle))
             sprite.health = float(data.get("health", getattr(sprite, "health", 100.0)))
             sprite.max_health = float(data.get("max_health", getattr(sprite, "max_health", 100.0)))

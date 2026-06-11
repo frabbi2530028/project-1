@@ -182,6 +182,9 @@ class MazeModeMixin:
         self.maze_map_open = False
         self.maze_enemies_created = 0
         self._maze_next_enemy_id = 1
+        self._maze_next_powerup_id = 1
+        self._maze_next_enemy_bullet_id = 1
+        self.multiplayer_opened_walls = set()
         if not keep_player:
             self.maze_powerup_dry_kills = 0
         self.maze_keys_collected = 0
@@ -189,6 +192,7 @@ class MazeModeMixin:
         self.maze_corner_wave_timer = MAZE_CORNER_WAVE_INTERVAL
         self.maze_potion_spawn_timer = MAZE_POTION_SPAWN_INTERVAL
         self.maze_exit_lock_notice_timer = 0.0
+        self._mp_exit_event_sent_level = None
 
         # ── Player ──────────────────────────────────
         ship = SHIPS[self.selected_ship]
@@ -208,6 +212,8 @@ class MazeModeMixin:
         self.player._maze_base_scale = ship["tex_scale"]
         self.player.front_angle_offset = ship.get("front_angle_offset", 0.0)
         self._apply_maze_player_floor_stats(refill=not keep_player)
+        if getattr(self, "_multiplayer_active", lambda: False)() and keep_player and self.player.health <= 0:
+            self.player.health = self.player.max_health
         # Spawn at top-left cell
         player_start_x = ox + 0.5 * cs
         player_start_y = oy + (rows - 0.5) * cs
@@ -389,6 +395,8 @@ class MazeModeMixin:
         col, row, direction = wall_hit
         damaged, broken, hp_left = self.maze_grid.damage_wall(col, row, direction)
         if broken:
+            if hasattr(self, "_remember_multiplayer_open_wall"):
+                self._remember_multiplayer_open_wall(col, row, direction)
             self._maze_enemy_flow_target = None
             self.notif_text = "BREACH OPENED!"
             self.notif_color = (255, 205, 80)
@@ -610,6 +618,12 @@ class MazeModeMixin:
 
     def _rebuild_maze_enemy_flow(self, player_col: int, player_row: int) -> None:
         """Build one shared pathing map all maze enemies can follow toward the player."""
+        flow_next = self._maze_enemy_flow_for_target(player_col, player_row)
+        self._maze_enemy_flow_target = (player_col, player_row)
+        self._maze_enemy_flow_next = flow_next
+        self._maze_enemy_flow_timer = 0.0
+
+    def _maze_enemy_flow_for_target(self, player_col: int, player_row: int) -> dict:
         from collections import deque
 
         maze = self.maze_grid
@@ -632,9 +646,7 @@ class MazeModeMixin:
                 flow_next[(nc, nr)] = (col, row)
                 q.append((nc, nr))
 
-        self._maze_enemy_flow_target = (player_col, player_row)
-        self._maze_enemy_flow_next = flow_next
-        self._maze_enemy_flow_timer = 0.0
+        return flow_next
 
     def _maze_key_world(self, col: int, row: int) -> tuple[float, float]:
         cs = self.maze_cell_size
@@ -1444,6 +1456,8 @@ class MazeModeMixin:
         damaged, broken, _hp_left = maze.damage_wall(
             boss.maze_col, boss.maze_row, direction, MAZE_BREAKABLE_WALL_HP)
         if damaged:
+            if broken and hasattr(self, "_remember_multiplayer_open_wall"):
+                self._remember_multiplayer_open_wall(boss.maze_col, boss.maze_row, direction)
             self._maze_enemy_flow_target = None
             hx = boss.center_x + MazeGrid.DX[direction] * self.maze_cell_size * 0.48
             hy = boss.center_y + MazeGrid.DY[direction] * self.maze_cell_size * 0.48
@@ -1456,9 +1470,15 @@ class MazeModeMixin:
             self.boss_on_screen = False
             return
 
-        pc, pr = self._maze_player_cell()
         boss_speed = self._maze_player_base_move_speed()
         for boss in list(bosses):
+            target_x, target_y = p.center_x, p.center_y
+            pc, pr = self._maze_player_cell()
+            if getattr(self, "_multiplayer_active", lambda: False)() and hasattr(self, "_closest_multiplayer_hero"):
+                target = self._closest_multiplayer_hero(boss.center_x, boss.center_y)
+                if target is not None:
+                    target_x, target_y = target["x"], target["y"]
+                    pc, pr = target["col"], target["row"]
             boss.speed = boss_speed
             step = self._maze_boss_next_step(boss, pc, pr)
             if step is not None:
@@ -1482,10 +1502,12 @@ class MazeModeMixin:
             boss.shoot_timer -= delta
             while boss.shoot_timer <= 0:
                 boss.shoot_timer += NORMAL_FIRE_RATE
-                ang = math.atan2(p.center_y - boss.center_y, p.center_x - boss.center_x)
+                ang = math.atan2(target_y - boss.center_y, target_x - boss.center_x)
                 bullet = Bullet(boss.center_x, boss.center_y, ang)
                 bullet.scale = 1.0
                 bullet.damage = MAZE_BOSS_SHOT_DAMAGE
+                if hasattr(self, "_assign_maze_enemy_bullet_id"):
+                    self._assign_maze_enemy_bullet_id(bullet)
                 self.maze_enemy_bullets.append(bullet)
 
         self.boss_on_screen = True
@@ -1599,6 +1621,8 @@ class MazeModeMixin:
         pu.change_y = 0
         pu.life = 60.0
         pu.scale = 1.35
+        if hasattr(self, "_assign_maze_powerup_id"):
+            self._assign_maze_powerup_id(pu)
         self.powerups.append(pu)
         if getattr(self, "maze_autopilot_active", False):
             self._maze_autopilot_repath_timer = 0.0
@@ -2384,15 +2408,19 @@ class MazeModeMixin:
         maze   = self.maze_grid
         cs     = self.maze_cell_size
         ox, oy = self.maze_origin
+        player_dead = getattr(self, "_multiplayer_active", lambda: False)() and p.health <= 0
 
         # ── Player movement ──────────────────────────
-        ix = float(self.right_key) - float(self.left_key)
-        iy = float(self.up) - float(self.down)
-        if ix and iy:
-            ix *= 0.70710678;  iy *= 0.70710678
-        auto_vec = self._maze_autopilot_drive(delta, p, cs)
-        if auto_vec is not None:
-            ix, iy = auto_vec
+        if player_dead:
+            ix = iy = 0.0
+        else:
+            ix = float(self.right_key) - float(self.left_key)
+            iy = float(self.up) - float(self.down)
+            if ix and iy:
+                ix *= 0.70710678;  iy *= 0.70710678
+            auto_vec = self._maze_autopilot_drive(delta, p, cs)
+            if auto_vec is not None:
+                ix, iy = auto_vec
         ship_spd = self._maze_player_move_speed()
         sm = min(1.0, 14.0 * delta)
         p.change_x += (ix * ship_spd - p.change_x) * sm
@@ -2443,7 +2471,8 @@ class MazeModeMixin:
                 (90, 200, 255), 0.88)
 
         # ── Key collection ───────────────────────────
-        self._collect_maze_key_at_player()
+        if not player_dead:
+            self._collect_maze_key_at_player()
 
         # ── Exit check ───────────────────────────────
         pc2, pr2 = self._maze_player_cell()
@@ -2451,7 +2480,8 @@ class MazeModeMixin:
             getattr(self, "maze_progress_best", 0.0),
             self._maze_completion_ratio(),
         )
-        if (pc2 == self.maze_exit_col and pr2 == self.maze_exit_row
+        if (not player_dead
+                and pc2 == self.maze_exit_col and pr2 == self.maze_exit_row
                 and not self.maze_exit_reached):
             if self.maze_keys_collected < MAZE_KEYS_REQUIRED:
                 if self.maze_exit_lock_notice_timer <= 0:
@@ -2462,6 +2492,13 @@ class MazeModeMixin:
                     self.maze_exit_lock_notice_timer = 1.25
             else:
                 if mp_client_world:
+                    if getattr(self, "_mp_exit_event_sent_level", None) != self.maze_level:
+                        if hasattr(self, "_queue_multiplayer_event"):
+                            self._queue_multiplayer_event({
+                                "type": "exit_reached",
+                                "level": int(self.maze_level),
+                            })
+                        self._mp_exit_event_sent_level = self.maze_level
                     if self.maze_exit_lock_notice_timer <= 0:
                         self.notif_text = "WAITING FOR HOST TO ADVANCE THE FLOOR"
                         self.notif_color = (120, 220, 255)
@@ -2476,18 +2513,21 @@ class MazeModeMixin:
                         self.notif_timer = 1.2
                         self.maze_exit_lock_notice_timer = 1.25
                 else:
-                    self.maze_exit_reached = True
-                    bonus = max(0, 2000 - int(self.time_alive * 5))
-                    self.score += bonus
-                    self.maze_level = min(MAZE_MAX_LEVELS - 1, self.maze_level + 1)
-                    self._save_maze_resume_floor()
-                    self.setup_maze(keep_player=True)
-                    self.notif_text  = (
-                        f"FLOOR {self._maze_display_floor()} SPEED + DAMAGE + STORAGE UP!  "
-                        f"+{bonus} TIME BONUS"
-                    )
-                    self.notif_color = (120, 255, 160)
-                    self.notif_timer = 1.8
+                    if getattr(self, "_multiplayer_active", lambda: False)() and hasattr(self, "_advance_multiplayer_maze_floor"):
+                        self._advance_multiplayer_maze_floor()
+                    else:
+                        self.maze_exit_reached = True
+                        bonus = max(0, 2000 - int(self.time_alive * 5))
+                        self.score += bonus
+                        self.maze_level = min(MAZE_MAX_LEVELS - 1, self.maze_level + 1)
+                        self._save_maze_resume_floor()
+                        self.setup_maze(keep_player=True)
+                        self.notif_text  = (
+                            f"FLOOR {self._maze_display_floor()} SPEED + DAMAGE + STORAGE UP!  "
+                            f"+{bonus} TIME BONUS"
+                        )
+                        self.notif_color = (120, 255, 160)
+                        self.notif_timer = 1.8
 
         self._update_particles(delta)
 
@@ -2495,16 +2535,30 @@ class MazeModeMixin:
         self.powerups.update(delta)
         for pu in list(self.powerups):
             if pu.life <= 0:
-                pu.remove_from_sprite_lists()
+                if not getattr(self, "_multiplayer_is_client_world", lambda: False)():
+                    pu.remove_from_sprite_lists()
                 continue
-            if arcade.check_for_collision(pu, p):
-                if not self._collect_maze_potion(pu):
+            if not player_dead and arcade.check_for_collision(pu, p):
+                collected = False
+                if pu.kind in ("maze_health", "maze_speed"):
+                    collected = self._collect_maze_potion(pu)
+                elif getattr(self, "_powerup_allowed_for_ship", lambda kind: True)(pu.kind):
+                    collected = self._collect_powerup(pu.kind)
+                else:
                     self._collect_powerup(pu.kind)
+                if collected:
                     self._burst(pu.center_x, pu.center_y, 12,
                                 (255, 195, 65), 45, 150, 0.9, 2.1, .06, .18)
-                pu.remove_from_sprite_lists()
-                if getattr(self, "maze_autopilot_active", False):
-                    self._maze_autopilot_repath_timer = 0.0
+                    if getattr(self, "_multiplayer_is_client_world", lambda: False)():
+                        powerup_id = getattr(pu, "net_id", None)
+                        if powerup_id is not None and hasattr(self, "_queue_multiplayer_event"):
+                            self._queue_multiplayer_event({
+                                "type": "powerup_collect",
+                                "powerup_id": int(powerup_id),
+                            })
+                    pu.remove_from_sprite_lists()
+                    if getattr(self, "maze_autopilot_active", False):
+                        self._maze_autopilot_repath_timer = 0.0
 
         # ── Player shooting (hold left-mouse, or auto-pilot while it collects keys) ──
         auto_aim = getattr(self, "_maze_autopilot_aim", None)
@@ -2516,7 +2570,7 @@ class MazeModeMixin:
             getattr(self, "maze_autopilot_active", False)
             and (auto_aim is not None or auto_special_fire)
         )
-        if self.mouse_held or auto_fire:
+        if not player_dead and (self.mouse_held or auto_fire):
             is_beam_ship = (self.selected_ship in BEAM_SHIP_INDICES)
             is_electric_ship = (self.selected_ship in ELECTRIC_SHIP_INDICES)
             if p.elec360_active:
@@ -2607,19 +2661,35 @@ class MazeModeMixin:
         # ── Enemy AI (move + shoot) ───────────────────────────────────
         if not mp_client_world:
             pc, pr = self._maze_player_cell()
-            if (getattr(self, "_maze_enemy_flow_target", None) != (pc, pr)
-                    or not getattr(self, "_maze_enemy_flow_next", None)):
-                self._rebuild_maze_enemy_flow(pc, pr)
-            flow_next = self._maze_enemy_flow_next
+            shared_targets = (
+                getattr(self, "_multiplayer_active", lambda: False)()
+                and hasattr(self, "_closest_multiplayer_hero")
+            )
+            flow_maps = {}
+            if not shared_targets:
+                if (getattr(self, "_maze_enemy_flow_target", None) != (pc, pr)
+                        or not getattr(self, "_maze_enemy_flow_next", None)):
+                    self._rebuild_maze_enemy_flow(pc, pr)
+                flow_maps[(pc, pr)] = self._maze_enemy_flow_next
             for enemy in list(self.maze_enemies):
+                target_x, target_y = p.center_x, p.center_y
+                target_cell = (pc, pr)
+                if shared_targets:
+                    target = self._closest_multiplayer_hero(enemy.center_x, enemy.center_y)
+                    if target is not None:
+                        target_x, target_y = target["x"], target["y"]
+                        target_cell = (target["col"], target["row"])
+                    if target_cell not in flow_maps:
+                        flow_maps[target_cell] = self._maze_enemy_flow_for_target(*target_cell)
+                flow_next = flow_maps[target_cell]
                 enemy.maze_update_flow(delta, flow_next, cs, ox, oy)
 
                 enemy.shoot_timer -= delta
                 if enemy.shoot_timer <= 0:
                     enemy.shoot_timer = (MAZE_ENEMY_FIRE_RATE
                                          + random.uniform(-0.6, 0.6))
-                    dx_to_player = p.center_x - enemy.center_x
-                    dy_to_player = p.center_y - enemy.center_y
+                    dx_to_player = target_x - enemy.center_x
+                    dy_to_player = target_y - enemy.center_y
                     if dx_to_player * dx_to_player + dy_to_player * dy_to_player > (cs * 5.5) ** 2:
                         continue
                     ang = math.atan2(dy_to_player, dx_to_player)
@@ -2627,6 +2697,8 @@ class MazeModeMixin:
                                      angle_rad=ang,
                                      speed=MAZE_ENEMY_BULLET_SPEED)
                     eb.life = MAZE_ENEMY_BULLET_LIFE
+                    if hasattr(self, "_assign_maze_enemy_bullet_id"):
+                        self._assign_maze_enemy_bullet_id(eb)
                     self.maze_enemy_bullets.append(eb)
 
             self._update_maze_boss(delta, p, cs, ox, oy)
@@ -2699,8 +2771,15 @@ class MazeModeMixin:
 
         # ── Enemy bullet → player collision ─────────────────────────
         for b in list(self.maze_enemy_bullets):
-            if arcade.check_for_collision(b, p):
+            if not player_dead and arcade.check_for_collision(b, p):
                 b.remove_from_sprite_lists()
+                if mp_client_world:
+                    bullet_id = getattr(b, "net_id", None)
+                    if bullet_id is not None and hasattr(self, "_queue_multiplayer_event"):
+                        self._queue_multiplayer_event({
+                            "type": "enemy_bullet_hit",
+                            "bullet_id": int(bullet_id),
+                        })
                 if p.shield_active:
                     self._burst(b.center_x, b.center_y, 7,
                                 (90, 220, 255), 50, 160, 0.9, 2.0, .06, .14)
@@ -2819,14 +2898,17 @@ class MazeModeMixin:
 
     def _maze_powerup_drop_pool(self) -> list[str]:
         """Maze drops plus only the selected ship's compatible special."""
+        ship_idx = getattr(self, "_maze_drop_ship_override", None)
+        if ship_idx is None:
+            ship_idx = self.selected_ship
         pool = [
             kind for kind in MAZE_POWERUP_TYPES
             if kind not in BEAM_ONLY_POWERUPS
             and kind not in ELECTRIC_ONLY_POWERUPS
         ]
-        if self.selected_ship in BEAM_SHIP_INDICES:
+        if ship_idx in BEAM_SHIP_INDICES:
             pool += ["beam360"] * 2
-        if self.selected_ship in ELECTRIC_SHIP_INDICES:
+        if ship_idx in ELECTRIC_SHIP_INDICES:
             pool += ["elec360"] * 2
         return pool
 
@@ -2838,6 +2920,8 @@ class MazeModeMixin:
         pu.change_y = 0
         pu.life = 18.0
         pu.scale = 1.35
+        if hasattr(self, "_assign_maze_powerup_id"):
+            self._assign_maze_powerup_id(pu)
         self.powerups.append(pu)
         if getattr(self, "maze_autopilot_active", False):
             self._maze_autopilot_repath_timer = 0.0
@@ -2900,6 +2984,13 @@ class MazeModeMixin:
     def _maze_gameover(self):
         self.maze_run_complete = False
         self.player.health = 0
+        if getattr(self, "_multiplayer_active", lambda: False)():
+            self._clear_movement_input()
+            self.mouse_held = False
+            self.notif_text = "SHIP DOWN - RESPAWN NEXT FLOOR"
+            self.notif_color = (255, 120, 120)
+            self.notif_timer = 2.0
+            return
         self.game_state = STATE_MAZE_OVER
         self.set_mouse_visible(True)
 

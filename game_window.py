@@ -114,9 +114,14 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_players: dict[int, dict] = {}
         self.multiplayer_remote_players: dict[int, Player] = {}
         self.multiplayer_pending_events: list[dict] = []
+        self.multiplayer_pending_powerup_ids: set[int] = set()
+        self.multiplayer_pending_enemy_bullet_ids: set[int] = set()
+        self.multiplayer_opened_walls: set[tuple[int, int, int]] = set()
         self._multiplayer_btns: dict = {}
         self._multiplayer_last_net = 0.0
         self._maze_next_enemy_id = 1
+        self._maze_next_powerup_id = 1
+        self._maze_next_enemy_bullet_id = 1
 
         # ── Level system ──────────────────────────────
         self.selected_level:    int  = 0
@@ -698,6 +703,37 @@ class GameWindow(MazeModeMixin, arcade.Window):
     def _queue_multiplayer_event(self, event: dict) -> None:
         if self._multiplayer_is_client_world():
             self.multiplayer_pending_events.append(event)
+            if event.get("type") == "powerup_collect":
+                self.multiplayer_pending_powerup_ids.add(int(event.get("powerup_id", 0)))
+            elif event.get("type") == "enemy_bullet_hit":
+                self.multiplayer_pending_enemy_bullet_ids.add(int(event.get("bullet_id", 0)))
+
+    def _powerup_allowed_for_ship(self, kind: str, ship_idx: int | None = None) -> bool:
+        if ship_idx is None:
+            ship_idx = self.selected_ship
+        if kind == "beam360":
+            return ship_idx in BEAM_SHIP_INDICES
+        if kind == "elec360":
+            return ship_idx in ELECTRIC_SHIP_INDICES
+        return True
+
+    def _multiplayer_player_ship(self, player_id: int) -> int:
+        if player_id == self.multiplayer_player_id:
+            return self.selected_ship
+        if self.multiplayer_host is not None:
+            snapshot = self.multiplayer_host.snapshot()
+            for player in snapshot.get("players", []):
+                if int(player.get("id", 0)) == player_id:
+                    return max(0, min(len(SHIPS) - 1, int(player.get("ship", 0))))
+        data = self.multiplayer_players.get(player_id, {})
+        return max(0, min(len(SHIPS) - 1, int(data.get("ship", 0))))
+
+    def _remember_multiplayer_open_wall(self, col: int, row: int, direction: int) -> None:
+        if self.maze_grid is None:
+            return
+        key = self.maze_grid._wall_key(col, row, direction)
+        if key:
+            self.multiplayer_opened_walls.add(key)
 
     def _multiplayer_local_payload(self) -> dict:
         p = self.player
@@ -735,6 +771,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_players = {}
         self.multiplayer_remote_players = {}
         self.multiplayer_pending_events = []
+        self.multiplayer_pending_powerup_ids = set()
+        self.multiplayer_pending_enemy_bullet_ids = set()
+        self.multiplayer_opened_walls = set()
         self.multiplayer_status = "HOST OR JOIN A SAME-WIFI ROOM"
 
     def _start_multiplayer_host(self) -> None:
@@ -813,11 +852,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
         payload = self._multiplayer_local_payload()
 
         if self.multiplayer_host is not None:
+            self.multiplayer_host.update_local_player(payload)
             for event in self.multiplayer_host.drain_events():
                 self._handle_multiplayer_event(event)
             if self.game_state == STATE_MAZE:
                 self.multiplayer_host.set_maze_state(self._multiplayer_maze_snapshot())
-            self.multiplayer_host.update_local_player(payload)
             if self.multiplayer_host.error:
                 self.multiplayer_status = self.multiplayer_host.error
             snapshot = self.multiplayer_host.snapshot()
@@ -891,12 +930,44 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 "split_depth": int(getattr(boss, "split_depth", 0)),
             })
 
+        powerups = []
+        for pu in getattr(self, "powerups", []):
+            net_id = getattr(pu, "net_id", None)
+            if net_id is None:
+                net_id = self._assign_maze_powerup_id(pu)
+            powerups.append({
+                "id": net_id,
+                "kind": getattr(pu, "kind", ""),
+                "x": round(pu.center_x, 2),
+                "y": round(pu.center_y, 2),
+                "life": round(float(getattr(pu, "life", 0.0)), 2),
+                "scale": round(float(getattr(pu, "scale", 1.0)), 3),
+            })
+
+        enemy_bullets = []
+        for bullet in getattr(self, "maze_enemy_bullets", []):
+            net_id = getattr(bullet, "net_id", None)
+            if net_id is None:
+                net_id = self._assign_maze_enemy_bullet_id(bullet)
+            enemy_bullets.append({
+                "id": net_id,
+                "x": round(bullet.center_x, 2),
+                "y": round(bullet.center_y, 2),
+                "change_x": round(float(getattr(bullet, "change_x", 0.0)), 2),
+                "change_y": round(float(getattr(bullet, "change_y", 0.0)), 2),
+                "angle": round(float(getattr(bullet, "angle", 0.0)), 2),
+                "life": round(float(getattr(bullet, "life", 0.0)), 2),
+                "damage": round(float(getattr(bullet, "damage", MAZE_ENEMY_BULLET_DAMAGE)), 1),
+                "scale": round(float(getattr(bullet, "scale", 1.0)), 3),
+            })
+
         return {
             "level": int(getattr(self, "maze_level", 0)),
             "keys_collected": int(getattr(self, "maze_keys_collected", 0)),
             "key_timer": round(float(getattr(self, "maze_key_relocate_timer", 0.0)), 2),
             "exit_reached": bool(getattr(self, "maze_exit_reached", False)),
             "boss_spawned": bool(getattr(self, "maze_boss_spawned", False)),
+            "opened_walls": [list(key) for key in sorted(getattr(self, "multiplayer_opened_walls", set()))],
             "keys": [
                 {
                     "id": int(key.get("id", idx)),
@@ -909,6 +980,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
             ],
             "enemies": enemies,
             "bosses": bosses,
+            "powerups": powerups,
+            "enemy_bullets": enemy_bullets,
         }
 
     def _apply_multiplayer_maze_snapshot(self, snapshot: dict) -> None:
@@ -933,8 +1006,19 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.maze_key_relocate_timer = float(snapshot.get("key_timer", self.maze_key_relocate_timer))
         self.maze_exit_reached = bool(snapshot.get("exit_reached", self.maze_exit_reached))
         self.maze_boss_spawned = bool(snapshot.get("boss_spawned", self.maze_boss_spawned))
+        self._apply_multiplayer_opened_walls(snapshot.get("opened_walls", []))
         self._sync_multiplayer_enemy_snapshot(snapshot.get("enemies", []))
         self._sync_multiplayer_boss_snapshot(snapshot.get("bosses", []))
+        self._sync_multiplayer_powerup_snapshot(snapshot.get("powerups", []))
+        self._sync_multiplayer_enemy_bullet_snapshot(snapshot.get("enemy_bullets", []))
+
+    def _apply_multiplayer_opened_walls(self, wall_rows: list) -> None:
+        for row in wall_rows:
+            if not isinstance(row, (list, tuple)) or len(row) != 3:
+                continue
+            col, wall_row, direction = (int(row[0]), int(row[1]), int(row[2]))
+            self.maze_grid.carve_passage(col, wall_row, direction)
+            self.multiplayer_opened_walls.add((col, wall_row, direction))
 
     def _sync_multiplayer_enemy_snapshot(self, enemy_rows: list[dict]) -> None:
         active_ids = set()
@@ -1014,11 +1098,155 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.maze_boss = bosses[0] if bosses else None
         self.boss_on_screen = bool(bosses)
 
+    def _sync_multiplayer_powerup_snapshot(self, powerup_rows: list[dict]) -> None:
+        active_ids = set()
+        existing = {
+            getattr(pu, "net_id", None): pu
+            for pu in getattr(self, "powerups", [])
+            if getattr(pu, "net_id", None) is not None
+        }
+        snapshot_ids = {
+            int(row.get("id", 0)) for row in powerup_rows
+            if isinstance(row, dict) and int(row.get("id", 0)) > 0
+        }
+        self.multiplayer_pending_powerup_ids.intersection_update(snapshot_ids)
+        for row in powerup_rows:
+            powerup_id = int(row.get("id", 0))
+            if powerup_id <= 0:
+                continue
+            if powerup_id in self.multiplayer_pending_powerup_ids:
+                continue
+            active_ids.add(powerup_id)
+            kind = row.get("kind", "speed")
+            pu = existing.get(powerup_id)
+            if pu is None or getattr(pu, "kind", None) != kind:
+                if pu is not None:
+                    pu.remove_from_sprite_lists()
+                pu = Powerup(float(row.get("x", 0.0)), float(row.get("y", 0.0)), kind, maze_style=True)
+                pu.net_id = powerup_id
+                pu.change_y = 0
+                self.powerups.append(pu)
+            pu.center_x = float(row.get("x", pu.center_x))
+            pu.center_y = float(row.get("y", pu.center_y))
+            pu.life = float(row.get("life", getattr(pu, "life", 18.0)))
+            pu.scale = float(row.get("scale", getattr(pu, "scale", 1.35)))
+
+        for pu in list(getattr(self, "powerups", [])):
+            powerup_id = getattr(pu, "net_id", None)
+            if powerup_id is not None and powerup_id not in active_ids:
+                pu.remove_from_sprite_lists()
+
+    def _sync_multiplayer_enemy_bullet_snapshot(self, bullet_rows: list[dict]) -> None:
+        active_ids = set()
+        existing = {
+            getattr(bullet, "net_id", None): bullet
+            for bullet in getattr(self, "maze_enemy_bullets", [])
+            if getattr(bullet, "net_id", None) is not None
+        }
+        snapshot_ids = {
+            int(row.get("id", 0)) for row in bullet_rows
+            if isinstance(row, dict) and int(row.get("id", 0)) > 0
+        }
+        self.multiplayer_pending_enemy_bullet_ids.intersection_update(snapshot_ids)
+        for row in bullet_rows:
+            bullet_id = int(row.get("id", 0))
+            if bullet_id <= 0:
+                continue
+            if bullet_id in self.multiplayer_pending_enemy_bullet_ids:
+                continue
+            active_ids.add(bullet_id)
+            bullet = existing.get(bullet_id)
+            if bullet is None:
+                bullet = EnemyBullet(
+                    float(row.get("x", 0.0)),
+                    float(row.get("y", 0.0)),
+                    angle_rad=0.0,
+                    speed=0.0,
+                )
+                bullet.net_id = bullet_id
+                self.maze_enemy_bullets.append(bullet)
+            bullet.center_x = float(row.get("x", bullet.center_x))
+            bullet.center_y = float(row.get("y", bullet.center_y))
+            bullet.change_x = float(row.get("change_x", getattr(bullet, "change_x", 0.0)))
+            bullet.change_y = float(row.get("change_y", getattr(bullet, "change_y", 0.0)))
+            bullet.angle = float(row.get("angle", getattr(bullet, "angle", 0.0)))
+            bullet.life = float(row.get("life", getattr(bullet, "life", 1.0)))
+            bullet.damage = float(row.get("damage", getattr(bullet, "damage", MAZE_ENEMY_BULLET_DAMAGE)))
+            bullet.scale = float(row.get("scale", getattr(bullet, "scale", 1.0)))
+
+        for bullet in list(getattr(self, "maze_enemy_bullets", [])):
+            bullet_id = getattr(bullet, "net_id", None)
+            if bullet_id is not None and bullet_id not in active_ids:
+                bullet.remove_from_sprite_lists()
+
     def _assign_maze_enemy_id(self, enemy) -> int:
         net_id = int(getattr(self, "_maze_next_enemy_id", 1))
         self._maze_next_enemy_id = net_id + 1
         enemy.net_id = net_id
         return net_id
+
+    def _assign_maze_powerup_id(self, powerup) -> int:
+        net_id = int(getattr(self, "_maze_next_powerup_id", 1))
+        self._maze_next_powerup_id = net_id + 1
+        powerup.net_id = net_id
+        return net_id
+
+    def _assign_maze_enemy_bullet_id(self, bullet) -> int:
+        net_id = int(getattr(self, "_maze_next_enemy_bullet_id", 1))
+        self._maze_next_enemy_bullet_id = net_id + 1
+        bullet.net_id = net_id
+        return net_id
+
+    def _find_maze_powerup_by_net_id(self, powerup_id: int):
+        for pu in getattr(self, "powerups", []):
+            if getattr(pu, "net_id", None) == powerup_id:
+                return pu
+        return None
+
+    def _find_maze_enemy_bullet_by_net_id(self, bullet_id: int):
+        for bullet in getattr(self, "maze_enemy_bullets", []):
+            if getattr(bullet, "net_id", None) == bullet_id:
+                return bullet
+        return None
+
+    def _multiplayer_hero_targets(self) -> list[dict]:
+        if not self._multiplayer_active() or self.maze_grid is None:
+            return []
+        targets = []
+        local_id = self.multiplayer_player_id or 1
+        if self.player is not None and getattr(self.player, "health", 0) > 0:
+            targets.append({
+                "id": local_id,
+                "x": self.player.center_x,
+                "y": self.player.center_y,
+                "health": self.player.health,
+            })
+        for player_id, data in self.multiplayer_players.items():
+            if player_id == local_id:
+                continue
+            if float(data.get("health", 0.0)) <= 0:
+                continue
+            targets.append({
+                "id": player_id,
+                "x": float(data.get("x", 0.0)),
+                "y": float(data.get("y", 0.0)),
+                "health": float(data.get("health", 0.0)),
+            })
+        ox, oy = self.maze_origin
+        cs = self.maze_cell_size
+        for target in targets:
+            target["col"] = max(0, min(self.maze_grid.cols - 1, int((target["x"] - ox) / cs)))
+            target["row"] = max(0, min(self.maze_grid.rows - 1, int((target["y"] - oy) / cs)))
+        return targets
+
+    def _closest_multiplayer_hero(self, x: float, y: float) -> dict | None:
+        targets = self._multiplayer_hero_targets()
+        if not targets:
+            return None
+        return min(
+            targets,
+            key=lambda target: (target["x"] - x) ** 2 + (target["y"] - y) ** 2,
+        )
 
     def _find_maze_enemy_by_net_id(self, enemy_id: int):
         for enemy in getattr(self, "maze_enemies", []):
@@ -1038,10 +1266,18 @@ class GameWindow(MazeModeMixin, arcade.Window):
             if target is None:
                 return
             amount = max(0.0, min(float(event.get("amount", 0.0)), float(getattr(target, "max_health", 1.0))))
+            player_id = int(event.get("player_id", 0))
+            self._maze_drop_ship_override = self._multiplayer_player_ship(player_id)
             if isinstance(target, MazeBoss):
-                self._damage_maze_boss(target, amount, (255, 220, 100))
+                try:
+                    self._damage_maze_boss(target, amount, (255, 220, 100))
+                finally:
+                    self._maze_drop_ship_override = None
             else:
-                self._damage_maze_enemy(target, amount, (255, 130, 70), self._maze_enemy_cap())
+                try:
+                    self._damage_maze_enemy(target, amount, (255, 130, 70), self._maze_enemy_cap())
+                finally:
+                    self._maze_drop_ship_override = None
         elif event_type == "key_collect":
             key_id = int(event.get("key_id", -1))
             for key in getattr(self, "maze_keys", []):
@@ -1053,6 +1289,44 @@ class GameWindow(MazeModeMixin, arcade.Window):
                     if self.maze_keys_collected >= MAZE_KEYS_REQUIRED:
                         self._spawn_maze_boss()
                     break
+        elif event_type == "powerup_collect":
+            powerup_id = int(event.get("powerup_id", 0))
+            pu = self._find_maze_powerup_by_net_id(powerup_id)
+            if pu is None:
+                return
+            player_id = int(event.get("player_id", 0))
+            ship_idx = self._multiplayer_player_ship(player_id)
+            if self._powerup_allowed_for_ship(getattr(pu, "kind", ""), ship_idx):
+                pu.remove_from_sprite_lists()
+        elif event_type == "enemy_bullet_hit":
+            bullet = self._find_maze_enemy_bullet_by_net_id(int(event.get("bullet_id", 0)))
+            if bullet is not None:
+                bullet.remove_from_sprite_lists()
+        elif event_type == "exit_reached":
+            if int(event.get("level", -1)) != int(getattr(self, "maze_level", -2)):
+                return
+            self._advance_multiplayer_maze_floor()
+
+    def _advance_multiplayer_maze_floor(self) -> bool:
+        if self.maze_keys_collected < MAZE_KEYS_REQUIRED or self.maze_exit_reached:
+            return False
+        if self._maze_is_final_floor():
+            if not self.maze_boss_spawned:
+                self._spawn_maze_boss()
+            return False
+        self.maze_exit_reached = True
+        bonus = max(0, 2000 - int(self.time_alive * 5))
+        self.score += bonus
+        self.maze_level = min(MAZE_MAX_LEVELS - 1, self.maze_level + 1)
+        self._save_maze_resume_floor()
+        self.setup_maze(keep_player=True)
+        self.notif_text = (
+            f"FLOOR {self._maze_display_floor()} SPEED + DAMAGE + STORAGE UP!  "
+            f"+{bonus} TIME BONUS"
+        )
+        self.notif_color = (120, 255, 160)
+        self.notif_timer = 1.8
+        return True
 
     def _sync_multiplayer_remote_players(self) -> None:
         if not self._multiplayer_active():
@@ -3560,8 +3834,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 self._burst(p.center_x,p.center_y,24,(255,80,80),90,260,1.8,4,.16,.36)
 
         for pu in list(self.powerups):
-            if arcade.check_for_collision(pu, p):
-                self._collect_powerup(pu.kind)
+            if arcade.check_for_collision(pu, p) and self._collect_powerup(pu.kind):
                 c = POWERUP_COLORS[pu.kind]
                 self._burst(pu.center_x,pu.center_y,20,(c[0],c[1],c[2]),70,240,1.4,3,.12,.32)
                 pu.remove_from_sprite_lists()
@@ -3601,34 +3874,37 @@ class GameWindow(MazeModeMixin, arcade.Window):
             base_limit += max(0, floor_index) * MAZE_POWERUP_STORAGE_PER_FLOOR
         return base_limit
 
-    def _collect_powerup(self, kind: str):
+    def _collect_powerup(self, kind: str) -> bool:
         p = self.player
-        if kind == "beam360" and self.selected_ship not in BEAM_SHIP_INDICES:
+        if kind == "beam360" and not self._powerup_allowed_for_ship(kind):
             self.notif_text = "360° BEAM NOT SUPPORTED!"
             self.notif_color = (220, 100, 100)
             self.notif_timer = 0.9
-            return
-        if kind == "elec360" and self.selected_ship not in ELECTRIC_SHIP_INDICES:
+            return False
+        if kind == "elec360" and not self._powerup_allowed_for_ship(kind):
             self.notif_text = "360° ELECTRIC NOT SUPPORTED!"
             self.notif_color = (220, 100, 100)
             self.notif_timer = 0.9
-            return
+            return False
         if kind == "health":
             p.health = min(p.max_health, p.health+30)
             self.notif_text  = "+30 HEALTH!"
             self.notif_color = (130,255,130);  self.notif_timer = 1.4
-            return
+            return True
         storage_limit = self._powerup_storage_limit(kind)
         if p.inventory[kind] < storage_limit:
             p.inventory[kind] += 1
             self.notif_text  = f"{POWERUP_LABELS[kind]} STORED  [{p.inventory[kind]}/{storage_limit}]"
             self.notif_color = _notif_color(kind);  self.notif_timer = 1.0
+            return True
         else:
             if kind in ("elec360", "breach"):
                 self.notif_text  = f"{POWERUP_LABELS[kind]} STORAGE FULL!"
                 self.notif_color = _notif_color(kind);  self.notif_timer = 1.0
+                return False
             else:
                 self._activate_powerup(kind, immediate=True)
+                return True
 
     def _collect_coin(self, coin: "Coin") -> None:
         self.coins      += coin.value

@@ -4,7 +4,9 @@ from multiplayer_support import (
     MultiplayerClient,
     MultiplayerHost,
     compact_room_code,
+    discover_lan_room,
     local_room_code,
+    local_room_codes,
     normalize_room_code,
 )
 
@@ -104,6 +106,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_selected_mode = "maze"
         self.multiplayer_role: str | None = None
         self.multiplayer_room_code = ""
+        self.multiplayer_room_codes: list[str] = []
         self.multiplayer_join_code = ""
         self.multiplayer_status = "HOST OR JOIN A SAME-WIFI ROOM"
         self.multiplayer_player_id = 0
@@ -766,6 +769,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_client = None
         self.multiplayer_role = None
         self.multiplayer_player_id = 0
+        self.multiplayer_room_codes = []
         self.multiplayer_started = False
         self.multiplayer_maze_seed = None
         self.multiplayer_players = {}
@@ -783,7 +787,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._shutdown_multiplayer()
         self.multiplayer_role = "host"
         self.multiplayer_player_id = 1
-        self.multiplayer_room_code = local_room_code()
+        self.multiplayer_room_codes = local_room_codes()
+        self.multiplayer_room_code = (
+            self.multiplayer_room_codes[0]
+            if self.multiplayer_room_codes
+            else local_room_code()
+        )
         self.multiplayer_maze_seed = random.randint(10_000, 999_999)
         preset_key = self.selected_maze_preset
         if not any(preset["key"] == preset_key for preset in MAZE_PRESETS):
@@ -818,6 +827,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_room_code = code
         self.multiplayer_status = "CONNECTED - WAITING FOR HOST"
         self.game_state = STATE_MULTIPLAYER_LOBBY
+
+    def _auto_find_multiplayer_room(self) -> None:
+        self.multiplayer_status = "SEARCHING SAME-WIFI ROOM..."
+        code = discover_lan_room()
+        if not code:
+            self.multiplayer_status = "NO ROOM FOUND - HOST MUST BE IN LOBBY"
+            return
+        self.multiplayer_join_code = code
+        self._join_multiplayer_room()
 
     def _start_multiplayer_maze(self) -> None:
         if self.multiplayer_started:
@@ -1497,7 +1515,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._txt_shadow("JOIN ROOM", w // 2, h - 70,
                          (120, 220, 255, 255), 32, FONT_UI_DISPLAY,
                          anchor_x="center", bold=True)
-        arcade.draw_text("ENTER THE HOST CODE FROM THE SAME WIFI OR HOTSPOT",
+        arcade.draw_text("AUTO-FIND A HOST ON THE SAME WIFI OR TYPE THE ROOM CODE",
                          w // 2, h - 108, (160, 195, 240, 190), 11,
                          anchor_x="center", font_name=FONT_UI_MENU)
 
@@ -1514,18 +1532,24 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._txt_shadow(code_text, w // 2, box_y + box_h / 2,
                          code_color, 22, FONT_NUMERIC, anchor_x="center",
                          anchor_y="center", bold=True)
-        arcade.draw_text("You can type dots, or use the digits-only code shown by the host.",
+        arcade.draw_text("If auto-find is blocked, type the IP or digits-only code shown by the host.",
                          w // 2, box_y - 28, (130, 165, 215, 175), 9,
                          anchor_x="center", font_name=FONT_UI_MENU)
 
-        btn_w, btn_h = 176, 42
-        join_x = w / 2 - btn_w - 10
-        back_x = w / 2 + 10
+        btn_w, btn_h = min(154, (box_w - 24) / 3), 42
+        gap = 12
+        total_w = btn_w * 3 + gap * 2
+        auto_x = w / 2 - total_w / 2
+        join_x = auto_x + btn_w + gap
+        back_x = join_x + btn_w + gap
         btn_y = box_y - 92
+        _draw_btn(auto_x, btn_w, btn_y, btn_h, (120, 255, 160, 70),
+                  (120, 255, 160, 220), (130, 255, 170, 240), "AUTO-FIND", 13)
         _draw_btn(join_x, btn_w, btn_y, btn_h, (120, 220, 255, 80),
-                  (120, 220, 255, 230), (120, 220, 255, 245), "CONNECT", 14)
+                  (120, 220, 255, 230), (120, 220, 255, 245), "CONNECT", 13)
         _draw_btn(back_x, btn_w, btn_y, btn_h, (16, 24, 52, 205),
-                  (90, 125, 190, 180), (175, 205, 245, 220), "BACK", 14)
+                  (90, 125, 190, 180), (175, 205, 245, 220), "BACK", 13)
+        self._multiplayer_btns["join_auto"] = (auto_x, auto_x + btn_w, btn_y, btn_y + btn_h)
         self._multiplayer_btns["join_connect"] = (join_x, join_x + btn_w, btn_y, btn_y + btn_h)
         self._multiplayer_btns["join_back"] = (back_x, back_x + btn_w, btn_y, btn_y + btn_h)
         arcade.draw_text(self.multiplayer_status, w // 2, 42,
@@ -1549,7 +1573,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
         mid = (left + right) / 2
 
         if self.multiplayer_role == "host":
-            code = self.multiplayer_room_code or local_room_code()
+            codes = self.multiplayer_room_codes or (
+                [self.multiplayer_room_code]
+                if self.multiplayer_room_code
+                else local_room_codes()
+            )
+            code = codes[0] if codes else local_room_code()
             compact = compact_room_code(code)
             self._txt_shadow("ROOM CODE", mid, top - 38,
                              (150, 190, 240, 210), 11, FONT_UI_MENU,
@@ -1560,6 +1589,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
             arcade.draw_text(f"Digits-only: {compact}", mid, top - 96,
                              (165, 205, 235, 185), 10, anchor_x="center",
                              font_name=FONT_NUMERIC)
+            other_codes = [c for c in codes[1:4] if c != code]
+            hint = "Joiners should use AUTO-FIND if this code does not connect."
+            if other_codes:
+                hint = "Other codes: " + "  ".join(other_codes[:3])
+            arcade.draw_text(hint, mid, top - 116,
+                             (145, 185, 225, 165), 9, anchor_x="center",
+                             font_name=FONT_UI_MENU)
         else:
             self._txt_shadow("CONNECTED TO HOST", mid, top - 58,
                              (120, 255, 160, 245), 18, FONT_UI_MENU,
@@ -4170,7 +4206,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
             for name, rect in self._multiplayer_btns.items():
                 l, r, b, t = rect
                 if l <= x <= r and b <= y <= t:
-                    if name == "join_connect":
+                    if name == "join_auto":
+                        self._auto_find_multiplayer_room()
+                    elif name == "join_connect":
                         self._join_multiplayer_room()
                     elif name == "join_back":
                         self.game_state = STATE_MULTIPLAYER_MENU

@@ -6,6 +6,7 @@ send lightweight player state and receive everybody else's state back.
 
 from __future__ import annotations
 
+import errno
 import json
 import socket
 import threading
@@ -14,35 +15,52 @@ from dataclasses import dataclass, field
 
 
 MULTIPLAYER_PORT = 50123
+DISCOVERY_PORT = 50124
 MULTIPLAYER_MAX_PLAYERS = 3
+ROOM_DISCOVERY_MAGIC = "NEON_DRIFT_LAN_ROOM"
+
+
+def _is_joinable_ipv4(ip: str) -> bool:
+    return bool(ip) and not ip.startswith("127.") and not ip.startswith("169.254.")
+
+
+def _remember_ip(ips: list[str], ip: str) -> None:
+    if _is_joinable_ipv4(ip) and ip not in ips:
+        ips.append(ip)
+
+
+def local_room_codes() -> list[str]:
+    """Return possible same-Wi-Fi join codes for every useful local interface."""
+    ips: list[str] = []
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            _remember_ip(ips, sock.getsockname()[0])
+        finally:
+            sock.close()
+    except OSError:
+        pass
+
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            _remember_ip(ips, ip)
+    except OSError:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            _remember_ip(ips, info[4][0])
+    except OSError:
+        pass
+
+    return ips
 
 
 def local_room_code() -> str:
     """Return a join code that works on the same Wi-Fi/hotspot."""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
-        sock.close()
-        if ip and not ip.startswith("127."):
-            return ip
-    except OSError:
-        pass
-
-    try:
-        ip = socket.gethostbyname(socket.gethostname())
-        if ip and not ip.startswith("127."):
-            return ip
-    except OSError:
-        pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ip = info[4][0]
-            if ip and not ip.startswith("127."):
-                return ip
-    except OSError:
-        pass
-    return "127.0.0.1"
+    codes = local_room_codes()
+    return codes[0] if codes else "127.0.0.1"
 
 
 def normalize_room_code(code: str) -> str:
@@ -65,6 +83,99 @@ def compact_room_code(ip: str) -> str:
     except ValueError:
         pass
     return ip
+
+
+def format_join_error(exc: BaseException, host_code: str = "") -> str:
+    """Convert raw socket errors into player-friendly lobby messages."""
+    error_no = getattr(exc, "errno", None)
+    unreachable_errors = {
+        getattr(errno, "ENETUNREACH", -1),
+        getattr(errno, "EHOSTUNREACH", -1),
+        getattr(errno, "EHOSTDOWN", -1),
+        65,
+    }
+    if isinstance(exc, socket.timeout):
+        return "JOIN FAILED: CONNECTION TIMED OUT"
+    if isinstance(exc, ConnectionRefusedError):
+        return "JOIN FAILED: ROOM NOT OPEN ON THAT CODE"
+    if error_no in unreachable_errors:
+        return "JOIN FAILED: HOST NOT REACHABLE - USE AUTO-FIND"
+    if isinstance(exc, socket.gaierror):
+        return "JOIN FAILED: BAD ROOM CODE"
+    detail = str(exc).strip()
+    if host_code:
+        return f"JOIN FAILED: CHECK CODE {host_code}"
+    return f"JOIN FAILED: {detail}" if detail else "JOIN FAILED"
+
+
+def _udp_reply_ip(peer_ip: str) -> str:
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((peer_ip, DISCOVERY_PORT))
+            ip = sock.getsockname()[0]
+            if _is_joinable_ipv4(ip):
+                return ip
+        finally:
+            sock.close()
+    except OSError:
+        pass
+    return local_room_code()
+
+
+def _decode_discovery(data: bytes) -> dict | None:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if payload.get("magic") != ROOM_DISCOVERY_MAGIC:
+        return None
+    return payload
+
+
+def discover_lan_room(timeout: float = 1.5) -> str | None:
+    """Find a host lobby on the same Wi-Fi/hotspot using UDP broadcast."""
+    deadline = time.time() + max(0.1, timeout)
+    request = json.dumps({
+        "magic": ROOM_DISCOVERY_MAGIC,
+        "type": "discover",
+        "tcp_port": MULTIPLAYER_PORT,
+    }, separators=(",", ":")).encode("utf-8")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.18)
+        targets = [("255.255.255.255", DISCOVERY_PORT)]
+        for ip in local_room_codes():
+            parts = ip.split(".")
+            if len(parts) == 4:
+                targets.append((".".join(parts[:3] + ["255"]), DISCOVERY_PORT))
+        while time.time() < deadline:
+            for target in targets:
+                try:
+                    sock.sendto(request, target)
+                except OSError:
+                    continue
+            wait_until = min(deadline, time.time() + 0.2)
+            while time.time() < wait_until:
+                try:
+                    data, addr = sock.recvfrom(2048)
+                except socket.timeout:
+                    break
+                except OSError:
+                    return None
+                payload = _decode_discovery(data)
+                if not payload or payload.get("type") != "offer":
+                    continue
+                host = normalize_room_code(str(payload.get("host") or addr[0]))
+                if host:
+                    return host
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    return None
 
 
 def _send_json(sock: socket.socket, payload: dict) -> None:
@@ -117,6 +228,7 @@ class MultiplayerHost:
         self.started = False
         self.error = ""
         self._server: socket.socket | None = None
+        self._discovery_socket: socket.socket | None = None
         self._clients: dict[int, socket.socket] = {}
         self._lock = threading.Lock()
         self._next_player_id = 2
@@ -127,12 +239,16 @@ class MultiplayerHost:
         self.running = True
         thread = threading.Thread(target=self._accept_loop, daemon=True)
         thread.start()
+        discovery_thread = threading.Thread(target=self._discovery_loop, daemon=True)
+        discovery_thread.start()
 
     def stop(self) -> None:
         self.running = False
         sockets = []
         if self._server is not None:
             sockets.append(self._server)
+        if self._discovery_socket is not None:
+            sockets.append(self._discovery_socket)
         with self._lock:
             sockets.extend(self._clients.values())
             self._clients.clear()
@@ -211,6 +327,40 @@ class MultiplayerHost:
             thread = threading.Thread(target=self._client_loop, args=(client, player_id), daemon=True)
             thread.start()
 
+    def _discovery_loop(self) -> None:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("", DISCOVERY_PORT))
+            sock.settimeout(0.35)
+            self._discovery_socket = sock
+        except OSError:
+            return
+
+        while self.running:
+            try:
+                data, addr = sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            payload = _decode_discovery(data)
+            if not payload or payload.get("type") != "discover":
+                continue
+            host_ip = _udp_reply_ip(addr[0])
+            response = json.dumps({
+                "magic": ROOM_DISCOVERY_MAGIC,
+                "type": "offer",
+                "host": host_ip,
+                "tcp_port": MULTIPLAYER_PORT,
+                "room_code": self.room_code,
+                "codes": local_room_codes(),
+            }, separators=(",", ":")).encode("utf-8")
+            try:
+                sock.sendto(response, addr)
+            except OSError:
+                continue
+
     def _client_loop(self, client: socket.socket, player_id: int) -> None:
         reader = JsonSocketReader(client)
         try:
@@ -287,8 +437,12 @@ class MultiplayerClient:
             self.connected = True
             sock.settimeout(0.002)
             return True
-        except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
-            self.error = f"JOIN FAILED: {exc}"
+        except OSError as exc:
+            self.error = format_join_error(exc, self.host_code)
+            self.close()
+            return False
+        except (KeyError, ValueError, json.JSONDecodeError):
+            self.error = "JOIN FAILED: ROOM SENT BAD DATA"
             self.close()
             return False
 

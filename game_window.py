@@ -140,6 +140,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_remote_beams: list[BeamRay] = []
         self._multiplayer_btns: dict = {}
         self._multiplayer_last_net = 0.0
+        self._multiplayer_maze_snapshot_timer = 0.0
+        self._multiplayer_maze_snapshot_interval = 0.066
+        self._multiplayer_applied_maze_seq = -1
         self._maze_next_enemy_id = 1
         self._maze_next_powerup_id = 1
         self._maze_next_enemy_bullet_id = 1
@@ -774,7 +777,20 @@ class GameWindow(MazeModeMixin, arcade.Window):
             return
         key = self.maze_grid._wall_key(col, row, direction)
         if key:
+            was_new = key not in self.multiplayer_opened_walls
             self.multiplayer_opened_walls.add(key)
+            if isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
+                self._maze_autopilot_path_cache.clear()
+            self._maze_enemy_flow_target = None
+            if getattr(self, "maze_autopilot_active", False):
+                self._maze_autopilot_repath_timer = 0.0
+            self._multiplayer_maze_snapshot_timer = 999.0
+            if was_new:
+                self._queue_multiplayer_event({
+                    "type": "wall_break",
+                    "level": int(getattr(self, "maze_level", 0)),
+                    "wall": [int(key[0]), int(key[1]), int(key[2])],
+                })
 
     def _multiplayer_local_payload(self) -> dict:
         p = self.player
@@ -824,6 +840,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.multiplayer_remote_bullets = arcade.SpriteList()
         self.multiplayer_remote_elec_bolts = arcade.SpriteList()
         self.multiplayer_remote_beams = []
+        self._multiplayer_last_net = 0.0
+        self._multiplayer_maze_snapshot_timer = 0.0
+        self._multiplayer_maze_snapshot_interval = 0.066
+        self._multiplayer_applied_maze_seq = -1
         self.multiplayer_status = "HOST OR JOIN A SAME-WIFI ROOM"
 
     def _start_multiplayer_host(self) -> None:
@@ -916,6 +936,8 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self.score = 0
         self.time_alive = 0.0
         self.run_coins = 0
+        self._multiplayer_applied_maze_seq = -1
+        self._multiplayer_maze_snapshot_timer = 999.0
         self.setup_maze(keep_player=False)
         if self.multiplayer_host is not None:
             self.multiplayer_host.set_maze_state(self._multiplayer_maze_snapshot())
@@ -939,8 +961,9 @@ class GameWindow(MazeModeMixin, arcade.Window):
         if not self._multiplayer_active():
             return
         self._multiplayer_last_net += delta
-        if self._multiplayer_last_net < 0.012:
+        if self._multiplayer_last_net < 0.033:
             return
+        net_delta = self._multiplayer_last_net
         self._multiplayer_last_net = 0.0
         payload = self._multiplayer_local_payload()
 
@@ -948,8 +971,11 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self.multiplayer_host.update_local_player(payload)
             for event in self.multiplayer_host.drain_events():
                 self._handle_multiplayer_event(event)
-            if self.game_state == STATE_MAZE:
-                self.multiplayer_host.set_maze_state(self._multiplayer_maze_snapshot())
+            if self.game_state in (STATE_MAZE, STATE_MAZE_OVER):
+                self._multiplayer_maze_snapshot_timer += net_delta
+                if self._multiplayer_maze_snapshot_timer >= getattr(self, "_multiplayer_maze_snapshot_interval", 0.066):
+                    self._multiplayer_maze_snapshot_timer = 0.0
+                    self.multiplayer_host.set_maze_state(self._multiplayer_maze_snapshot())
             if self.multiplayer_host.error:
                 self.multiplayer_status = self.multiplayer_host.error
             snapshot = self.multiplayer_host.snapshot()
@@ -983,14 +1009,19 @@ class GameWindow(MazeModeMixin, arcade.Window):
             for event in self.multiplayer_client.drain_events():
                 self._handle_multiplayer_event_once(event)
             host_maze = self.multiplayer_client.maze_state
+            host_maze_seq = int(getattr(self.multiplayer_client, "maze_state_seq", -1))
             if self.multiplayer_client.started and self.game_state == STATE_MULTIPLAYER_LOBBY:
                 if self._multiplayer_snapshot_ready(host_maze):
                     self._start_multiplayer_maze()
                     self._apply_multiplayer_maze_snapshot(host_maze)
+                    self._multiplayer_applied_maze_seq = host_maze_seq
                 else:
                     self.multiplayer_status = "WAITING FOR HOST MAP..."
-            if self.game_state == STATE_MAZE and self._multiplayer_snapshot_ready(host_maze):
+            if (self.game_state in (STATE_MAZE, STATE_MAZE_OVER)
+                    and host_maze_seq != getattr(self, "_multiplayer_applied_maze_seq", -1)
+                    and self._multiplayer_snapshot_ready(host_maze)):
                 self._apply_multiplayer_maze_snapshot(host_maze)
+                self._multiplayer_applied_maze_seq = host_maze_seq
 
         local_id = self.multiplayer_player_id
         if local_id and local_id not in self.multiplayer_players:
@@ -1066,10 +1097,20 @@ class GameWindow(MazeModeMixin, arcade.Window):
 
         return {
             "level": int(getattr(self, "maze_level", 0)),
+            "score": int(getattr(self, "score", 0)),
+            "time_alive": round(float(getattr(self, "time_alive", 0.0)), 2),
+            "run_coins": int(getattr(self, "run_coins", 0)),
+            "maze_run_complete": bool(getattr(self, "maze_run_complete", False)),
+            "maze_over": self.game_state == STATE_MAZE_OVER,
             "keys_collected": int(getattr(self, "maze_keys_collected", 0)),
             "key_timer": round(float(getattr(self, "maze_key_relocate_timer", 0.0)), 2),
             "exit_reached": bool(getattr(self, "maze_exit_reached", False)),
             "boss_spawned": bool(getattr(self, "maze_boss_spawned", False)),
+            "notice": {
+                "text": str(getattr(self, "notif_text", "")),
+                "color": list(tuple(getattr(self, "notif_color", (255, 255, 110)))[:3]),
+                "timer": round(float(getattr(self, "notif_timer", 0.0)), 2),
+            },
             "opened_walls": [list(key) for key in sorted(getattr(self, "multiplayer_opened_walls", set()))],
             "keys": [
                 {
@@ -1095,6 +1136,12 @@ class GameWindow(MazeModeMixin, arcade.Window):
             self.maze_level = max(0, min(MAZE_MAX_LEVELS - 1, level))
             self.setup_maze(keep_player=True)
 
+        self.score = int(snapshot.get("score", getattr(self, "score", 0)))
+        self.time_alive = float(snapshot.get("time_alive", getattr(self, "time_alive", 0.0)))
+        self.run_coins = int(snapshot.get("run_coins", getattr(self, "run_coins", 0)))
+        self.maze_run_complete = bool(snapshot.get("maze_run_complete", getattr(self, "maze_run_complete", False)))
+        self._apply_multiplayer_shared_notice(snapshot.get("notice"))
+
         self.maze_keys = [
             {
                 "id": int(key.get("id", idx)),
@@ -1114,14 +1161,107 @@ class GameWindow(MazeModeMixin, arcade.Window):
         self._sync_multiplayer_boss_snapshot(snapshot.get("bosses", []))
         self._sync_multiplayer_powerup_snapshot(snapshot.get("powerups", []))
         self._sync_multiplayer_enemy_bullet_snapshot(snapshot.get("enemy_bullets", []))
+        if bool(snapshot.get("maze_over", False)) and self.game_state != STATE_MAZE_OVER:
+            self.game_state = STATE_MAZE_OVER
+            self.set_mouse_visible(True)
+
+    def _apply_multiplayer_shared_notice(self, notice: dict | None) -> None:
+        if not isinstance(notice, dict):
+            return
+        text = str(notice.get("text", ""))
+        timer = max(0.0, float(notice.get("timer", 0.0)))
+        if not text or timer <= 0.0:
+            return
+        raw_color = notice.get("color", (255, 255, 110))
+        if isinstance(raw_color, (list, tuple)) and len(raw_color) >= 3:
+            color = (
+                max(0, min(255, int(raw_color[0]))),
+                max(0, min(255, int(raw_color[1]))),
+                max(0, min(255, int(raw_color[2]))),
+            )
+        else:
+            color = (255, 255, 110)
+        notice_key = (text, color)
+        if notice_key != getattr(self, "_last_multiplayer_shared_notice", None):
+            self._last_multiplayer_shared_notice = notice_key
+            self.notif_text = text
+            self.notif_color = color
+            self.notif_timer = timer
+        elif self.notif_text == text:
+            self.notif_timer = max(self.notif_timer, timer)
 
     def _apply_multiplayer_opened_walls(self, wall_rows: list) -> None:
+        changed = False
         for row in wall_rows:
             if not isinstance(row, (list, tuple)) or len(row) != 3:
                 continue
             col, wall_row, direction = (int(row[0]), int(row[1]), int(row[2]))
-            self.maze_grid.carve_passage(col, wall_row, direction)
-            self.multiplayer_opened_walls.add((col, wall_row, direction))
+            key = self.maze_grid._wall_key(col, wall_row, direction)
+            if key is None:
+                continue
+            if key not in self.multiplayer_opened_walls:
+                changed = True
+            if self.maze_grid.carve_passage(*key):
+                self.multiplayer_opened_walls.add(key)
+        if changed:
+            if isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
+                self._maze_autopilot_path_cache.clear()
+            self._maze_enemy_flow_target = None
+            if getattr(self, "maze_autopilot_active", False):
+                self._maze_autopilot_repath_timer = 0.0
+            self._multiplayer_maze_snapshot_timer = 999.0
+
+    def _set_multiplayer_motion_target(self, sprite, target_x: float, target_y: float,
+                                       target_angle: float | None = None,
+                                       snap_distance: float | None = None) -> None:
+        if snap_distance is None:
+            snap_distance = max(180.0, self.maze_cell_size * 1.35)
+        prev_target_x = getattr(sprite, "_mp_target_x", None)
+        prev_target_y = getattr(sprite, "_mp_target_y", None)
+        dist = math.hypot(target_x - sprite.center_x, target_y - sprite.center_y)
+        if prev_target_x is None or prev_target_y is None or dist > snap_distance:
+            sprite.center_x = target_x
+            sprite.center_y = target_y
+            sprite._mp_target_vx = 0.0
+            sprite._mp_target_vy = 0.0
+        else:
+            interval = max(0.04, min(0.2, getattr(self, "_multiplayer_maze_snapshot_interval", 0.066)))
+            sprite._mp_target_vx = (target_x - prev_target_x) / interval
+            sprite._mp_target_vy = (target_y - prev_target_y) / interval
+        sprite._mp_target_x = target_x
+        sprite._mp_target_y = target_y
+        if target_angle is not None:
+            sprite._mp_target_angle = target_angle
+
+    def _smooth_multiplayer_authoritative_sprites(self, delta: float) -> None:
+        if not self._multiplayer_is_client_world():
+            return
+        sprites = list(getattr(self, "maze_enemies", [])) + list(self._active_maze_bosses())
+        if not sprites:
+            return
+        lookahead = min(0.08, delta * 2.0)
+        blend = min(1.0, max(0.0, delta * 18.0))
+        angle_blend = min(1.0, max(0.0, delta * 14.0))
+        snap_distance = max(220.0, self.maze_cell_size * 1.6)
+        for sprite in sprites:
+            target_x = getattr(sprite, "_mp_target_x", None)
+            target_y = getattr(sprite, "_mp_target_y", None)
+            if target_x is None or target_y is None:
+                continue
+            target_x += getattr(sprite, "_mp_target_vx", 0.0) * lookahead
+            target_y += getattr(sprite, "_mp_target_vy", 0.0) * lookahead
+            dx = target_x - sprite.center_x
+            dy = target_y - sprite.center_y
+            if dx * dx + dy * dy > snap_distance * snap_distance:
+                sprite.center_x = target_x
+                sprite.center_y = target_y
+            else:
+                sprite.center_x += dx * blend
+                sprite.center_y += dy * blend
+            target_angle = getattr(sprite, "_mp_target_angle", None)
+            if target_angle is not None:
+                diff = (target_angle - sprite.angle + 180.0) % 360.0 - 180.0
+                sprite.angle += diff * angle_blend
 
     def _sync_multiplayer_enemy_snapshot(self, enemy_rows: list[dict]) -> None:
         active_ids = set()
@@ -1153,9 +1293,10 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 self.maze_enemies.append(enemy)
             enemy.maze_col = int(row.get("col", enemy.maze_col))
             enemy.maze_row = int(row.get("row", enemy.maze_row))
-            enemy.center_x = float(row.get("x", enemy.center_x))
-            enemy.center_y = float(row.get("y", enemy.center_y))
-            enemy.angle = float(row.get("angle", getattr(enemy, "angle", 0.0)))
+            target_x = float(row.get("x", enemy.center_x))
+            target_y = float(row.get("y", enemy.center_y))
+            target_angle = float(row.get("angle", getattr(enemy, "angle", 0.0)))
+            self._set_multiplayer_motion_target(enemy, target_x, target_y, target_angle)
             enemy.max_health = float(row.get("max_health", enemy.max_health))
             enemy.health = float(row.get("health", enemy.health))
 
@@ -1191,9 +1332,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 boss.net_id = boss_id
             boss.maze_col = int(row.get("col", boss.maze_col))
             boss.maze_row = int(row.get("row", boss.maze_row))
-            boss.center_x = float(row.get("x", boss.center_x))
-            boss.center_y = float(row.get("y", boss.center_y))
-            boss.angle = float(row.get("angle", getattr(boss, "angle", 0.0)))
+            target_x = float(row.get("x", boss.center_x))
+            target_y = float(row.get("y", boss.center_y))
+            target_angle = float(row.get("angle", getattr(boss, "angle", 0.0)))
+            self._set_multiplayer_motion_target(
+                boss, target_x, target_y, target_angle,
+                snap_distance=max(260.0, self.maze_cell_size * 1.9),
+            )
             boss.max_health = float(row.get("max_health", boss.max_health))
             boss.health = float(row.get("health", boss.health))
             bosses.append(boss)
@@ -1268,8 +1413,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
                 )
                 bullet.net_id = bullet_id
                 self.maze_enemy_bullets.append(bullet)
-            bullet.center_x = float(row.get("x", bullet.center_x))
-            bullet.center_y = float(row.get("y", bullet.center_y))
+            target_x = float(row.get("x", bullet.center_x))
+            target_y = float(row.get("y", bullet.center_y))
+            if math.hypot(target_x - bullet.center_x, target_y - bullet.center_y) > max(120.0, self.maze_cell_size * 0.9):
+                bullet.center_x = target_x
+                bullet.center_y = target_y
+            else:
+                blend = 0.35
+                bullet.center_x += (target_x - bullet.center_x) * blend
+                bullet.center_y += (target_y - bullet.center_y) * blend
             bullet.change_x = float(row.get("change_x", getattr(bullet, "change_x", 0.0)))
             bullet.change_y = float(row.get("change_y", getattr(bullet, "change_y", 0.0)))
             bullet.angle = float(row.get("angle", getattr(bullet, "angle", 0.0)))
@@ -1532,6 +1684,15 @@ class GameWindow(MazeModeMixin, arcade.Window):
             bullet = self._find_maze_enemy_bullet_by_net_id(int(event.get("bullet_id", 0)))
             if bullet is not None:
                 bullet.remove_from_sprite_lists()
+        elif event_type == "wall_break":
+            if int(event.get("level", getattr(self, "maze_level", 0))) != int(getattr(self, "maze_level", 0)):
+                return
+            wall = event.get("wall", [])
+            self._apply_multiplayer_opened_walls([wall])
+            if self.game_state == STATE_MAZE:
+                self.notif_text = "TEAM BREACH OPENED!"
+                self.notif_color = (255, 205, 80)
+                self.notif_timer = max(getattr(self, "notif_timer", 0.0), 0.7)
         elif event_type == "exit_reached":
             if int(event.get("level", -1)) != int(getattr(self, "maze_level", -2)):
                 return
@@ -3670,7 +3831,7 @@ class GameWindow(MazeModeMixin, arcade.Window):
         if self.combo_timer > 0: self.combo_timer -= delta
         elif self.combo > 0:     self.combo = 0
 
-        if self.game_state in (STATE_MULTIPLAYER_LOBBY, STATE_MAZE):
+        if self.game_state in (STATE_MULTIPLAYER_LOBBY, STATE_MAZE, STATE_MAZE_OVER):
             self._update_multiplayer_network(delta)
 
         if self.game_state == STATE_MAZE:

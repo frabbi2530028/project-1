@@ -225,6 +225,7 @@ class MultiplayerHost:
         self.player_id = 1
         self.players: dict[int, RemotePlayerState] = {}
         self.maze_state: dict | None = None
+        self.maze_state_seq = 0
         self.incoming_events: list[dict] = []
         self.broadcast_events: list[dict] = []
         self.running = False
@@ -273,6 +274,7 @@ class MultiplayerHost:
     def set_maze_state(self, maze_state: dict | None) -> None:
         with self._lock:
             self.maze_state = maze_state
+            self.maze_state_seq += 1
 
     def drain_events(self) -> list[dict]:
         with self._lock:
@@ -305,10 +307,28 @@ class MultiplayerHost:
                 "started": self.started,
                 "preset": self.preset_key,
                 "seed": self.maze_seed,
-                "maze": self.maze_state,
+                "maze_seq": self.maze_state_seq,
                 "players": [_player_to_payload(p) for p in self.players.values() if p.connected],
-                "events": self.broadcast_events[-96:],
+                "events": [],
             }
+
+    def _state_payload_locked(self, last_maze_seq: int = -1, last_event_id: int = 0) -> dict:
+        events = [
+            event for event in self.broadcast_events
+            if int(event.get("event_id", 0) or 0) > last_event_id
+        ]
+        payload = {
+            "type": "state",
+            "started": self.started,
+            "preset": self.preset_key,
+            "seed": self.maze_seed,
+            "maze_seq": self.maze_state_seq,
+            "players": [_player_to_payload(p) for p in self.players.values() if p.connected],
+            "events": events,
+        }
+        if self.maze_state is not None and self.maze_state_seq != last_maze_seq:
+            payload["maze"] = self.maze_state
+        return payload
 
     def _accept_loop(self) -> None:
         try:
@@ -388,6 +408,8 @@ class MultiplayerHost:
 
     def _client_loop(self, client: socket.socket, player_id: int) -> None:
         reader = JsonSocketReader(client)
+        last_sent_maze_seq = -1
+        last_sent_event_id = 0
         try:
             _send_json(client, {
                 "type": "welcome",
@@ -412,7 +434,15 @@ class MultiplayerHost:
                             for event in events:
                                 if isinstance(event, dict):
                                     self._queue_event_locked(event, player_id, True)
-                    _send_json(client, self.snapshot())
+                        response = self._state_payload_locked(last_sent_maze_seq, last_sent_event_id)
+                    if "maze" in response:
+                        last_sent_maze_seq = int(response.get("maze_seq", last_sent_maze_seq))
+                    for event in response.get("events", []):
+                        last_sent_event_id = max(
+                            last_sent_event_id,
+                            int(event.get("event_id", 0) or 0),
+                        )
+                    _send_json(client, response)
         except (OSError, json.JSONDecodeError):
             pass
         finally:
@@ -434,6 +464,7 @@ class MultiplayerClient:
         self.maze_seed = 0
         self.players: dict[int, RemotePlayerState] = {}
         self.maze_state: dict | None = None
+        self.maze_state_seq = -1
         self.events: list[dict] = []
         self.connected = False
         self.started = False
@@ -461,7 +492,7 @@ class MultiplayerClient:
             self.preset_key = welcome.get("preset", "classic")
             self.maze_seed = int(welcome.get("seed", 0))
             self.connected = True
-            sock.settimeout(0.006)
+            sock.settimeout(0.0015)
             return True
         except OSError as exc:
             self.error = format_join_error(exc, self.host_code)
@@ -491,10 +522,11 @@ class MultiplayerClient:
             self.error = f"CONNECTION LOST: {exc}"
             self.close()
 
-    def poll_state(self) -> None:
+    def poll_state(self, max_messages: int = 4) -> None:
         if not self.connected or self._reader is None:
             return
-        while self.connected:
+        messages_read = 0
+        while self.connected and messages_read < max(1, max_messages):
             try:
                 message = self._reader.recv()
             except socket.timeout:
@@ -507,11 +539,14 @@ class MultiplayerClient:
                 self.error = "ROOM CLOSED"
                 self.close()
                 return
+            messages_read += 1
             if message.get("type") == "state":
                 self.started = bool(message.get("started", False))
                 self.preset_key = message.get("preset", self.preset_key)
                 self.maze_seed = int(message.get("seed", self.maze_seed))
-                self.maze_state = message.get("maze")
+                if "maze" in message:
+                    self.maze_state = message.get("maze")
+                    self.maze_state_seq = int(message.get("maze_seq", self.maze_state_seq + 1))
                 self.players = {
                     int(p["id"]): _payload_to_player(p)
                     for p in message.get("players", [])

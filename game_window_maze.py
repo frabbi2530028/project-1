@@ -717,6 +717,9 @@ class MazeModeMixin:
         self._maze_autopilot_path_cache = {}
         self._maze_autopilot_breach_savings_cache = {}
         self._maze_autopilot_threat_cache = {}
+        self._maze_autopilot_stuck_timer = 0.0
+        self._maze_autopilot_last_pos = None
+        self._maze_autopilot_last_drive = (0.0, 0.0)
         self.maze_autopilot_active = (
             self._maze_autopilot_available()
             and self._maze_autopilot_can_run_now()
@@ -734,6 +737,9 @@ class MazeModeMixin:
         self._maze_autopilot_target_id = None
         self._maze_autopilot_aim = None
         self._maze_autopilot_fire_special = False
+        self._maze_autopilot_stuck_timer = 0.0
+        self._maze_autopilot_last_pos = None
+        self._maze_autopilot_last_drive = (0.0, 0.0)
         self.mouse_held = False
         self.fire_timer = 0.0
         if was_active and text:
@@ -1203,6 +1209,16 @@ class MazeModeMixin:
                 return key
         return None
 
+    def _maze_autopilot_trim_current_path(
+        self, path: list[tuple[int, int]]
+    ) -> list[tuple[int, int]]:
+        if not path:
+            return []
+        pc, pr = self._maze_player_cell()
+        while path and path[0] == (pc, pr):
+            path = path[1:]
+        return path
+
     def _maze_autopilot_targets(self) -> list:
         return [
             target for target in (
@@ -1248,6 +1264,36 @@ class MazeModeMixin:
             if not self._maze_autopilot_line_clear(target.center_x, target.center_y):
                 continue
             score = dot * 2.0 - dist / max_dist
+            if best is None or score > best[0]:
+                best = (score, target)
+        if best is None:
+            return None
+        target = best[1]
+        return target.center_x, target.center_y
+
+    def _maze_autopilot_visible_threat_target(
+        self, radius: float, forward_x: float = 0.0, forward_y: float = 0.0
+    ) -> tuple[float, float] | None:
+        p = self.player
+        radius_sq = radius * radius
+        f_len = math.hypot(forward_x, forward_y)
+        fx = forward_x / f_len if f_len > 0.001 else 0.0
+        fy = forward_y / f_len if f_len > 0.001 else 0.0
+        best = None
+        for target in self._maze_autopilot_targets():
+            dx = target.center_x - p.center_x
+            dy = target.center_y - p.center_y
+            dist_sq = dx * dx + dy * dy
+            if dist_sq <= 1.0 or dist_sq > radius_sq:
+                continue
+            if not self._maze_autopilot_line_clear(target.center_x, target.center_y, slack=24.0):
+                continue
+            dist = math.sqrt(dist_sq)
+            forward_bonus = 0.0
+            if f_len > 0.001:
+                forward_bonus = max(0.0, (dx * fx + dy * fy) / dist) * 0.45
+            health_ratio = max(0.0, min(1.0, getattr(target, "health", 1.0) / max(1.0, getattr(target, "max_health", 1.0))))
+            score = (1.0 - dist / max(1.0, radius)) + forward_bonus + (1.0 - health_ratio) * 0.25
             if best is None or score > best[0]:
                 best = (score, target)
         if best is None:
@@ -1329,7 +1375,7 @@ class MazeModeMixin:
             if p.inventory.get(kind, 0) <= 0 or getattr(p, f"{kind}_active", False):
                 return False
             self._use_stored_powerup(kind)
-            self._maze_autopilot_powerup_timer = 0.75
+            self._maze_autopilot_powerup_timer = 0.45
             return True
 
         health_ratio = p.health / max(1, p.max_health)
@@ -1365,6 +1411,22 @@ class MazeModeMixin:
             self._maze_autopilot_handoff("AUTO KEY PILOT COMPLETE - MANUAL CONTROL")
             return None
 
+        last_pos = getattr(self, "_maze_autopilot_last_pos", None)
+        last_drive = getattr(self, "_maze_autopilot_last_drive", (0.0, 0.0))
+        breaching = bool(getattr(p, "breach_active", False) and getattr(self, "_maze_autopilot_aim", None))
+        if last_pos is not None and math.hypot(*last_drive) > 0.1 and not breaching:
+            moved = math.hypot(p.center_x - last_pos[0], p.center_y - last_pos[1])
+            if moved < max(0.8, cs * 0.01):
+                self._maze_autopilot_stuck_timer = getattr(
+                    self, "_maze_autopilot_stuck_timer", 0.0) + delta
+            else:
+                self._maze_autopilot_stuck_timer = 0.0
+        else:
+            self._maze_autopilot_stuck_timer = 0.0
+        self._maze_autopilot_last_pos = (p.center_x, p.center_y)
+        if getattr(self, "_maze_autopilot_stuck_timer", 0.0) > 0.18:
+            self._maze_autopilot_repath_timer = 0.0
+
         self._maze_autopilot_repath_timer = max(
             0.0, getattr(self, "_maze_autopilot_repath_timer", 0.0) - delta)
         current_target_collected = False
@@ -1390,13 +1452,15 @@ class MazeModeMixin:
                 self._maze_autopilot_target_id = id(target)
             else:
                 self._maze_autopilot_target_id = target.get("id")
-            self._maze_autopilot_path = list(path)
-            self._maze_autopilot_repath_timer = 0.22
+            self._maze_autopilot_path = self._maze_autopilot_trim_current_path(list(path))
+            self._maze_autopilot_repath_timer = 0.12
 
-        path = getattr(self, "_maze_autopilot_path", [])
+        path = self._maze_autopilot_trim_current_path(getattr(self, "_maze_autopilot_path", []))
+        self._maze_autopilot_path = path
         current_powerup = self._maze_autopilot_current_powerup()
         if current_powerup is None and getattr(self, "_maze_autopilot_target_kind", None) == "powerup":
             self._maze_autopilot_repath_timer = 0.0
+            self._maze_autopilot_last_drive = (0.0, 0.0)
             return 0.0, 0.0
 
         if not path:
@@ -1406,6 +1470,8 @@ class MazeModeMixin:
                 dy = ty - p.center_y
                 dist = math.hypot(dx, dy)
                 front_target = self._maze_autopilot_front_target(dx, dy)
+                if front_target is None and self._maze_autopilot_nearby_threat_count(cs * 1.9) > 0:
+                    front_target = self._maze_autopilot_visible_threat_target(cs * 3.0, dx, dy)
                 self._maze_autopilot_aim = front_target
                 self._maze_autopilot_fire_special = (
                     front_target is None
@@ -1414,17 +1480,22 @@ class MazeModeMixin:
                 )
                 self._maze_autopilot_use_powerups(delta, front_target, 0, None)
                 if dist <= 2.0:
+                    self._maze_autopilot_last_drive = (0.0, 0.0)
                     return 0.0, 0.0
-                return dx / dist, dy / dist
+                move = (dx / dist, dy / dist)
+                self._maze_autopilot_last_drive = move
+                return move
             key, path = self._maze_autopilot_choose_key_path()
             if key is None:
                 self._maze_autopilot_handoff("AUTO KEY PILOT COMPLETE - MANUAL CONTROL")
                 return None
             self._maze_autopilot_target_kind = "key"
             self._maze_autopilot_target_id = key.get("id")
-            self._maze_autopilot_path = list(path)
-            self._maze_autopilot_repath_timer = 0.22
+            self._maze_autopilot_path = self._maze_autopilot_trim_current_path(list(path))
+            self._maze_autopilot_repath_timer = 0.12
             front_target = self._maze_autopilot_front_target(p.change_x, p.change_y)
+            if front_target is None and self._maze_autopilot_nearby_threat_count(cs * 1.9) > 0:
+                front_target = self._maze_autopilot_visible_threat_target(cs * 3.0, p.change_x, p.change_y)
             self._maze_autopilot_aim = front_target
             self._maze_autopilot_fire_special = (
                 front_target is None
@@ -1432,6 +1503,7 @@ class MazeModeMixin:
                 and self._maze_autopilot_nearby_threat_count(cs * 2.2) > 0
             )
             self._maze_autopilot_use_powerups(delta, front_target, 0, None)
+            self._maze_autopilot_last_drive = (0.0, 0.0)
             return 0.0, 0.0
 
         target_col, target_row = path[0]
@@ -1474,9 +1546,12 @@ class MazeModeMixin:
         immediate_wall = self._maze_autopilot_next_breakable_wall(path)
         if immediate_wall is not None and not self._maze_autopilot_has_breach_tool():
             self._maze_autopilot_repath_timer = 0.0
+            self._maze_autopilot_last_drive = (0.0, 0.0)
             return 0.0, 0.0
         front_target = None if immediate_wall is not None else self._maze_autopilot_front_target(
             forward_x, forward_y)
+        if front_target is None and immediate_wall is None and self._maze_autopilot_nearby_threat_count(cs * 1.9) > 0:
+            front_target = self._maze_autopilot_visible_threat_target(cs * 3.0, forward_x, forward_y)
         target_key = self._maze_autopilot_current_key()
         breach_target = None if front_target is not None else self._maze_autopilot_breach_target(
             target_key, len(path), path)
@@ -1488,8 +1563,11 @@ class MazeModeMixin:
             and self._maze_autopilot_nearby_threat_count(cs * 2.2) > 0
         )
         if dist <= 1.0:
+            self._maze_autopilot_last_drive = (0.0, 0.0)
             return 0.0, 0.0
-        return dx / dist, dy / dist
+        move = (dx / dist, dy / dist)
+        self._maze_autopilot_last_drive = move
+        return move
 
     def _maze_key_reserved_cells(self) -> set[tuple[int, int]]:
         maze = self.maze_grid
@@ -3088,6 +3166,8 @@ class MazeModeMixin:
         max_enemies = self._maze_enemy_cap()
 
         # ── Enemy AI (move + shoot) ───────────────────────────────────
+        if mp_client_world and hasattr(self, "_smooth_multiplayer_authoritative_sprites"):
+            self._smooth_multiplayer_authoritative_sprites(delta)
         if not mp_client_world:
             pc, pr = self._maze_player_cell()
             shared_targets = (

@@ -779,11 +779,18 @@ class GameWindow(MazeModeMixin, arcade.Window):
         if key:
             was_new = key not in self.multiplayer_opened_walls
             self.multiplayer_opened_walls.add(key)
-            if isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
-                self._maze_autopilot_path_cache.clear()
-            self._maze_enemy_flow_target = None
-            if getattr(self, "maze_autopilot_active", False):
-                self._maze_autopilot_repath_timer = 0.0
+            if was_new:
+                updater = getattr(self, "_maze_autopilot_wall_layout_changed", None)
+                clearer = getattr(self, "_clear_maze_autopilot_route_caches", None)
+                if callable(updater):
+                    updater()
+                elif callable(clearer):
+                    clearer()
+                elif isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
+                    self._maze_autopilot_path_cache.clear()
+                self._maze_enemy_flow_target = None
+                if getattr(self, "maze_autopilot_active", False):
+                    self._maze_autopilot_repath_timer = 0.0
             self._multiplayer_maze_snapshot_timer = 999.0
             if was_new:
                 self._queue_multiplayer_event({
@@ -1204,7 +1211,13 @@ class GameWindow(MazeModeMixin, arcade.Window):
             if self.maze_grid.carve_passage(*key):
                 self.multiplayer_opened_walls.add(key)
         if changed:
-            if isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
+            updater = getattr(self, "_maze_autopilot_wall_layout_changed", None)
+            clearer = getattr(self, "_clear_maze_autopilot_route_caches", None)
+            if callable(updater):
+                updater()
+            elif callable(clearer):
+                clearer()
+            elif isinstance(getattr(self, "_maze_autopilot_path_cache", None), dict):
                 self._maze_autopilot_path_cache.clear()
             self._maze_enemy_flow_target = None
             if getattr(self, "maze_autopilot_active", False):
